@@ -17,9 +17,9 @@ CGumpQuestion::CGumpQuestion(uint32_t serial, short x, short y, uint8_t variant)
 
     CGUIText *obj = (CGUIText *)Add(new CGUIText(0x0386, 33, 30));
 
-    if (Variant == ID_GQ_STATE_QUIT)
+    if (Variant == ID_GQ_STATE_LOGOUT)
     {
-        obj->CreateTextureA(1, "Quit\nUltima Online?");
+        obj->CreateTextureA(1, "Log out?");
     }
     else if (Variant == ID_GQ_STATE_ATTACK_REQUEST)
     {
@@ -41,9 +41,10 @@ void CGumpQuestion::GUMP_BUTTON_EVENT_C
     }
     else if (serial == ID_GQ_BUTTON_OKAY) //Button okay
     {
-        if (Variant == ID_GQ_STATE_QUIT)
+        if (Variant == ID_GQ_STATE_LOGOUT)
         {
-            // direct processing: the quit prompt immediately switches to the
+            g_Game.RequireCharacterSelection();
+            // direct processing: the logout prompt immediately switches to the
             // BLOCKED screen, so a deferred action parked on the game screen
             // would never run
             g_GameScreen.ProcessSmoothAction(CGameScreen::ID_SMOOTH_GS_LOGOUT);

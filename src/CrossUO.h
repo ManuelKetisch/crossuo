@@ -37,6 +37,7 @@ public:
 private:
     uint8_t m_StaticTilesFilterFlags[MAX_STATIC_DATA_INDEX_COUNT];
     astr_t m_GameServerIP = "";
+    bool m_WaitForCharacterSelection = false;
 
     void LoadAutoLoginNames();
     void ProcessStaticAnimList();
@@ -188,6 +189,8 @@ public:
     void RemoveRangedObjects();
     void ClearWorld();
     void LogOut();
+    void RequireCharacterSelection() { m_WaitForCharacterSelection = true; }
+    bool MayAutoSelectCharacter() const { return !m_WaitForCharacterSelection; }
     void ConsolePromptSend();
     void ConsolePromptCancel();
 

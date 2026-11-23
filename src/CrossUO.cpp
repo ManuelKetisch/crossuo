@@ -1725,6 +1725,7 @@ void CGame::LoginComplete(bool reload)
 
     if (load && g_Player != nullptr)
     {
+        m_WaitForCharacterSelection = false;
         astr_t title = "Ultima Online - " + g_Player->GetName();
         CServer *server = g_ServerList.GetSelectedServer();
         if (server != nullptr)
@@ -6006,7 +6007,7 @@ void CGame::OpenLogOut()
     const int h = (g_ConfigManager.GameWindowHeight / 2);
     const int x = g_ConfigManager.GameWindowX + w - 40;
     const int y = g_ConfigManager.GameWindowY + h - 20;
-    g_GumpManager.AddGump(new CGumpQuestion(0, x, y, CGumpQuestion::ID_GQ_STATE_QUIT));
+    g_GumpManager.AddGump(new CGumpQuestion(0, x, y, CGumpQuestion::ID_GQ_STATE_LOGOUT));
     InitScreen(GS_GAME_BLOCKED);
     g_GameBlockedScreen.Code = 3;
 }

@@ -18,7 +18,7 @@ public:
     CGumpQuestion(uint32_t serial, short x, short y, uint8_t variant);
     virtual ~CGumpQuestion() override;
 
-    static const int ID_GQ_STATE_QUIT = 1;
+    static const int ID_GQ_STATE_LOGOUT = 1;
     static const int ID_GQ_STATE_ATTACK_REQUEST = 2;
 
     GUMP_BUTTON_EVENT_H override;

@@ -48,8 +48,8 @@ void CCharacterListScreen::PrepareContent()
 
     // test harness (XUO_AUTO_LOGIN): the screen is entered before the character
     // list packet arrives, so wait for the data here instead of in Init()
-    if (TestAutoLogin() && !m_AutoLoginFired && SmoothScreenAction == 0 &&
-        g_CharacterList.Count > 0)
+    if (g_Game.MayAutoSelectCharacter() && TestAutoLogin() && !m_AutoLoginFired &&
+        SmoothScreenAction == 0 && g_CharacterList.Count > 0)
     {
         // pick the character at the configured list position (default: the
         // second available, falling back to the last available slot when the
