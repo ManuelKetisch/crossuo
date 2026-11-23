@@ -10,7 +10,10 @@
 #include "SkillsManager.h"
 #include "OptionsMacroManager.h"
 #include "MouseManager.h"
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <xuocore/text_parser.h>
 #include "../Point.h"
 #include "../CrossUO.h"
@@ -1358,7 +1361,6 @@ bool CGumpManager::OnKeyDown(const KeyEvent &ev, bool blocked)
 
 void CGumpManager::Load(const fs_path &path)
 {
-    bool paperdollRequested = false;
     bool menubarFound = false;
     bool bufficonWindowFound = false;
     bool minimizedConsoleType = false;
@@ -1412,7 +1414,6 @@ void CGumpManager::Load(const fs_path &path)
                     {
                         gump = new CGumpPaperdoll(g_PlayerSerial, gumpX, gumpY, gumpMinimized != 0);
                         g_Game.PaperdollReq(g_PlayerSerial);
-                        paperdollRequested = true;
                         break;
                     }
                     case GT_STATUSBAR:
@@ -1423,6 +1424,35 @@ void CGumpManager::Load(const fs_path &path)
                     case GT_MINIMAP:
                     {
                         gump = new CGumpMinimap(gumpX, gumpY, gumpMinimized != 0);
+                        break;
+                    }
+                    case GT_WORLD_MAP:
+                    {
+                        if (fields.size() < 14)
+                        {
+                            break;
+                        }
+                        const auto value = [&fields](size_t index) -> int
+                        {
+                            const auto parsed = std::strtoll(fields[index].c_str(), nullptr, 10);
+                            return static_cast<int>(std::max<long long>(
+                                std::numeric_limits<int>::min(),
+                                std::min<long long>(parsed, std::numeric_limits<int>::max())));
+                        };
+
+                        auto *map = new CGumpWorldMap(gumpX, gumpY);
+                        map->Called = true;
+                        map->Minimized = gumpMinimized != 0;
+                        map->Page = map->Minimized ? 1 : 2;
+                        map->Width = value(7);
+                        map->Height = value(8);
+                        map->SetScale(value(9));
+                        map->SetMap(value(10));
+                        map->SetLinkWithPlayer(value(11) != 0);
+                        map->OffsetX = std::min(0, value(12));
+                        map->OffsetY = std::min(0, value(13));
+                        map->UpdateSize();
+                        gump = map;
                         break;
                     }
                     case GT_SKILLS:
@@ -1681,6 +1711,7 @@ void CGumpManager::Load(const fs_path &path)
         }
 
         AddGump(new CGumpPaperdoll(g_PlayerSerial, x, y, false));
+        g_Game.PaperdollReq(g_PlayerSerial);
         x = g_ConfigManager.GameWindowX + g_ConfigManager.GameWindowWidth;
         y = g_ConfigManager.GameWindowY + g_ConfigManager.GameWindowHeight - 50;
 
@@ -1741,11 +1772,6 @@ void CGumpManager::Load(const fs_path &path)
         AddGump(new CGumpBuff(x, y));
     }
 
-    if (!paperdollRequested)
-    {
-        g_Game.PaperdollReq(g_PlayerSerial);
-    }
-
     AddGump(new CGumpConsoleType(minimizedConsoleType, showFullTextConsoleType));
 }
 
@@ -1781,6 +1807,7 @@ void CGumpManager::Save(TextFileWriter &writer)
                 }
                 // fall through
             case GT_MINIMAP:
+            case GT_WORLD_MAP:
             case GT_SKILLS:
             case GT_JOURNAL:
             case GT_RESOURCETRACKER:
@@ -1797,6 +1824,10 @@ void CGumpManager::Save(TextFileWriter &writer)
                 if (gump->GumpType == GT_SKILL && ((CGumpSkill *)gump)->InGroup())
                 {
                     break; // already collected into skillInGroupList
+                }
+                if (gump->GumpType == GT_WORLD_MAP && !static_cast<CGumpWorldMap *>(gump)->Called)
+                {
+                    break;
                 }
                 // the menubar stores its Opened state (an unopened menubar is
                 // a collapsed icon, not a hidden gump); everything else stores
@@ -1816,6 +1847,15 @@ void CGumpManager::Save(TextFileWriter &writer)
 
                 switch (gump->GumpType)
                 {
+                    case GT_WORLD_MAP:
+                    {
+                        const auto *map = static_cast<const CGumpWorldMap *>(gump);
+                        line += "," + str_from(map->Width) + "," + str_from(map->Height) + "," +
+                                str_from(map->GetScale()) + "," + str_from(map->GetMap()) + "," +
+                                str_from(map->GetLinkWithPlayer()) + "," + str_from(map->OffsetX) +
+                                "," + str_from(map->OffsetY);
+                        break;
+                    }
                     case GT_JOURNAL:
                         line += "," + str_from(((CGumpJournal *)gump)->Height);
                         break;

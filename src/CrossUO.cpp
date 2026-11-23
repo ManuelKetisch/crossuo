@@ -1736,7 +1736,6 @@ void CGame::LoginComplete(bool reload)
         g_GameWindow.SetTitle(title);
         CPacketOpenChat({}).Send();
         CPacketSkillsRequest(g_PlayerSerial).Send();
-        g_UseItemActions.Add(g_PlayerSerial);
 
         if (g_Config.ProtocolClientVersion >= CV_306E)
         {
@@ -5782,6 +5781,8 @@ void CGame::RemoveRangedObjects()
 
 void CGame::ClearWorld()
 {
+    g_ConfigLoaded = false;
+    g_ContainerStack.clear();
     g_CorpseManager.Clear();
     g_Walker.Reset();
     g_ObjectInHand.Clear();
@@ -5856,8 +5857,6 @@ void CGame::LogOut()
 
     Disconnect();
     Info(Client, "\tdisconnected");
-
-    ClearWorld();
 
     // drop any pending negotiation ACK: it belongs to the dead connection
     g_RazorNegotiateTimer = 0;

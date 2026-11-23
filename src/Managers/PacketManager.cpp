@@ -1106,7 +1106,6 @@ PACKET_HANDLER(EnterWorld)
         Warning(Network, "duplicate enter world message");
         g_Game.SaveLocalConfig(g_PacketManager.ConfigSerial);
         ConfigSerial = g_PlayerSerial;
-        g_ConfigLoaded = false;
         loadConfig = true;
     }
 

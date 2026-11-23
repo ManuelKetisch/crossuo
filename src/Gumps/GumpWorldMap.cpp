@@ -3,6 +3,8 @@
 
 #include "../GameWindow.h" // GetDisplaySize
 #include "GumpWorldMap.h"
+#include <algorithm>
+#include <common/utils.h>
 #include <cstdint>
 #include <external/zlib_amalg.h> // crc32 (whole-file running checksum)
 #include <vector>
@@ -133,15 +135,17 @@ void CGumpWorldMap::SetLinkWithPlayer(bool val)
 
 void CGumpWorldMap::SetScale(int val)
 {
-    m_Scale = val;
-    m_ComboboxScale->SelectedIndex = val;
+    m_Scale = std::max(0, std::min(val, static_cast<int>(countof(m_Scales)) - 1));
+    m_ComboboxScale->SelectedIndex = m_Scale;
     WantRedraw = true;
 }
 
 void CGumpWorldMap::SetMap(int val)
 {
-    m_Map = val;
-    m_ComboboxMap->SelectedIndex = val;
+    m_Map = std::max(0, std::min(val, static_cast<int>(MAX_MAPS_COUNT)));
+    m_ComboboxMap->SelectedIndex = m_Map;
+    m_MapData->Index = GetCurrentMap();
+    m_MapData->MoveOnDrag = (m_LinkWithPlayer || g_CurrentMap == m_MapData->Index);
     WantRedraw = true;
 }
 
@@ -796,8 +800,7 @@ void CGumpWorldMap::GUMP_COMBOBOX_SELECTION_EVENT_C
                 OffsetY = 0;
             }
 
-            m_Map = index;
-            m_MapData->Index = GetCurrentMap();
+            SetMap(index);
         }
         else
         {
@@ -899,6 +902,7 @@ void CGumpWorldMap::UpdateSize()
         Width = screenY;
     }
 
+    FixOffsets(OffsetX, OffsetY, Width, Height);
     m_Minimizer->SetX((Width / 2) - 10);
     m_Background->Width = Width;
     m_Background->Height = Height;
