@@ -11,7 +11,7 @@
 #include "../Network/Packets.h"
 #include <cstdint>
 #if defined(XUO_ASSISTANT)
-#include <managers/gumpmanager.h> // xuoassist::g_GumpManager (gump-choice tap)
+#include "../Assistant/managers/gumpmanager.h" // xuoassist::g_GumpManager (gump-choice tap)
 #endif
 
 CGumpGeneric::CGumpGeneric(uint32_t serial, short x, short y, uint32_t id)

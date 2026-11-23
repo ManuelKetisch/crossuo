@@ -21,7 +21,7 @@
 #include "../GameObjects/GameWorld.h"
 #include "xuocore/enumlist.h"
 #if defined(XUO_ASSISTANT)
-#include <managers/gumpmanager.h> // xuoassist::g_GumpManager (gump-choice tap)
+#include "../Assistant/managers/gumpmanager.h" // xuoassist::g_GumpManager (gump-choice tap)
 #endif
 #include "../GameObjects/ObjectOnCursor.h"
 #include "../GameObjects/GamePlayer.h"

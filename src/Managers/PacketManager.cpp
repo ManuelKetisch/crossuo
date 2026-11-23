@@ -43,7 +43,7 @@
 #include <managers/trademanager.h>       // xuoassist::g_TradeManager
 #include <managers/guildmanager.h>       // xuoassist::g_GuildManager (guild chat speaker names)
 #include <managers/promptmanager.h>      // xuoassist::g_PromptManager (macro wait)
-#include <managers/gumpmanager.h>        // xuoassist::g_GumpManager
+#include "../Assistant/managers/gumpmanager.h"        // xuoassist::g_GumpManager
 #include <managers/contextmenumanager.h> // xuoassist::g_ContextMenuManager
 #endif
 #include <external/zlib_amalg.h>
