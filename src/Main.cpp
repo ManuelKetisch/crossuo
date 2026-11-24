@@ -976,9 +976,34 @@ static void AutoQuitTick()
 static bool g_WebBootContinuationStarted = false;
 #endif
 
+static bool IsUncappedBenchmark()
+{
+    static const bool enabled = getenv("XUO_AUTO_LOGIN") != nullptr;
+    return enabled;
+}
+
+#if defined(__APPLE__)
+static bool s_displaySync = false;
+
+static void PaceToDisplay(uint64_t frameStart)
+{
+    const auto *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(g_GameWindow.m_window));
+    const auto refresh = mode && mode->refresh_rate > 0 ? mode->refresh_rate : 60.0f;
+    const auto period = static_cast<uint64_t>(1000000000.0 / refresh);
+    const auto elapsed = SDL_GetTicksNS() - frameStart;
+    if (elapsed < period)
+    {
+        SDL_DelayNS(period - elapsed);
+    }
+}
+#endif
+
 static bool RunFrame(bool &raised)
 {
     bool quit = false;
+#if defined(__APPLE__)
+    const auto frameStart = s_displaySync ? 0 : SDL_GetTicksNS();
+#endif
     FrameStatsTick();
 
 #if defined(XUO_EMSC)
@@ -1046,7 +1071,7 @@ static bool RunFrame(bool &raised)
     // the test harness (XUO_AUTO_LOGIN) runs uncapped: the window is not
     // focused during automated runs, which would apply the inactive-window
     // delay and mask the real frame cost being benchmarked
-    if (!TestAutoLogin())
+    if (!IsUncappedBenchmark())
     {
         int32_t iDelay = g_GameWindow.GetRenderDelay();
 
@@ -1060,6 +1085,12 @@ static bool RunFrame(bool &raised)
                 SDL_Delay(delay);
             }
         }
+#if defined(__APPLE__)
+        else if (!s_displaySync)
+        {
+            PaceToDisplay(frameStart);
+        }
+#endif
     }
 
     if (!raised)
@@ -1331,6 +1362,21 @@ int main(int argc, char **argv)
     {
         return EXIT_SUCCESS;
     }
+
+#if defined(__APPLE__)
+    if (!IsUncappedBenchmark())
+    {
+        s_displaySync = SDL_GL_SetSwapInterval(1);
+        if (s_displaySync)
+        {
+            Info(Client, "Frame pacing: display sync");
+        }
+        else
+        {
+            Warning(Client, "Display sync unavailable, pacing to display refresh: %s", SDL_GetError());
+        }
+    }
+#endif
 
     g_Game.ProcessCommandLine();
     g_GameWindow.Raise();
