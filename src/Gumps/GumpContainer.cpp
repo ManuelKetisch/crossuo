@@ -485,6 +485,18 @@ void CGumpContainer::OnLeftMouseButtonUp()
     }
 }
 
+static bool IsInBackpack(CGameItem *container)
+{
+    for (auto *parent = container; parent; parent = g_World->FindWorldItem(parent->Container))
+    {
+        if (parent->Container == g_PlayerSerial)
+        {
+            return parent->Layer == OL_BACKPACK;
+        }
+    }
+    return false;
+}
+
 bool CGumpContainer::OnLeftMouseButtonDoubleClick()
 {
     bool result = false;
@@ -497,6 +509,36 @@ bool CGumpContainer::OnLeftMouseButtonDoubleClick()
     }
     else if ((g_PressedObject.LeftSerial != 0u) && g_PressedObject.LeftSerial != ID_GC_MINIMIZE)
     {
+        auto *item = g_World->FindWorldItem(g_PressedObject.LeftSerial);
+        auto *container = g_World->FindWorldItem(Serial);
+        if (item && container && item->Container == Serial && !IsGameBoard && !item->IsContainer() &&
+            !item->IsCorpse() && !g_ObjectInHand.Enabled && !g_Target.IsTargeting() &&
+            !g_Player->IsDead())
+        {
+            const auto modifiers = SDL_GetModState();
+            const bool option = (modifiers & SDL_KMOD_ALT) != 0;
+            const bool loot = g_ConfigManager.DoubleClickLoot && container->IsCorpse();
+            const bool split = option && item->IsStackable() && item->Count > 1 &&
+                (loot || IsInBackpack(container));
+            if (split)
+            {
+                const auto action = loot ? CGumpDrag::StackAction::Loot : CGumpDrag::StackAction::Split;
+                if (!g_GumpManager.GetGump(item->Serial, 0, GT_DRAG) &&
+                    GetTopObjDistance(g_Player, container) <= DRAG_ITEMS_DISTANCE)
+                {
+                    g_GumpManager.AddGump(new CGumpDrag(
+                        item->Serial, g_MouseManager.Position.X - 80, g_MouseManager.Position.Y - 38,
+                        action, Serial));
+                }
+                return true;
+            }
+            if (loot && (modifiers & (SDL_KMOD_ALT | SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_GUI)) == 0)
+            {
+                g_Game.LootItem(item, item->Count);
+                return true;
+            }
+        }
+
         g_Game.DoubleClick(g_PressedObject.LeftSerial);
         FrameCreated = false;
         result = true;

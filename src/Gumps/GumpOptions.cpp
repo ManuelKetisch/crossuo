@@ -151,6 +151,7 @@ enum
     ID_GO_P6_AUTO_ARRANGE_MINIMIZED_WINDOWS,
     ID_GO_P6_ALWAYS_RUN,
     ID_GO_P6_DISABLE_MENUBAR,
+    ID_GO_P6_DOUBLE_CLICK_LOOT,
     ID_GO_P6_GRAY_OUT_OF_RANGE_OBJECTS,
     ID_GO_P6_DISABLE_NEW_TARGET_SYSTEM,
     ID_GO_P6_OBJECT_HANDLES,
@@ -2163,6 +2164,11 @@ void CGumpOptions::DrawPage6()
     checkbox->SetTextParameters(0, L"Disable the Menu Bar", g_OptionsTextColor);
 
     checkbox = (CGUICheckbox *)html->Add(
+        new CGUICheckbox(ID_GO_P6_DOUBLE_CLICK_LOOT, 0x00D2, 0x00D3, 0x00D2, 230, 136));
+    checkbox->Checked = g_OptionsConfig.DoubleClickLoot;
+    checkbox->SetTextParameters(0, L"Double-click to loot corpses", g_OptionsTextColor);
+
+    checkbox = (CGUICheckbox *)html->Add(
         new CGUICheckbox(ID_GO_P6_GRAY_OUT_OF_RANGE_OBJECTS, 0x00D2, 0x00D3, 0x00D2, 0, 156));
     checkbox->Checked = g_OptionsConfig.GrayOutOfRangeObjects;
     checkbox->SetTextParameters(0, L"Gray out of range objects", g_OptionsTextColor);
@@ -3377,6 +3383,10 @@ void CGumpOptions::GUMP_CHECKBOX_EVENT_C
             { //Disable the Menu Bar
                 g_OptionsConfig.DisableMenubar = state;
             }
+            else if (serial == ID_GO_P6_DOUBLE_CLICK_LOOT)
+            {
+                g_OptionsConfig.DoubleClickLoot = state;
+            }
             else if (serial == ID_GO_P6_GRAY_OUT_OF_RANGE_OBJECTS)
             { //Gray out of range objects
                 g_OptionsConfig.GrayOutOfRangeObjects = state;
@@ -4135,6 +4145,7 @@ void CGumpOptions::ApplyPageChanges()
             g_ConfigManager.AutoArrange = g_OptionsConfig.AutoArrange;
             g_ConfigManager.AlwaysRun = g_OptionsConfig.AlwaysRun;
             g_ConfigManager.DisableMenubar = g_OptionsConfig.DisableMenubar;
+            g_ConfigManager.DoubleClickLoot = g_OptionsConfig.DoubleClickLoot;
             g_ConfigManager.GrayOutOfRangeObjects = g_OptionsConfig.GrayOutOfRangeObjects;
             g_ConfigManager.DisableNewTargetSystem = g_OptionsConfig.DisableNewTargetSystem;
             g_ConfigManager.ObjectHandles = g_OptionsConfig.ObjectHandles;

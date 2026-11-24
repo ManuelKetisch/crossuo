@@ -8,13 +8,28 @@
 
 class CGumpDrag : public CGump
 {
+public:
+    enum class StackAction
+    {
+        Drag,
+        Split,
+        Loot
+    };
+
 private:
+    StackAction m_Action;
+    uint32_t m_SourceContainer;
     bool m_StartText = true;
     CGUITextEntry *m_Entry{ nullptr };
     CGUISlider *m_Slider{ nullptr };
 
 public:
-    CGumpDrag(uint32_t serial, short x, short y);
+    CGumpDrag(
+        uint32_t serial,
+        short x,
+        short y,
+        StackAction action = StackAction::Drag,
+        uint32_t sourceContainer = 0);
     virtual ~CGumpDrag() override;
 
     virtual void UpdateContent() override;

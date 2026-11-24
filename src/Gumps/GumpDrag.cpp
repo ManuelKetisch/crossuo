@@ -3,6 +3,8 @@
 
 #include "GumpDrag.h"
 #include "../CrossUO.h"
+#include "../Target.h"
+#include "../GameObjects/GamePlayer.h"
 #include "../Managers/ConfigManager.h"
 #include "../Managers/GumpManager.h"
 #include "../GameObjects/GameWorld.h"
@@ -21,8 +23,10 @@ enum
     ID_GD_COUNT,
 };
 
-CGumpDrag::CGumpDrag(uint32_t serial, short x, short y)
+CGumpDrag::CGumpDrag(uint32_t serial, short x, short y, StackAction action, uint32_t sourceContainer)
     : CGump(GT_DRAG, serial, x, y)
+    , m_Action(action)
+    , m_SourceContainer(sourceContainer)
 {
 }
 
@@ -101,7 +105,28 @@ void CGumpDrag::OnOkayPressed()
         {
             CGameItem *obj = g_World->FindWorldItem(Serial);
 
-            if (obj != nullptr)
+            if (obj == nullptr)
+            {
+                return;
+            }
+
+            if (m_Action == StackAction::Drag)
+            {
+                g_Game.PickupItem(obj, m_Slider->Value);
+                return;
+            }
+
+            if (obj->Container != m_SourceContainer || g_Player->IsDead() ||
+                g_Target.IsTargeting() || m_Slider->Value > obj->Count)
+            {
+                return;
+            }
+
+            if (m_Action == StackAction::Loot)
+            {
+                g_Game.LootItem(obj, m_Slider->Value);
+            }
+            else
             {
                 g_Game.PickupItem(obj, m_Slider->Value);
             }

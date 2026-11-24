@@ -106,6 +106,7 @@ enum
     CMKC_CHAT_COLOR_BG_COMMAND_LIST,
     CMKC_ENABLE_PATHFIND,
     CMKC_HOLD_TAB_FOR_COMBAT,
+    CMKC_DOUBLE_CLICK_LOOT,
     CMKC_OFFSET_INTERFACE_WINDOWS,
     CMKC_AUTO_ARRANGE,
     CMKC_ALWAYS_RUN,
@@ -247,6 +248,7 @@ static const ConfigEntry s_Keys[] = {
     { CMKC_CHAT_COLOR_BG_COMMAND_LIST, "chatcolorbgcommandlist" },
     { CMKC_ENABLE_PATHFIND, "enablepathfind" },
     { CMKC_HOLD_TAB_FOR_COMBAT, "holdtabforcombat" },
+    { CMKC_DOUBLE_CLICK_LOOT, "doubleclickloot" },
     { CMKC_OFFSET_INTERFACE_WINDOWS, "offsetinterfacewindows" },
     { CMKC_AUTO_ARRANGE, "autoarrange" },
     { CMKC_ALWAYS_RUN, "alwaysrun" },
@@ -456,6 +458,7 @@ void CConfigManager::DefaultPage6()
 {
     EnablePathfind = true;
     HoldTabForCombat = true;
+    DoubleClickLoot = false;
     OffsetInterfaceWindows = true;
     AutoArrange = true;
     AlwaysRun = false;
@@ -1240,6 +1243,9 @@ bool CConfigManager::Load(const fs_path &path)
                 case CMKC_HOLD_TAB_FOR_COMBAT:
                     HoldTabForCombat = str_to_bool(strings[1]);
                     break;
+                case CMKC_DOUBLE_CLICK_LOOT:
+                    DoubleClickLoot = str_to_bool(strings[1]);
+                    break;
                 case CMKC_OFFSET_INTERFACE_WINDOWS:
                     OffsetInterfaceWindows = str_to_bool(strings[1]);
                     break;
@@ -1634,6 +1640,7 @@ void CConfigManager::SaveSection(TextFileWriter &writer)
         //Page 6
         writer.WriteBool("EnablePathfind", EnablePathfind);
         writer.WriteBool("HoldTabForCombat", HoldTabForCombat);
+        writer.WriteBool("DoubleClickLoot", DoubleClickLoot);
         writer.WriteBool("OffsetInterfaceWindows", OffsetInterfaceWindows);
         writer.WriteBool("AutoArrange", AutoArrange);
         writer.WriteBool("AlwaysRun", AlwaysRun);

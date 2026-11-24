@@ -5497,18 +5497,40 @@ void CGame::PickupItem(CGameItem *obj, int count, bool isGameFigure)
     }
 }
 
+static void SendItemDrop(uint32_t item, uint32_t container, uint16_t x, uint16_t y, char z)
+{
+    if (g_Config.ProtocolClientVersion >= CV_6017)
+    {
+        CPacketDropRequestNew(item, x, y, z, 0, container).Send();
+    }
+    else
+    {
+        CPacketDropRequestOld(item, x, y, z, container).Send();
+    }
+}
+
+void CGame::LootItem(CGameItem *item, int count)
+{
+    auto *corpse = g_World->FindWorldItem(item->Container);
+    auto *backpack = g_Player->FindLayer(OL_BACKPACK);
+    if (!backpack || !corpse || !corpse->IsCorpse() || g_Player->IsDead() ||
+        g_ObjectInHand.Enabled || g_Target.IsTargeting() ||
+        GetTopObjDistance(g_Player, corpse) > DRAG_ITEMS_DISTANCE || count <= 0)
+    {
+        return;
+    }
+
+    // The server processes the normal lift and drop in order and reports the
+    // result through container updates. Leave the manual drag cursor alone.
+    CPacketPickupRequest(item->Serial, count).Send();
+    SendItemDrop(item->Serial, backpack->Serial, 0xFFFF, 0xFFFF, 0);
+}
+
 void CGame::DropItem(int container, uint16_t x, uint16_t y, char z)
 {
     if (g_ObjectInHand.Enabled && g_ObjectInHand.Serial != container)
     {
-        if (g_Config.ProtocolClientVersion >= CV_6017)
-        {
-            CPacketDropRequestNew(g_ObjectInHand.Serial, x, y, z, 0, container).Send();
-        }
-        else
-        {
-            CPacketDropRequestOld(g_ObjectInHand.Serial, x, y, z, container).Send();
-        }
+        SendItemDrop(g_ObjectInHand.Serial, container, x, y, z);
 
         g_ObjectInHand.Enabled = false;
         g_ObjectInHand.Dropped = true;
