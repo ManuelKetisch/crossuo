@@ -32,6 +32,7 @@ XUO_AUTO_LOGIN=2,2 XUO_FPS_LOG=1 ./crossuo
 | `XUO_SCISSOR_CHECK` | Debugging scissor/clipping issues, especially gump-local scissors. | Validates scissor rects as they are applied and reports violations. |
 | `XUO_GL1_TRACE` | Tracing draws through the legacy GL1 renderer. | Prints one warning per textured draw call with texture, position and size. |
 | `XUO_RENDER=auto\|gl3\|gles3` | Forcing a GL backend on a binary that picked the wrong one (or reproducing a report). | Overrides the startup cascade: `gl3` only asks for desktop OpenGL 3.2 core, `gles3` only for OpenGL ES 3. `auto` (default) tries desktop first and falls back to ES. The chosen flavour and version are logged (`GL flavour: ...`) at startup. |
+| `XUO_GL_LEGACY_UPLOAD=1` | Comparing or diagnosing vertex uploads on macOS. | Uses the original `glBufferSubData` path for the session. |
 | `XUO_GL_VALIDATE=1` | Catching GL errors in a release build (or `=0` to benchmark a debug build). | Overrides the default `glGetError` validation policy (on in debug builds, off in release builds). |
 | `XUO_GL_NO_ABORT=1` | Keeping a failing run alive long enough to collect more evidence. | A failed GL validation logs the error (plus the texture tracker's provenance report) instead of aborting the process. |
 | `XUO_TRACK_TEXTURES` | Diagnosing invalid/recycled GL texture name usage. | Enables the GL texture name tracker: records create/delete/bind history with stacks; on the first failed bind prints the full story before aborting. |

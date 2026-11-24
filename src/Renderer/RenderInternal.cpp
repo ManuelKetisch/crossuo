@@ -546,6 +546,44 @@ void Render_SwapBuffers()
 #endif
 }
 
+#if defined(__APPLE__)
+static bool TryUploadMappedVertices(const void *data, size_t size)
+{
+    using MapBufferRange = void *(APIENTRY *)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+    using UnmapBuffer = GLboolean (APIENTRY *)(GLenum);
+    static const auto map = reinterpret_cast<MapBufferRange>(SDL_GL_GetProcAddress("glMapBufferRange"));
+    static const auto unmap = reinterpret_cast<UnmapBuffer>(SDL_GL_GetProcAddress("glUnmapBuffer"));
+    static bool enabled = map && unmap && !getenv("XUO_GL_LEGACY_UPLOAD");
+    if (!enabled || size == 0)
+    {
+        return false;
+    }
+
+    // The offset only advances within the current store. Wrapping and frame
+    // boundaries orphan the store before reuse while earlier draws are in flight.
+    constexpr auto access = GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+    auto *destination = map(GL_ARRAY_BUFFER, g_vboOffset, size, access);
+    if (!destination)
+    {
+        return false;
+    }
+
+    memcpy(destination, data, size);
+    if (unmap(GL_ARRAY_BUFFER))
+    {
+        return true;
+    }
+
+    // GL marks the store invalid on unmap failure. Start with fresh storage
+    // and retry this upload through the existing path.
+    Warning(Renderer, "Mapped vertex buffer became invalid, falling back to glBufferSubData");
+    enabled = false;
+    GL_CHECK(glBufferData(GL_ARRAY_BUFFER, g_vboSize, nullptr, GL_DYNAMIC_DRAW));
+    g_vboOffset = 0;
+    return false;
+}
+#endif
+
 size_t Render_UploadVertices(const void *data, size_t size)
 {
     if (g_vboOffset + size > g_vboSize)
@@ -557,7 +595,12 @@ size_t Render_UploadVertices(const void *data, size_t size)
     }
 
     GL_CHECK(glBindBuffer(GL_ARRAY_BUFFER, g_drawVBO));
-    GL_CHECK(glBufferSubData(GL_ARRAY_BUFFER, g_vboOffset, size, data));
+#if defined(__APPLE__)
+    if (!TryUploadMappedVertices(data, size))
+#endif
+    {
+        GL_CHECK(glBufferSubData(GL_ARRAY_BUFFER, g_vboOffset, size, data));
+    }
 
     const size_t offset = g_vboOffset;
     g_vboOffset += size;
