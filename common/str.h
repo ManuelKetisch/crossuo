@@ -83,7 +83,8 @@ const astr_t &str_from(const astr_t &aStr);
 astr_t str_trim(const astr_t &aStr);
 int str_to_int(const astr_t &aStr, int base = 10);
 int str_to_int(const wstr_t &aWstr, int base = 10);
-const char *str_lower(const char *aCStr);
+char *str_lower(char *aStr);
+astr_t str_lower(const char *aCStr);
 astr_t str_lower(astr_t aStr);
 astr_t str_upper(astr_t aStr);
 wstr_t wstr_lower(wstr_t aWstr);
@@ -148,16 +149,21 @@ utf8_t utf8_from(wstr_t aWstr)
     return utf8_from((char *)aWstr.data(), aWstr.size());
 }
 
-const char *str_lower(const char *aCStr)
+char *str_lower(char *aStr)
 {
-    char *s = const_cast<char *>(aCStr);
-    assert(s);
+    assert(aStr);
+    char *s = aStr;
     while (*s)
     {
-        *s = tolower(*s);
+        *s = static_cast<char>(std::tolower(static_cast<unsigned char>(*s)));
         s++;
     }
-    return aCStr;
+    return aStr;
+}
+
+astr_t str_lower(const char *aCStr)
+{
+    return aCStr != nullptr ? str_lower(astr_t(aCStr)) : astr_t{};
 }
 
 astr_t wstr_to_utf8(const wstr_t &aWstr)
@@ -401,7 +407,9 @@ astr_t str_lower(astr_t aStr)
 
     return aStr;
 #else
-    std::transform(aStr.begin(), aStr.end(), aStr.begin(), [](auto c) { return std::tolower(c); });
+    std::transform(aStr.begin(), aStr.end(), aStr.begin(), [](char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
     return aStr;
 #endif
 }
@@ -428,7 +436,9 @@ astr_t str_upper(astr_t aStr)
 
     return aStr;
 #else
-    std::transform(aStr.begin(), aStr.end(), aStr.begin(), [](auto c) { return std::toupper(c); });
+    std::transform(aStr.begin(), aStr.end(), aStr.begin(), [](char c) {
+        return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    });
     return aStr;
 #endif
 }

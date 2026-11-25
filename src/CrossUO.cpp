@@ -15,7 +15,12 @@
 #if defined(XUO_ASSISTANT)
 #include "AssistantWindow.h"
 #include "AssetViewer.h" // AssetViewer_Shutdown (viewer texture pixels)
+#include <core/inventoryagent.h> // item cursor coordination
+#include <core/potionhands.h>
 #include <core/assist.h> // xuoassist::AssistantSpeechIntercept (speech taps)
+#include <core/targetassist.h>
+#include <core/gameplayfilters.h>
+#include <managers/trademanager.h>
 #include <core/global.h> // xuoassist::g_SelectedClientWorldObject (selected-tile feed)
 #include <managers/promptmanager.h> // xuoassist::g_PromptManager.OnPromptSent (prompt taps)
 #include <macros/macroexecutor.h> // xuoassist::g_MacroExecutor.Record* (macro taps)
@@ -162,6 +167,7 @@
 #include "Gumps/GumpShop.h"
 #include "Gumps/GumpSkill.h"
 #include "Gumps/GumpSkills.h"
+#include "Gumps/DesktopSpellPersistence_rules.h"
 #include "Gumps/GumpSpell.h"
 #include "Gumps/GumpSpellbook.h"
 #include "Gumps/GumpStatusbar.h"
@@ -178,6 +184,8 @@
 #include "Renderer/RenderCircleOfTransparency.h" // g_CircleOfTransparency
 
 extern po::parser g_cli;
+
+static DesktopSaveDebouncer s_DesktopSaveDebouncer;
 
 struct CFileWriter
 {
@@ -1062,21 +1070,13 @@ void CGame::Process(bool rendering)
         s_NextConfiguredPing = g_Ticks + 1000;
     }
 
-#if defined(XUO_EMSC)
-    // web autosave: the page can vanish at any moment (tab close / mobile
-    // safari eviction) and idbfs transactions opened during pagehide are
-    // not guaranteed to commit - so the logout-time SaveLocalConfig is
-    // precisely the write most likely to be lost. Rewrite desktop.txt on a
-    // slow cadence (each save also fires __xuoDesktopSaved, which mirrors
-    // it synchronously into localStorage) so the persisted copy is at
-    // worst this many seconds stale.
-    static uint32_t s_NextDesktopAutosave = 0;
-    if (g_GameState >= GS_GAME && g_ConfigLoaded && s_NextDesktopAutosave < g_Ticks)
+    // Persist desktop layout changes (dragged spell icons, moved/grouped gumps,
+    // container positions) after a short debounce and periodically on all
+    // platforms so a crash, force-quit, or launcher restart never loses layout.
+    if (s_DesktopSaveDebouncer.ShouldSave(g_Ticks, g_GameState >= GS_GAME, g_ConfigLoaded))
     {
         SaveLocalConfig(g_PacketManager.ConfigSerial);
-        s_NextDesktopAutosave = g_Ticks + 60000;
     }
-#endif
 
     // KR party position query: keep out-of-range party members on the map
     if (g_GameState >= GS_GAME && s_NextConfiguredPing < g_Ticks && g_Party.Leader != 0)
@@ -1326,14 +1326,20 @@ astr_t CGame::FixServerName(astr_t name)
     return name;
 }
 
+void CGame::RequestDesktopSave()
+{
+    if (g_ConfigLoaded)
+    {
+        s_DesktopSaveDebouncer.MarkDirty(g_Ticks);
+    }
+}
+
 void CGame::LoadLocalConfig(int serial, const astr_t& characterName)
 {
     if (g_ConfigLoaded)
     {
         return;
     }
-
-    g_CheckContainerStackTimer = g_Ticks + 30000;
 
     char buf[FS_MAX_PATH] = { 0 };
     CServer *server = g_ServerList.GetSelectedServer();
@@ -1364,8 +1370,13 @@ void CGame::LoadLocalConfig(int serial, const astr_t& characterName)
         // first run on this character: seed from the UO install's macros.txt
         g_MacroManager.Convert(UOFilePath("macros.txt"));
     }
+    // Refresh g_Ticks before loading gumps so PaperdollReq and container
+    // restore timers record real send times instead of pre-load frame ticks.
+    g_Ticks = static_cast<uint32_t>(SDL_GetTicks());
     g_GumpManager.Load(desktopFile);
     g_CustomHousesManager.Load(desktopFile);
+    g_Ticks = static_cast<uint32_t>(SDL_GetTicks());
+    g_CheckContainerStackTimer = g_Ticks + 30000;
 
     if (g_ConfigManager.OffsetInterfaceWindows)
     {
@@ -1392,6 +1403,7 @@ void CGame::LoadLocalConfig(int serial, const astr_t& characterName)
         g_SoundManager.StopMusic();
     }
     g_ConfigLoaded = true;
+    s_DesktopSaveDebouncer.MarkSaved(g_Ticks);
 }
 
 void CGame::SaveLocalConfig(int serial)
@@ -1432,14 +1444,58 @@ void CGame::SaveLocalConfig(int serial)
         Info(Client, "SaveLocalConfig using path: %s", fs_path_ascii(path));
     }
 
-    TextFileWriter writer(fs_path_join(path, "desktop.txt"));
-    if (writer.Opened())
+    const auto desktopPath = fs_path_join(path, "desktop.txt");
+    const auto tempPath = fs_path_join(path, "desktop.txt.tmp");
+    bool wrote = false;
     {
-        g_ConfigManager.SaveSection(writer);
-        g_SkillGroupManager.Save(writer);
-        g_MacroManager.Save(writer);
-        g_GumpManager.Save(writer);
-        g_CustomHousesManager.Save(writer);
+        TextFileWriter writer(tempPath);
+        if (writer.Opened())
+        {
+            g_ConfigManager.SaveSection(writer);
+            g_SkillGroupManager.Save(writer);
+            g_MacroManager.Save(writer);
+            g_GumpManager.Save(writer);
+            g_CustomHousesManager.Save(writer);
+            writer.Close();
+            wrote = true;
+        }
+    }
+    if (wrote)
+    {
+        const astr_t tmpStr = fs_path_str(tempPath);
+        const astr_t dstStr = fs_path_str(desktopPath);
+#if defined(_WIN32)
+        fs_del(desktopPath);
+        if (rename(tmpStr.c_str(), dstStr.c_str()) != 0)
+        {
+            fs_del(tempPath);
+            wrote = false;
+        }
+#else
+        if (rename(tmpStr.c_str(), dstStr.c_str()) != 0)
+        {
+            fs_del(tempPath);
+            wrote = false;
+        }
+#endif
+    }
+    if (!wrote)
+    {
+        // Fallback direct write if atomic temp rename failed on the target FS.
+        TextFileWriter writer(desktopPath);
+        if (writer.Opened())
+        {
+            g_ConfigManager.SaveSection(writer);
+            g_SkillGroupManager.Save(writer);
+            g_MacroManager.Save(writer);
+            g_GumpManager.Save(writer);
+            g_CustomHousesManager.Save(writer);
+            wrote = true;
+        }
+    }
+    if (wrote)
+    {
+        s_DesktopSaveDebouncer.MarkSaved(g_Ticks);
 
         // clean up the legacy per-file binary/ini saves this file replaces
         static const char *legacy[] = { "options.cfg",    "skills.xuo",     "macros.xuo",
@@ -5467,6 +5523,12 @@ void CGame::ChangeMap(uint8_t newmap)
 
 void CGame::PickupItem(CGameItem *obj, int count, bool isGameFigure)
 {
+#if defined(XUO_ASSISTANT)
+    if (xuoassist::InventoryAgent_MoveInFlight() || xuoassist::PotionHands_BlocksItemMove())
+    {
+        return;
+    }
+#endif
     if (!g_ObjectInHand.Enabled)
     {
         g_ObjectInHand.Clear();
@@ -5509,16 +5571,52 @@ static void SendItemDrop(uint32_t item, uint32_t container, uint16_t x, uint16_t
     }
 }
 
+bool CGame::CanQuickLoot(CGameItem *item) const
+{
+    if (!g_ConfigManager.DoubleClickLoot || g_Player == nullptr || g_World == nullptr ||
+        item == nullptr || item->IsCorpse() || item->MultiBody || item->GetStaticData() == nullptr ||
+        item->IsDoor() || item->IsContainer() || g_Player->FindLayer(OL_BACKPACK) == nullptr ||
+        g_Player->IsDead() || g_ObjectInHand.Enabled || g_Target.IsTargeting())
+    {
+        return false;
+    }
+
+    constexpr uint32_t OnGround = 0xFFFFFFFF;
+    if (item->Container == OnGround)
+    {
+        // Only use the shortcut on loose items the world packet marks movable.
+        if ((item->GetFlags() & 0x20) == 0)
+        {
+            return false;
+        }
+        return GetDistance(g_Player, item) <= DRAG_ITEMS_DISTANCE;
+    }
+
+    auto *source = g_World->FindWorldItem(item->Container);
+    for (int depth = 0; source != nullptr && depth < 16; ++depth)
+    {
+        if (source->Container == OnGround)
+        {
+            return source->IsCorpse() && GetDistance(g_Player, source) <= DRAG_ITEMS_DISTANCE;
+        }
+        source = g_World->FindWorldItem(source->Container);
+    }
+    return false;
+}
+
 void CGame::LootItem(CGameItem *item, int count)
 {
-    auto *corpse = g_World->FindWorldItem(item->Container);
-    auto *backpack = g_Player->FindLayer(OL_BACKPACK);
-    if (!backpack || !corpse || !corpse->IsCorpse() || g_Player->IsDead() ||
-        g_ObjectInHand.Enabled || g_Target.IsTargeting() ||
-        GetTopObjDistance(g_Player, corpse) > DRAG_ITEMS_DISTANCE || count <= 0)
+#if defined(XUO_ASSISTANT)
+    if (xuoassist::InventoryAgent_MoveInFlight() || xuoassist::PotionHands_BlocksItemMove())
     {
         return;
     }
+#endif
+    if (!CanQuickLoot(item) || count <= 0 || count > item->Count)
+    {
+        return;
+    }
+    auto *backpack = g_Player->FindLayer(OL_BACKPACK);
 
     // The server processes the normal lift and drop in order and reports the
     // result through container updates. Leave the manual drag cursor alone.
@@ -5537,7 +5635,7 @@ void CGame::DropItem(int container, uint16_t x, uint16_t y, char z)
     }
 }
 
-void CGame::EquipItem(uint32_t container)
+void CGame::EquipItem(uint32_t container, uint8_t layerOverride)
 {
     if (g_ObjectInHand.Enabled)
     {
@@ -5549,8 +5647,9 @@ void CGame::EquipItem(uint32_t container)
                 container = g_PlayerSerial;
             }
 
-            CPacketEquipRequest(g_ObjectInHand.Serial, g_Data.m_Static[graphic].Layer, container)
-                .Send();
+            const uint8_t layer =
+                layerOverride != 0u ? layerOverride : g_Data.m_Static[graphic].Layer;
+            CPacketEquipRequest(g_ObjectInHand.Serial, layer, container).Send();
 
             g_ObjectInHand.Enabled = false;
             g_ObjectInHand.Dropped = true;
@@ -5601,6 +5700,12 @@ void CGame::Click(uint32_t serial)
 
 void CGame::DoubleClick(uint32_t serial)
 {
+#if defined(XUO_ASSISTANT)
+    if (xuoassist::TargetAssist_BlockDismount(serial))
+    {
+        return;
+    }
+#endif
     if (serial >= 0x40000000)
     {
         g_LastUseObject = serial;
@@ -5683,6 +5788,13 @@ void CGame::CastSpell(int index)
     if (index >= 0)
     {
         g_LastSpellIndex = index;
+#if defined(XUO_ASSISTANT)
+        if (xuoassist::PotionHands_BeginSpellCast(index, 0))
+        {
+            return;
+        }
+        xuoassist::GameplayFilters_BeginCast(index);
+#endif
         CPacketCastSpell(index).Send();
 #if defined(XUO_ASSISTANT)
         // below 6.0.14.2 the cast rides 0x12 (MT_CAST), from 6.0.14.2 it
@@ -5705,6 +5817,13 @@ void CGame::CastSpellFromBook(int index, uint32_t serial)
     if (index >= 0)
     {
         g_LastSpellIndex = index;
+#if defined(XUO_ASSISTANT)
+        if (xuoassist::PotionHands_BeginSpellCast(index, serial))
+        {
+            return;
+        }
+        xuoassist::GameplayFilters_BeginCast(index);
+#endif
         CPacketCastSpellFromBook(index, serial).Send();
 #if defined(XUO_ASSISTANT)
         xuoassist::g_MacroExecutor.RecordCastFromBook(index);
@@ -5804,7 +5923,9 @@ void CGame::RemoveRangedObjects()
 void CGame::ClearWorld()
 {
     g_ConfigLoaded = false;
+    s_DesktopSaveDebouncer.Reset();
     g_ContainerStack.clear();
+    ClearContainerPositions();
     g_CorpseManager.Clear();
     g_Walker.Reset();
     g_ObjectInHand.Clear();
@@ -5827,6 +5948,9 @@ void CGame::ClearWorld()
     g_World = nullptr;
     Info(Client, "\tworld removed");
     g_Waypoints.Clear();
+#if defined(XUO_ASSISTANT)
+    xuoassist::g_TradeManager.Clear();
+#endif
     CGumpSpell::ClearActiveSpells();
 
     g_PopupMenu = nullptr;

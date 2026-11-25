@@ -151,8 +151,10 @@ void BuildRows(vector<XA_INSPECT_ROW> &rows, CGameObject *obj)
             title += " (Corpse)";
         }
         AddRow(rows, 0, true, title.c_str(), "", OIK_GROUP);
-        const astr_t layer = g_LayerName[item->Layer % 30] + " (" +
-                             str_from((int)item->Layer) + ")";
+        const astr_t layerName = item->Layer < OL_EXTENDED_COUNT
+            ? g_LayerName[item->Layer]
+            : astr_t("Unknown");
+        const astr_t layer = layerName + " (" + str_from((int)item->Layer) + ")";
         AddRow(rows, 1, false, "Layer: ", layer, OIK_LAYER);
     }
     else

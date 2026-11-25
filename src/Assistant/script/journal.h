@@ -48,4 +48,32 @@ int ScriptJournal_Count();
 // matched entries are otherwise never removed. Main thread (drain) only.
 bool ScriptJournal_RemoveAt(int index);
 
+// --- Razor Enhanced Journal queries (main thread / drain only) --------------
+
+using JournalNameResolver = astr_t (*)(uint32_t serial);
+
+// Case-insensitive substring search (supports '|' alternatives) over all lines.
+bool ScriptJournal_Search(const astr_t &text);
+
+// Case-insensitive match requiring both speaker name (via "Name: ..." prefix
+// or resolved world-object name) and message substring.
+bool ScriptJournal_SearchByName(
+    const astr_t &text, const astr_t &name, JournalNameResolver resolveName = nullptr);
+
+// Returns all lines spoken by `serial` (oldest-first).
+vector<astr_t> ScriptJournal_GetTextBySerial(
+    uint32_t serial, bool addName = false, JournalNameResolver resolveName = nullptr);
+
+// Returns the newest line matching `text` (case-insensitive), or "".
+astr_t ScriptJournal_GetLineText(
+    const astr_t &text, bool addName = false, JournalNameResolver resolveName = nullptr);
+
+// Returns all lines matching `color` (oldest-first).
+vector<astr_t> ScriptJournal_GetTextByColor(
+    uint16_t color, bool addName = false, JournalNameResolver resolveName = nullptr);
+
+// Returns all lines matching any flag bit in `typeFlags` (0 = all, oldest-first).
+vector<astr_t> ScriptJournal_GetTextByType(
+    uint8_t typeFlags, bool addName = false, JournalNameResolver resolveName = nullptr);
+
 } // namespace xuoassist

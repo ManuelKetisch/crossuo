@@ -155,13 +155,20 @@ public:
     void WalkAutoOpenDoor(const int &direction) const;
 
     void HandleTargetType(uint8_t *buf) const;
+    void HandleTargetCounterItem(uint8_t *buf) const;
+    void HandleTargetContainerLabel(uint8_t *buf) const;
     void HandleTargetObject(uint8_t *buf) const;
+    void HandleGameplayFilterTarget(uint8_t *packet) const;
     void HandleTargetInfo(uint8_t *buf) const;
     void HandleTargetInfoTile(uint8_t *buf) const;
     void HandleTargetDressBag(uint8_t *buf) const;
     void HandleTargetDressItem(uint8_t *buf) const;
     void HandleTargetHide(uint8_t *buf) const;
     void HandleTargetDrop(uint8_t *buf) const;
+    void HandleTargetInventory(uint8_t *buf) const;
+    void HandleTargetBandagePatient(uint8_t *buf) const;
+    void HandleTargetSellHotBag(uint8_t *buf) const;
+    void HandleTargetToolbarItem(uint8_t *buf) const;
     void HandleTargetFindList(uint8_t *buf) const;
     void HandleTargetIgnoreList(uint8_t *buf) const;
     void HandleTargetPartyObject(uint8_t *buf) const;
@@ -169,6 +176,8 @@ public:
     void HandleTargetEnemyObject(uint8_t *buf) const;
     void HandleTargetAnimalAndVendorControlName(uint8_t *buf) const;
     void HandleSetPVPCaller(uint8_t *buf) const;
+    bool HandleScriptPromptTarget(uint8_t *buf) const;
+    bool HandleScriptPromptTargetCancel() const;
     void OpenDoor() const;
 
     static bool IsNoDrawTile(const uint16_t &graphic);

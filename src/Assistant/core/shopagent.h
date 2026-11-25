@@ -52,6 +52,7 @@ class CShopAgent
     // the per-list Auto checkboxes (cb_AutoBuy/SellSelectedList; UI-set)
     bool m_AutoBuy{ false };
     bool m_AutoSell{ false };
+    astr_t m_AutoShopListName;
 
     // the "Vendor name:" field (le_VendorName; UI-set, not serialized - the
     // original app kept it in the line edit only, ShopList.ini has no attribute)
@@ -66,6 +67,25 @@ class CShopAgent
     uint32_t m_ProgressVendorSerial{ 0 };
     vector<std::pair<uint32_t, int>> m_ProgressList;
 
+    // Optional sale scope. The selection belongs to one character and shard.
+    struct SellBag
+    {
+        bool Enabled = false;
+        uint32_t Serial = 0;
+        uint32_t Character = 0;
+        astr_t Shard;
+    };
+    SellBag m_SellBag;
+    astr_t m_SellBagProfile;
+    astr_t m_SellBagStatus;
+    uint32_t m_SellBagTargetCharacter = 0;
+    astr_t m_SellBagTargetShard;
+    uint32_t m_ProgressSellBag = 0;
+    astr_t m_ProgressSellBagProfile;
+    uint32_t m_LastItemMove = 0;
+    bool m_HasItemMove = false;
+
+
 public:
     // the vendor name field (not serialized)
     void SetVendorName(const astr_t &name) { m_VendorName = name; }
@@ -75,7 +95,13 @@ public:
     void SendShopRequest(int state, const astr_t &listName, const astr_t &text);
 
 private:
-    bool ProcessShopList();
+    bool ProcessShopList(const astr_t &listName);
+    void LoadSellHotBag();
+    bool SaveSellHotBag(const SellBag &settings);
+    uint32_t ActiveSellHotBag() const;
+    bool ScopedSaleMovePending() const;
+    void CancelSellHotBagTarget();
+
 
 public:
     CShopAgent() = default;
@@ -85,6 +111,7 @@ public:
 
     // frame tick: expires the progress countdown (sends the queued request)
     void Tick();
+    void OnItemMoveSent();
 
     // IsActiveShopping (request wait OR queued progress)
     bool IsActiveShopping() const;
@@ -93,7 +120,17 @@ public:
     void Buy(const astr_t &listName);
     void Sell(const astr_t &listName);
 
+    bool SellHotBagEnabled();
+    void SetSellHotBagEnabled(bool enabled);
+    void RequestSellHotBag();
+    void SelectSellHotBag(uint32_t serial);
+    void ClearSellHotBag();
+    astr_t SellHotBagLabel();
+    const astr_t &SellHotBagStatus() const { return m_SellBagStatus; }
+
+
     // --- agent-side UI switches (cb_AutoBuy/SellSelectedList) ----------------
+    void SetAutoShopListName(const astr_t &name) { m_AutoShopListName = name; }
     void SetAutoBuy(bool state) { m_AutoBuy = state; }
     void SetAutoSell(bool state) { m_AutoSell = state; }
     bool AutoBuy() const { return m_AutoBuy; }

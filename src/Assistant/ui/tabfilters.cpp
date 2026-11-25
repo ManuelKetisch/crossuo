@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2020 Danny Angelo Carminati Grein
 
-// The three Filters sub-tabs: Speech, Replaces (with the Mode/Type combos),
-// Sound. Entries bind to the g_AssistantConfig filter containers; the packet
-// handlers read exactly these through CheckSpeechInFilter / CheckReplaceText /
-// CheckSoundInFilter.
+// Speech, replacements, sounds, and gameplay filters.
 
 #include "assistantui.h"
 
 #if defined(XUO_ASSISTANT)
 
 #include <external/gfx/imgui/imgui.h>
+#include <cstdlib>
 
 #include "widgets.h"
 #include "../config/assistantconfig.h"
 #include "../core/assist.h"
+#include "../core/gameplayfilters.h"
+#include "AssetViewer/AssetViewer.h"
+#include "CrossUO.h"
 
 namespace xuoassist {
 
@@ -28,7 +29,7 @@ static void ReplaceSetTextOf(CFilterReplaceEntry &e, const char *n) { e.Original
 static const char *SoundNameOf(const CFilterSoundEntry &e) { return e.Name.c_str(); }
 static void SoundSetNameOf(CFilterSoundEntry &e, const char *n) { e.Name = n; }
 
-const ImVec4 HINT_COLOR = ImVec4(0.9f, 0.3f, 0.3f, 1.0f);
+const ImVec4 HINT_COLOR = ImVec4(1.0f, 0.45f, 0.42f, 1.0f);
 
 // "Mode:" combo (tabfiltersreplaces.ui cb_FilterReplaceMode / RTM_*)
 const char *const s_ReplaceModes[] = { "All", "Friends&You", "Enemies", "Others" };
@@ -51,7 +52,7 @@ void draw_speech_tab()
     const int buttons = ListButtons(PANE_SEED);
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##speech_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##speech_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##speech_filters", items, &selected, &SpeechTextOf, &SpeechSetTextOf);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -163,7 +164,7 @@ void draw_replaces_tab()
     const int buttons = ListButtons(PANE_SEED);
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##replace_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##replace_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##replace_filters", items, &selected, &ReplaceTextOf, &ReplaceSetTextOf);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -311,7 +312,7 @@ void draw_sound_tab()
     const int buttons = ListButtons(PANE_SEED);
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##sound_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##sound_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##sound_filters", items, &selected, &SoundNameOf, &SoundSetNameOf);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -384,6 +385,20 @@ void draw_sound_tab()
     ImGui::SameLine();
     ImGui::SetNextItemWidth(140.0f);
     ImGui::InputText("##sound_name", name, sizeof(name));
+    char *end = nullptr;
+    const unsigned long value = std::strtoul(index, &end, 16);
+    ImGui::BeginDisabled(end == index || *end != '\0' || value >= 0x0800);
+    if (ImGui::Button("Play sound"))
+    {
+        g_Game.PlaySoundEffect(static_cast<uint16_t>(value));
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Browse audio"))
+    {
+        AssetViewer_Show(true);
+    }
+    GameplayFilters_DrawSoundLogging();
     if (hint[0] != '\0')
     {
         ImGui::TextColored(HINT_COLOR, "%s", hint);
@@ -405,6 +420,9 @@ void TabFilters_Draw(int subTab)
             break;
         case TAB_FILTERS_SOUND:
             draw_sound_tab();
+            break;
+        case TAB_FILTERS_GAMEPLAY:
+            GameplayFilters_Draw();
             break;
         default:
             break;

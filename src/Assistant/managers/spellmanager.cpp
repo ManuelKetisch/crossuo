@@ -7,6 +7,8 @@
 #include "../macros/macroexecutor.h" // RecordingSuspension (assistant-originated casts do not record)
 #include "CrossUO.h" // ::g_Game (the client send bridge)
 #include "Network/Packets.h" // CPacketTargetCastSpell (the targeted 0xBF builder)
+#include "../core/gameplayfilters.h"
+#include "../core/potionhands.h"
 
 namespace xuoassist {
 
@@ -66,6 +68,16 @@ void CSpellManager::TargetCast(const astr_t &name, const uint32_t &serial) const
 
     if (index != -1)
     {
+        if (!GameplayFilters_AllowSpellTarget(index, serial))
+        {
+            return;
+        }
+        if (PotionHands_BeginTargetedSpellCast(index, serial))
+        {
+            return;
+        }
+        GameplayFilters_BeginCast(0);
+
         // the targeted 0xBF 0x002D send has no client call site (the client's
         // builders target spellbooks, not objects); the wire send runs no
         // recording taps, so no suspension is needed

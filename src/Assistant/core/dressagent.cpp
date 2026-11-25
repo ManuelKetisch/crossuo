@@ -18,6 +18,7 @@
 #include <common/logging/logging.h>
 
 #include "assist.h"
+#include "inventoryagent.h"
 #include "../config/assistantconfig.h"
 #include "world.h"
 
@@ -194,7 +195,7 @@ void CDressAgent::Tick()
         return;
     }
 
-    if (g_Ticks < m_NextTick)
+    if (g_Ticks < m_NextTick || InventoryAgent_MoveInFlight())
     {
         return;
     }

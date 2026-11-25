@@ -155,19 +155,33 @@ CPacketCreateCharacter::CPacketCreateCharacter(const astr_t &name)
     WriteUInt8(profession->Dex);
     WriteUInt8(profession->Int);
 
+    const bool advanced = !legacyCreateChar && profession->DescriptionIndex == -1;
+    int emptySlots = 0;
     for (int i = 0; i < skillsCount; i++)
     {
-        val = profession->GetSkillIndex((int)i);
+        val = profession->GetSkillIndex(i);
         if (val == 0xFF)
         {
-            //error, skill is not selected
-            WriteUInt16BE(0x0000);
+            if (advanced)
+            {
+                ++emptySlots;
+            }
+            else
+            {
+                WriteUInt16BE(0x0000);
+            }
         }
         else
         {
             WriteUInt8(val);
-            WriteUInt8(profession->GetSkillValue((int)i));
+            WriteUInt8(profession->GetSkillValue(i));
         }
+    }
+    // Empty slots encode as Alchemy at zero. Keep them after real selections so
+    // ModernUO does not reject a later Alchemy allocation as a duplicate.
+    for (int i = 0; i < emptySlots; ++i)
+    {
+        WriteUInt16BE(0x0000);
     }
 
     WriteUInt16BE(g_CreateCharacterManager.SkinTone);

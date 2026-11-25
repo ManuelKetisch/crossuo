@@ -50,6 +50,7 @@ void CBaseScreen::Render()
     DrawSmoothMonitorEffect();
     CVfsStatusHud::Draw(); // streamed-install HUD, top-right (gone when idle)
     g_MouseManager.Draw(CursorGraphic);
+    g_ScreenshotBuilder.CaptureFrame();
 #if defined(USE_GL3) || defined(USE_GLES)
     RenderDebug_ProcessFrame(g_renderCmdList);
     RenderDraw_Execute(g_renderCmdList);
@@ -57,10 +58,10 @@ void CBaseScreen::Render()
     // BEFORE the sprite pool is cleared, or the flush binds deleted textures
     Render_SwapBuffers();
     g_FontManager.ClearTextSpritePool(); // Clear text sprites (GPU is done with them)
-    g_ScreenshotBuilder.GPUDataReady();
 #else
     Render_GL1EndDraw();
 #endif // #if defined(USE_GL3) || defined(USE_GLES)
+    g_ScreenshotBuilder.GPUDataReady();
 }
 
 void CBaseScreen::SelectObject()

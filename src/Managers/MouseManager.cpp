@@ -4,9 +4,10 @@
 #include <SDL3/SDL_stdinc.h>
 #include <cmath> // hypotf
 #include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_video.h>
 #include <xuocore/uodata_color.h>
 #include <cstdint>
-#include "../GameWindow.h" // g_WispWindow (until the window merge)
+#include "../GameWindow.h"
 #include "MouseManager.h"
 #include "ColorManager.h"
 #include "Globals.h"
@@ -611,80 +612,110 @@ void CMouseManager::Draw(uint16_t id)
     }
 }
 
-// captured-drag tracking state: SDL3 (X11/XWayland) drops motion events while
-// a captured drag has the cursor outside the window and the cached
-// SDL_GetMouseState position freezes (SDL2 delivered them window-relative for
-// the whole drag). Track the drag by accumulating SDL_GetGlobalMouseState
-// deltas instead - origin-independent, so the unreliable SDL_GetWindowPosition
-// (XWayland does not report the real window position) is not needed.
-static bool s_DragTrackValid = false;
-static float s_DragLastGlobalX = 0.0f;
-static float s_DragLastGlobalY = 0.0f;
-static int s_DragBaseX = 0;
-static int s_DragBaseY = 0;
+bool CMouseManager::HasPressedButtons() const
+{
+    return LeftButtonPressed || RightButtonPressed || MidButtonPressed;
+}
+
+bool CMouseManager::IsButtonPressed(uint8_t button) const
+{
+    return (button == SDL_BUTTON_LEFT && LeftButtonPressed) ||
+        (button == SDL_BUTTON_RIGHT && RightButtonPressed) ||
+        (button == SDL_BUTTON_MIDDLE && MidButtonPressed);
+}
+
+void CMouseManager::SetPosition(float x, float y)
+{
+    // Round the absolute coordinate once. The world and gump hit tests use pixels.
+    RealPosition = CPoint2Di(int(std::floor(x)), int(std::floor(y)));
+    Position = RealPosition;
+}
+
+void CMouseManager::UpdateX11Capture()
+{
+    float x = 0.0f, y = 0.0f;
+    SDL_GetGlobalMouseState(&x, &y);
+    SetPosition(
+        m_CaptureWindowStart.X + (x - m_CaptureDesktopStart.X),
+        m_CaptureWindowStart.Y + (y - m_CaptureDesktopStart.Y));
+}
 
 void CMouseManager::Update()
 {
-    const bool draggingButtons = (LeftButtonPressed || RightButtonPressed || MidButtonPressed);
-
-    if (draggingButtons && g_GameWindow.m_window != nullptr)
+    Dragging = HasPressedButtons();
+    // Only X11 requires a desktop query when capture stops delivering motion.
+    // Other backends already deliver one window-relative pointer stream.
+    if (m_CaptureOnX11 && Dragging)
     {
-        float gx = 0.0f, gy = 0.0f;
-        SDL_GetGlobalMouseState(&gx, &gy);
-        if (!s_DragTrackValid)
-        {
-            // drag start: the cached position is still the correct
-            // window-relative one (motion events flow while inside)
-            s_DragBaseX = Position.X;
-            s_DragBaseY = Position.Y;
-            s_DragLastGlobalX = gx;
-            s_DragLastGlobalY = gy;
-            s_DragTrackValid = true;
-        }
-        else
-        {
-            int applyX = (int)(gx - s_DragLastGlobalX);
-            int applyY = (int)(gy - s_DragLastGlobalY);
-            s_DragBaseX += applyX;
-            s_DragBaseY += applyY;
-            s_DragLastGlobalX = gx;
-            s_DragLastGlobalY = gy;
-        }
-        Position = CPoint2Di(s_DragBaseX, s_DragBaseY);
-        Dragging = true;
-        RealPosition = Position;
-        return;
+        UpdateX11Capture();
     }
-    s_DragTrackValid = false;
-
-    // only follow the mouse while it hovers our own window; other windows in
-    // the process (like the embedded launcher) have their own mouse handling,
-    // and their coordinates would otherwise move the game cursor around
-    if (g_GameWindow.m_window != nullptr && SDL_GetMouseFocus() != g_GameWindow.m_window)
+    else
     {
-        Dragging = false;
-        return;
+        Position = RealPosition;
     }
-    // SDL3: SDL_GetMouseState reports float coordinates; the client is
-    // integer-based, so truncate like SDL2 did
-    float mx = 0.0f, my = 0.0f;
-    SDL_GetMouseState(&mx, &my);
-    Position = CPoint2Di((int)mx, (int)my);
-    Dragging = false;
-    RealPosition = Position;
 }
 
-void CMouseManager::Release() const
+void CMouseManager::UpdateFromEvent(float x, float y)
 {
-    if (!(LeftButtonPressed || RightButtonPressed || MidButtonPressed))
+    Dragging = HasPressedButtons();
+    if (m_CaptureOnX11 && Dragging)
     {
+        UpdateX11Capture();
+    }
+    else
+    {
+        SetPosition(x, y);
+    }
+}
+
+void CMouseManager::SyncWindowPosition()
+{
+    if (g_GameWindow.m_window == nullptr || SDL_GetMouseFocus() != g_GameWindow.m_window)
+    {
+        return;
+    }
+
+    float x = 0.0f, y = 0.0f;
+    SDL_GetMouseState(&x, &y);
+    UpdateFromEvent(x, y);
+}
+
+void CMouseManager::Release()
+{
+    Dragging = HasPressedButtons();
+    if (!Dragging)
+    {
+        m_CaptureOnX11 = false;
         SDL_CaptureMouse(false);
     }
 }
 
-void CMouseManager::Capture() const
+void CMouseManager::Capture(float windowX, float windowY)
 {
+    if (HasPressedButtons())
+    {
+        return;
+    }
+
     SDL_CaptureMouse(true);
+    const char *driver = SDL_GetCurrentVideoDriver();
+    m_CaptureOnX11 = driver != nullptr && SDL_strcmp(driver, "x11") == 0;
+    if (m_CaptureOnX11)
+    {
+        m_CaptureWindowStart = CPoint2Df(windowX, windowY);
+        SDL_GetGlobalMouseState(&m_CaptureDesktopStart.X, &m_CaptureDesktopStart.Y);
+    }
+}
+
+void CMouseManager::CancelCapture()
+{
+    LeftButtonPressed = false;
+    RightButtonPressed = false;
+    MidButtonPressed = false;
+    LastLeftButtonClickTimer = 0;
+    LastRightButtonClickTimer = 0;
+    LastMidButtonClickTimer = 0;
+    Release();
 }
 
 CPoint2Di CMouseManager::LeftDroppedOffset() const

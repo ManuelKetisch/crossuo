@@ -17,6 +17,11 @@
 #include "../script/scriptlist.h" // g_LoadedScripts (the HT_SCRIPT action list)
 #include "assist.h"
 #include "assistantevents.h"
+#include "bandageheal.h"
+#include "targetassist.h"
+#include "inventoryagent.h"
+#include "../AssistantWindow.h"
+#include "../ui/mapwindow.h"
 #include "global.h"
 #include "Network/Packets.h" // ::CPacketTargetSelectedObject (the client's own 0xBF/0x2C builder)
 #include "Target.h" // ::g_Target (the shared target cursor: hooks, senders, CancelCursor)
@@ -59,6 +64,7 @@ const char *Actions_TypeName(uint32_t type)
         "Targeting",                             // HT_TARGETING
         "Bandage healing",                       // HT_BANDAGE_HEALING
         "New targeting system set",              // HT_NEW_TARGETING_SYSTEM_SET
+        "Inventory agent",                       // HT_INVENTORY_AGENT
     };
     if (type < (sizeof(NAMES) / sizeof(NAMES[0])))
     {
@@ -69,8 +75,7 @@ const char *Actions_TypeName(uint32_t type)
 
 uint32_t Actions_TypeCount()
 {
-    return (uint32_t)HT_LAST; // the original HT_COUNT_OF_ITEMS (26 entries)
-    return (uint32_t)HT_LAST; // the HT_* count (26 entries)
+    return (uint32_t)HT_LAST;
 }
 
 namespace {
@@ -86,12 +91,24 @@ struct XA_ACTION_LIST
 const char *const TOGGLE_HOTKEYS_ITEMS[] = { "Toggle", "On", "Off" };
 const char *const TOGGLE_MAP_ITEMS[] = { "Toggle", "Show", "Hide" };
 const char *const ATTACK_ITEMS[] = { "Last attack", "Last target", "Enemy" };
-const char *const USE_OBJECT_ITEMS[] = { "Last object", "Left hand", "Right hand" };
+const char *const USE_OBJECT_ITEMS[] = {
+    "Last object", "Right hand", "Left hand", "Heal potion", "Cure potion", "Refresh potion",
+    "Strength potion", "Agility potion", "Nightsight potion", "Explosion potion"
+};
+constexpr uint16_t PotionGraphics[] = { 0x0F0C, 0x0F07, 0x0F0B, 0x0F09, 0x0F08, 0x0F06, 0x0F0D };
 const char *const ALLNAMES_ITEMS[] = { "All", "Mobiles", "Humanoids", "Corpses" };
 const char *const TARGETING_ITEMS[] = {
-    "Self", "Last target", "Last attack", "Enemy", "Friend", "Last tile"
+    "Self", "Last target", "Last attack", "Enemy", "Friend", "Last tile", "Clear queued target"
 };
-const char *const BANDAGE_ITEMS[] = { "Self", "Friend", "Last target", "New target system" };
+const char *const BANDAGE_ITEMS[] = {
+    "Self",
+    "Friend",
+    "Last target",
+    "New target system",
+    "Auto-heal: toggle",
+    "Auto-heal: start",
+    "Auto-heal: stop",
+};
 const char *const NTS_SET_ITEMS[] = {
     "Self",
     "Last target",
@@ -102,19 +119,22 @@ const char *const NTS_SET_ITEMS[] = {
     "Find preveous hostile", // (sic) original spelling
     "Find nearest hostile",
     "Find next mobile",
-    "Find preveous mobile",
+    "Find previous mobile",
     "Find nearest mobile",
+    "Find next friend",
+    "Find previous friend",
+    "Find nearest friend",
 };
 
 const XA_ACTION_LIST s_FixedLists[] = {
     { HT_TOGGLE_HOTKEYS, TOGGLE_HOTKEYS_ITEMS, 3 },
     { HT_TOGGLE_MAP, TOGGLE_MAP_ITEMS, 3 },
     { HT_ATTACK, ATTACK_ITEMS, 3 },
-    { HT_USE_OBJECT, USE_OBJECT_ITEMS, 3 },
+    { HT_USE_OBJECT, USE_OBJECT_ITEMS, 10 },
     { HT_ALLNAMES, ALLNAMES_ITEMS, 4 },
-    { HT_TARGETING, TARGETING_ITEMS, 6 },
-    { HT_BANDAGE_HEALING, BANDAGE_ITEMS, 4 },
-    { HT_NEW_TARGETING_SYSTEM_SET, NTS_SET_ITEMS, 11 },
+    { HT_TARGETING, TARGETING_ITEMS, 7 },
+    { HT_BANDAGE_HEALING, BANDAGE_ITEMS, 7 },
+    { HT_NEW_TARGETING_SYSTEM_SET, NTS_SET_ITEMS, 14 },
 };
 
 vector<astr_t> &dynamic_list(uint32_t type)
@@ -147,6 +167,10 @@ int Actions_ActionCount(uint32_t type)
     {
         // a script hotkey binds a LOADED SCRIPT (the Scripts tab list)
         return (int)g_LoadedScripts.Scripts().size();
+    }
+    if (type == HT_INVENTORY_AGENT)
+    {
+        return 2 + (int)InventoryAgent_Profiles().size();
     }
     const vector<astr_t> &list = dynamic_list(type);
     if (!list.empty())
@@ -190,6 +214,27 @@ void Actions_ActionName(uint32_t type, int action, char *out, size_t size)
         }
         return;
     }
+    if (type == HT_INVENTORY_AGENT)
+    {
+        if (action == 0)
+        {
+            snprintf(out, size, "Stop inventory agents");
+        }
+        else if (action == 1)
+        {
+            snprintf(out, size, "Clear scavenger cache");
+        }
+        else
+        {
+            const auto &profiles = InventoryAgent_Profiles();
+            if (action >= 2 && action - 2 < (int)profiles.size())
+            {
+                const auto &profile = profiles[action - 2];
+                snprintf(out, size, "%s (%s)", profile.Name.c_str(), InventoryAgent_ModeName(profile.Mode));
+            }
+        }
+        return;
+    }
     const vector<astr_t> &list = dynamic_list(type);
     if (!list.empty())
     {
@@ -225,6 +270,15 @@ void Actions_ActionValue(uint32_t type, int action, char *out, size_t size)
         if (action >= 0 && action < (int)scripts.size())
         {
             snprintf(out, size, "%s", scripts[action].Path.c_str());
+        }
+        return;
+    }
+    if (type == HT_INVENTORY_AGENT)
+    {
+        const auto &profiles = InventoryAgent_Profiles();
+        if (action >= 2 && action - 2 < (int)profiles.size())
+        {
+            snprintf(out, size, "%s", profiles[action - 2].Name.c_str());
         }
         return;
     }
@@ -320,9 +374,10 @@ void Actions_FormatDataText(const CHotkeyEntry &entry, char *out, size_t size)
                 (action == 0 ? "last" : (action == 1 ? "last target" : "enemy")));
             break;
         case HT_USE_OBJECT:
-            snprintf(
-                name, sizeof(name), "Use: %s",
-                (action == 0 ? "last" : (action == 1 ? "left hand" : "right hand")));
+            if (action >= 0 && action < (int)(sizeof(USE_OBJECT_ITEMS) / sizeof(USE_OBJECT_ITEMS[0])))
+            {
+                snprintf(name, sizeof(name), "Use: %s", USE_OBJECT_ITEMS[action]);
+            }
             break;
         case HT_ALLNAMES:
         {
@@ -393,13 +448,24 @@ void Actions_FormatDataText(const CHotkeyEntry &entry, char *out, size_t size)
                 "Target: enemy",
                 "Target: friend",
                 "Target: last tile",
+                "Clear queued target",
             };
-            if (action <= 5)
+            if (action >= 0 && action < (int)(sizeof(TARGET_ITEMS) / sizeof(TARGET_ITEMS[0])))
             {
                 snprintf(name, sizeof(name), "%s", TARGET_ITEMS[action]);
             }
             break;
         }
+        case HT_INVENTORY_AGENT:
+            if (!entry.ScriptOrMacroName.empty())
+            {
+                snprintf(name, sizeof(name), "Run %s", entry.ScriptOrMacroName.c_str());
+            }
+            else if (action <= 1)
+            {
+                Actions_ActionName(type, action, name, sizeof(name));
+            }
+            break;
         case HT_BANDAGE_HEALING:
         {
             static const char *const BANDAGE_NAMES[] = {
@@ -407,8 +473,11 @@ void Actions_FormatDataText(const CHotkeyEntry &entry, char *out, size_t size)
                 "BandageHealing: friend",
                 "BandageHealing: last target",
                 "BandageHealing: new target system",
+                "BandageHealing: auto-heal toggle",
+                "BandageHealing: auto-heal start",
+                "BandageHealing: auto-heal stop",
             };
-            if (action <= 3)
+            if (action < (sizeof(BANDAGE_NAMES) / sizeof(BANDAGE_NAMES[0])))
             {
                 snprintf(name, sizeof(name), "%s", BANDAGE_NAMES[action]);
             }
@@ -428,8 +497,11 @@ void Actions_FormatDataText(const CHotkeyEntry &entry, char *out, size_t size)
                 "NewTargettingSystemSet: Find next mobile",
                 "NewTargettingSystemSet: Find preveous mobile",
                 "NewTargettingSystemSet: Find nearest mobile",
+                "Find next friend",
+                "Find previous friend",
+                "Find nearest friend",
             };
-            if (action <= 10)
+            if (action >= 0 && action < (int)(sizeof(NTS_NAMES) / sizeof(NTS_NAMES[0])))
             {
                 snprintf(name, sizeof(name), "%s", NTS_NAMES[action]);
             }
@@ -459,6 +531,31 @@ void hook_objects(const astr_t &a)
 
 } // namespace
 
+static CGameItem *find_potion(CGameObject *container, uint16_t graphic)
+{
+    if (container == nullptr)
+    {
+        return nullptr;
+    }
+
+    for (auto *item = (CGameItem *)container->m_Items; item != nullptr; item = (CGameItem *)item->m_Next)
+    {
+        if (item->Graphic == graphic)
+        {
+            return item;
+        }
+        if (!item->Empty() && item->Layer != OL_BANK)
+        {
+            if (auto *nested = find_potion(item, graphic))
+            {
+                return nested;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
 void Actions_Execute(const CHotkeyEntry &entry)
 {
     const uint32_t type = entry.Type;
@@ -467,8 +564,29 @@ void Actions_Execute(const CHotkeyEntry &entry)
     switch (type)
     {
         case HT_TOGGLE_MAP:
-            // the binding is recognized (and consumed by the engine) but the map window
-            // is not wired to the hotkey
+            if (action == 1 || (action == 0 && !g_AssistantMapOpen))
+            {
+                AssistantWindow_Show(true);
+                MapWindow_Open();
+            }
+            else if (action == 2 || action == 0)
+            {
+                g_AssistantMapOpen = false;
+            }
+            break;
+        case HT_INVENTORY_AGENT:
+            if (!entry.ScriptOrMacroName.empty())
+            {
+                InventoryAgent_Run(entry.ScriptOrMacroName);
+            }
+            else if (action == 0)
+            {
+                InventoryAgent_Stop();
+            }
+            else if (action == 1)
+            {
+                InventoryAgent_ClearScavengerCache();
+            }
             break;
         case HT_ATTACK:
         {
@@ -485,7 +603,7 @@ void Actions_Execute(const CHotkeyEntry &entry)
             {
                 serial = CAssistant::TextToSerial("enemy");
             }
-            if (serial != 0u)
+            if (serial != 0u && TargetAssist_AllowObject(1, serial))
             {
                 g_Assistant.Attack(serial);
             }
@@ -498,15 +616,20 @@ void Actions_Execute(const CHotkeyEntry &entry)
             {
                 serial = CAssistant::TextToSerial("lastobject");
             }
-            // only action 1 resolves a hand;
-            // the "Use: right hand" slot is a no-op (the
-            // label advertises it, the executor never handled it) - kept.
-            else if (action == 1)
+            else if ((action == 1 || action == 2) && g_Player != nullptr)
             {
-                CGameItem *objAtLayer = g_Player->FindLayer(OL_1_HAND);
-                if (objAtLayer != nullptr)
+                auto *hand = g_Player->FindLayer(action == 1 ? OL_1_HAND : OL_2_HAND);
+                if (hand != nullptr)
                 {
-                    serial = objAtLayer->Serial;
+                    serial = hand->Serial;
+                }
+            }
+            else if (action >= 3 && action - 3 < (int)(sizeof(PotionGraphics) / sizeof(PotionGraphics[0])) && g_Player != nullptr)
+            {
+                auto *potion = find_potion(g_Player->FindLayer(OL_BACKPACK), PotionGraphics[action - 3]);
+                if (potion != nullptr)
+                {
+                    serial = potion->Serial;
                 }
             }
             if (serial != 0u)
@@ -651,14 +774,29 @@ void Actions_Execute(const CHotkeyEntry &entry)
         }
         case HT_TARGETING:
         {
+            if (action == 6)
+            {
+                TargetAssist_Queue(TargetAssistSelection::None);
+                break;
+            }
+            if (!g_Target.IsTargeting())
+            {
+                if (action == 0 || action == 1)
+                {
+                    TargetAssist_Queue(action == 0 ? TargetAssistSelection::Self : TargetAssistSelection::Last);
+                }
+                break;
+            }
+            if (action == 1)
+            {
+                TargetAssist_SendLast();
+                break;
+            }
+
             uint32_t serial = 0;
             if (action == 0)
             {
                 serial = g_PlayerSerial;
-            }
-            else if (action == 1)
-            {
-                serial = g_LastTargetObject;
             }
             else if (action == 2)
             {
@@ -686,11 +824,46 @@ void Actions_Execute(const CHotkeyEntry &entry)
             {
                 g_Target.SendTargetObject(serial);
             }
-            ::g_Target.CancelCursor();
             break;
         }
         case HT_BANDAGE_HEALING:
         {
+            if (action == 4)
+            {
+                if (BandageHeal_Running())
+                {
+                    BandageHeal_Stop();
+                    g_Assistant.ClientPrint("Bandage auto-heal stopped.");
+                }
+                else if (BandageHeal_Start())
+                {
+                    g_Assistant.ClientPrint("Bandage auto-heal started.");
+                }
+                else
+                {
+                    g_Assistant.ClientPrint(BandageHeal_Status());
+                }
+                break;
+            }
+            if (action == 5)
+            {
+                if (BandageHeal_Start())
+                {
+                    g_Assistant.ClientPrint("Bandage auto-heal started.");
+                }
+                else
+                {
+                    g_Assistant.ClientPrint(BandageHeal_Status());
+                }
+                break;
+            }
+            if (action == 6)
+            {
+                BandageHeal_Stop();
+                g_Assistant.ClientPrint("Bandage auto-heal stopped.");
+                break;
+            }
+
             CGameItem *bandage = g_Player != nullptr ? g_Player->FindBandage() : nullptr;
             if (bandage != nullptr)
             {
@@ -760,6 +933,17 @@ void Actions_Execute(const CHotkeyEntry &entry)
                 clientMacroSubActions.push_back(action <= 7 ? "Hostile" : "Mobile");
                 ::g_MacroManager.ExecuteFromLists(clientMacroActions, clientMacroSubActions);
             }
+            else if (action >= 11 && action <= 13 && g_World != nullptr)
+            {
+                auto *target = g_World->SearchWorldObject(
+                    Actions_NewTargetSystemSerial(), 30, STO_MOBILES,
+                    action == 11 ? SMO_NEXT : action == 12 ? SMO_PREV : SMO_NEAREST,
+                    TargetAssist_OnlyFriend);
+                if (target != nullptr)
+                {
+                    Actions_SetNewTargetSystemSerial(target->Serial);
+                }
+            }
             break;
         }
         default:
@@ -776,7 +960,7 @@ void Actions_RunExternalCode(const astr_t &code)
     int prefixLen = g_AssistantConfig.IsCommandPrefix(code);
     if (prefixLen > 0)
     {
-        g_TextCommandManager.DoCommand(code);
+        g_TextCommandManager.DoCommand(code.substr(static_cast<size_t>(prefixLen)));
     }
     else
     {

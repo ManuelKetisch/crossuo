@@ -2166,7 +2166,7 @@ void CGumpOptions::DrawPage6()
     checkbox = (CGUICheckbox *)html->Add(
         new CGUICheckbox(ID_GO_P6_DOUBLE_CLICK_LOOT, 0x00D2, 0x00D3, 0x00D2, 230, 136));
     checkbox->Checked = g_OptionsConfig.DoubleClickLoot;
-    checkbox->SetTextParameters(0, L"Double-click to loot corpses", g_OptionsTextColor);
+    checkbox->SetTextParameters(0, L"Quick loot on double-click", g_OptionsTextColor);
 
     checkbox = (CGUICheckbox *)html->Add(
         new CGUICheckbox(ID_GO_P6_GRAY_OUT_OF_RANGE_OBJECTS, 0x00D2, 0x00D3, 0x00D2, 0, 156));

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2020 Danny Angelo Carminati Grein
 
 #include "white_label.h"
+#include <csignal>
 #include <iostream>
 #include <time.h>
 #if defined(XUO_EMSC)
@@ -998,9 +999,33 @@ static void PaceToDisplay(uint64_t frameStart)
 }
 #endif
 
+#if !defined(_WIN32) && !defined(XUO_EMSC)
+static volatile sig_atomic_t g_SignalQuitRequested = 0;
+
+static void HandleTerminationSignal(int)
+{
+    g_SignalQuitRequested = 1;
+}
+#endif
+
 static bool RunFrame(bool &raised)
 {
     bool quit = false;
+#if !defined(_WIN32) && !defined(XUO_EMSC)
+    if (g_SignalQuitRequested != 0)
+    {
+        static bool signalQuitPushed = false;
+        if (!signalQuitPushed)
+        {
+            signalQuitPushed = true;
+            Warning(Client, "termination signal received: running clean shutdown");
+            SDL_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = SDL_EVENT_QUIT;
+            SDL_PushEvent(&ev);
+        }
+    }
+#endif
 #if defined(__APPLE__)
     const auto frameStart = s_displaySync ? 0 : SDL_GetTicksNS();
 #endif
@@ -1380,6 +1405,10 @@ int main(int argc, char **argv)
 
     g_Game.ProcessCommandLine();
     g_GameWindow.Raise();
+#if !defined(_WIN32) && !defined(XUO_EMSC)
+    std::signal(SIGTERM, HandleTerminationSignal);
+    std::signal(SIGINT, HandleTerminationSignal);
+#endif
 #if !defined(XUO_EMSC)
     auto ret = Run();
     SDL_Quit();

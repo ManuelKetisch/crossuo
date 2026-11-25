@@ -25,6 +25,7 @@
 #include "../GameWindow.h"
 #include "../ScreenStages/GameScreen.h"
 #include "../GameObjects/GameCharacter.h"
+#include "../GameObjects/GamePlayer.h"
 #include "../Renderer/RenderAPI.h"
 #include "../Utility/PerfMarker.h"
 #include "../Managers/FontsManager.h"
@@ -91,6 +92,242 @@ struct FRAME_OUTPUT_INFO
     int EndY = 0;
 };
 
+namespace
+{
+struct GripPoint
+{
+    int x;
+    int y;
+};
+
+struct GripProjection
+{
+    GripPoint leftGrip;
+    GripPoint sourceGrip;
+    uint8_t sourceGroup;
+    uint8_t sourceDirection;
+    bool reflectAtGrip = false;
+    uint8_t sourceFrame = 0;
+};
+
+struct OffHandPose
+{
+    uint8_t group;
+    uint8_t direction;
+    uint8_t frame;
+    bool mirror;
+    int x;
+    int y;
+    bool behindBody = false;
+};
+
+// In peace, both weapons use the body's facing and native resting angle.
+constexpr GripProjection StandingGrip[] = {
+    { { 10, -29 }, { -11, -23 }, PAG_STAND, 0 },
+    { { 2, -25 }, { -8, -29 }, PAG_STAND, 1 },
+    { { -7, -27 }, { -6, -32 }, PAG_STAND, 2 },
+    { { -12, -32 }, { 7, -30 }, PAG_STAND, 3 },
+    { { -9, -29 }, { 11, -28 }, PAG_STAND, 4 },
+};
+
+// The katana's standing art is masked around the right wrist and torso in
+// some views. These intact frames from the same weapon show the equivalent
+// projections without moving right-hand cutouts onto the visible left arm.
+constexpr uint16_t KatanaAnimation = 0x0273;
+constexpr GripProjection KatanaStandingGrip[] = {
+    { StandingGrip[0].leftGrip, { 7, -35 }, PAG_WALK_ARMED, 4, true },
+    StandingGrip[1],
+    StandingGrip[2],
+    { StandingGrip[3].leftGrip, { -7, -33 }, PAG_FIDGET_1, 1 },
+    { StandingGrip[4].leftGrip, { 8, -43 }, PAG_WALK_WARMODE, 2, false, 2 },
+};
+
+constexpr GripProjection GuardGrip[] = {
+    { { 2, -23 }, { -12, -32 }, PAG_STAND_ONEHANDED_ATTACK, 0 },
+    { { -6, -24 }, { -12, -32 }, PAG_STAND_ONEHANDED_ATTACK, 0 },
+    { { -11, -27 }, { 7, -41 }, PAG_STAND_ONEHANDED_ATTACK, 2 },
+    { { -13, -31 }, { 14, -34 }, PAG_STAND_ONEHANDED_ATTACK, 3 },
+    { { 1, -35 }, { 14, -31 }, PAG_STAND_ONEHANDED_ATTACK, 4 },
+};
+
+constexpr GripProjection MountedGrip[] = {
+    { { 10, -52 }, { -11, -49 }, PAG_ONMOUNT_STAND, 0, true },
+    { { 1, -50 }, { -16, -55 }, PAG_ONMOUNT_STAND, 1 },
+    { { -9, -51 }, { -10, -58 }, PAG_ONMOUNT_STAND, 2 },
+    { { -14, -55 }, { -16, -55 }, PAG_ONMOUNT_STAND, 1 },
+    { { -10, -58 }, { 12, -60 }, PAG_ONMOUNT_STAND, 4 },
+};
+
+// Right-hand contact points for the stock attack clips. The server's off-hand
+// animation uses these same seven frame slots and keeps its own frame index.
+constexpr GripPoint SwingGrip[][MAX_MOBILE_DIRECTIONS][7] = {
+    { // 9
+        { { -15, -43 }, { -17, -47 }, { -13, -31 }, { 12, -12 }, { 4, -16 }, { -16, -28 }, { -18, -40 } },
+        { { -3, -46 }, { -2, -51 }, { -17, -37 }, { -1, -17 }, { -5, -16 }, { -12, -33 }, { -3, -44 } },
+        { { 11, -45 }, { 14, -49 }, { -10, -43 }, { -11, -19 }, { -12, -19 }, { 0, -39 }, { 12, -42 } },
+        { { 19, -40 }, { 21, -42 }, { 3, -45 }, { -15, -24 }, { -12, -24 }, { 11, -35 }, { 21, -38 } },
+        { { 16, -34 }, { 16, -35 }, { 14, -41 }, { -11, -29 }, { -8, -38 }, { 16, -31 }, { 18, -30 } },
+    },
+    { // 10
+        { { -5, -40 }, { -9, -38 }, { -12, -32 }, { -5, -9 }, { -6, -15 }, { -10, -26 }, { -10, -27 } },
+        { { 15, -39 }, { 10, -38 }, { -4, -34 }, { -15, -19 }, { -10, -22 }, { -4, -27 }, { -1, -28 } },
+        { { 25, -32 }, { 21, -33 }, { 12, -33 }, { -15, -25 }, { -7, -26 }, { -16, -28 }, { -9, -26 } },
+        { { 22, -23 }, { 22, -25 }, { 6, -33 }, { -21, -38 }, { -12, -36 }, { 5, -27 }, { 7, -25 } },
+        { { 6, -18 }, { 10, -19 }, { 14, -22 }, { 6, -33 }, { 7, -30 }, { 9, -26 }, { 12, -16 } },
+    },
+    { // 11
+        { { -14, -37 }, { 6, -58 }, { -8, -51 }, { -10, -19 }, { 2, -9 }, { 2, -12 }, { -7, -22 } },
+        { { 0, -41 }, { 13, -54 }, { -3, -53 }, { -20, -18 }, { -11, -11 }, { -7, -13 }, { -7, -25 } },
+        { { 15, -39 }, { 13, -54 }, { 4, -53 }, { -20, -26 }, { -16, -16 }, { -12, -16 }, { -6, -26 } },
+        { { 22, -33 }, { 5, -47 }, { 9, -51 }, { -12, -39 }, { -13, -22 }, { -11, -21 }, { 2, -28 } },
+        { { 16, -26 }, { -6, -47 }, { 9, -48 }, { 10, -29 }, { 7, -35 }, { -10, -23 }, { 7, -22 } },
+    },
+    { // 26
+        { { -20, -63 }, { -18, -75 }, { -26, -52 }, { -14, -38 }, { -13, -49 }, { -20, -63 }, { -20, -63 } },
+        { { -19, -70 }, { -11, -81 }, { -27, -62 }, { -28, -27 }, { -8, -52 }, { -19, -70 }, { -19, -70 } },
+        { { -7, -75 }, { 2, -82 }, { -11, -69 }, { -8, -56 }, { 4, -54 }, { -7, -75 }, { -7, -75 } },
+        { { 13, -79 }, { 15, -79 }, { 11, -71 }, { 4, -46 }, { 12, -51 }, { 13, -79 }, { 13, -79 } },
+        { { 19, -70 }, { 17, -73 }, { 28, -66 }, { 14, -46 }, { 14, -47 }, { 19, -70 }, { 19, -70 } },
+    },
+};
+
+static int ProjectGripX(int x, bool mirror)
+{
+    return mirror ? -x - 1 : x;
+}
+
+static AnimationFrameInfo ReadGripFrame(
+    CAnimationManager &manager, uint16_t graphic, uint8_t group, uint8_t direction, uint8_t index)
+{
+    const auto saved = manager.Anim;
+    const auto *animation = manager.ExecuteAnimation({ graphic, group, direction }, g_Ticks);
+    manager.Anim = saved;
+    if (animation == nullptr || animation->FrameCount == 0)
+    {
+        return {};
+    }
+
+    const auto &frame = animation->Frames[index < animation->FrameCount ? index : 0];
+    const auto *sprite = static_cast<const CSprite *>(frame.UserData);
+    if (sprite == nullptr)
+    {
+        return {};
+    }
+
+    return { frame.CenterX, frame.CenterY, sprite->Width, sprite->Height };
+}
+
+static GripPoint FollowLeftHand(
+    CAnimationManager &manager, GripPoint grip, uint8_t group, uint8_t restGroup,
+    uint8_t direction, uint8_t frame)
+{
+    if (group == restGroup && frame == 0)
+    {
+        return grip;
+    }
+
+    // The wooden shield is a native left-arm layer. Its frame-to-frame movement
+    // carries the grip through walking, hit reactions, and the main hand's attack.
+    constexpr uint16_t leftArmReference = 0x0242;
+    const auto rest = ReadGripFrame(manager, leftArmReference, restGroup, direction, 0);
+    const auto current = ReadGripFrame(manager, leftArmReference, group, direction, frame);
+    if (rest.Width != 0 && current.Width != 0)
+    {
+        grip.x += current.Width / 2 - current.CenterX - (rest.Width / 2 - rest.CenterX);
+        grip.y += rest.Height / 2 + rest.CenterY - (current.Height / 2 + current.CenterY);
+    }
+    return grip;
+}
+
+static OffHandPose ResolveOffHandPose(
+    CAnimationManager &manager, CGameCharacter &character, CGameItem &item, uint16_t graphic,
+    bool bodyMirror, uint8_t bodyFrame)
+{
+    const auto bodyGroup = manager.Anim.Group;
+    const auto direction = manager.Anim.Direction;
+    const bool mounted = character.IsMounted();
+    const bool atWar = character.IsPlayer() ? g_Player->Warmode : character.InWarMode();
+    const auto restGroup = mounted ? PAG_ONMOUNT_STAND :
+        (atWar ? PAG_STAND_ONEHANDED_ATTACK : PAG_STAND);
+    const auto &standing = graphic == KatanaAnimation ? KatanaStandingGrip : StandingGrip;
+    const auto &projection = mounted ? MountedGrip[direction] :
+        (atWar ? GuardGrip[direction] : standing[direction]);
+    auto leftGrip = FollowLeftHand(manager, projection.leftGrip, bodyGroup, restGroup, direction, bodyFrame);
+
+    auto group = projection.sourceGroup;
+    auto artDirection = projection.sourceDirection;
+    auto sourceGrip = projection.sourceGrip;
+    auto frame = projection.sourceFrame;
+    bool reflectAtGrip = projection.reflectAtGrip;
+    constexpr GripPoint MountedRight[] = { { -11, -49 }, { -16, -55 }, { -10, -58 },
+                                           { -1, -77 }, { 12, -60 } };
+    if (mounted && !atWar)
+    {
+        artDirection = direction;
+        sourceGrip = MountedRight[direction];
+        reflectAtGrip = false;
+    }
+
+    uint8_t attackGroup = 0;
+    uint8_t attackFrame = 0;
+    if (character.GetOffHandSwing(&item, attackGroup, attackFrame))
+    {
+        int clip = -1;
+        switch (attackGroup)
+        {
+            case PAG_ATTACK_ONEHANDED:
+            case PAG_ATTACK_UNARMED_1:
+            case PAG_ATTACK_UNARMED_2:
+                clip = attackGroup - PAG_ATTACK_ONEHANDED;
+                break;
+            case PAG_ONMOUNT_ATTACK:
+                clip = 3;
+                break;
+            default:
+                break;
+        }
+
+        if (clip >= 0 && attackFrame < 7 && uo_animation_exists(graphic, attackGroup))
+        {
+            group = attackGroup;
+            artDirection = direction;
+            frame = attackFrame;
+            sourceGrip = SwingGrip[clip][direction][frame];
+            reflectAtGrip = direction == 0 || direction == 4;
+        }
+    }
+
+    if (!uo_animation_exists(graphic, group))
+    {
+        // Some alternate equipment art omits the guard clip. Keep its native
+        // facing in that case and move it by the hand separation for the pose.
+        group = restGroup;
+        artDirection = direction;
+        frame = 0;
+        constexpr GripPoint GuardRight[] = { { -12, -32 }, { -4, -35 }, { 7, -41 },
+                                             { 14, -34 }, { 14, -31 } };
+        sourceGrip = mounted ? MountedRight[direction] :
+            (atWar ? GuardRight[direction] : StandingGrip[direction].sourceGrip);
+        reflectAtGrip = atWar && direction == 0;
+    }
+
+    const bool mirror = bodyMirror != reflectAtGrip;
+    const bool behindBody = !mounted && direction == 4 && bodyGroup == PAG_STAND_ONEHANDED_ATTACK &&
+        group == PAG_STAND_ONEHANDED_ATTACK;
+    return { group, artDirection, frame, mirror,
+             ProjectGripX(leftGrip.x, bodyMirror) - ProjectGripX(sourceGrip.x, mirror),
+             leftGrip.y - sourceGrip.y, behindBody };
+}
+
+static void IncludeFrameBounds(FRAME_OUTPUT_INFO &info, int x, int y, int width, int height)
+{
+    info.StartX = std::min(info.StartX, x);
+    info.StartY = std::min(info.StartY, y);
+    info.EndX = std::max(info.EndX, x + width);
+    info.EndY = std::max(info.EndY, y + height);
+}
+} // namespace
+
 void CalculateFrameInformation(
     FRAME_OUTPUT_INFO &info, CGameObject *obj, bool mirror, uint8_t animIndex)
 {
@@ -106,25 +343,7 @@ void CalculateFrameInformation(
         x = -(dim.Width - dim.CenterX);
     }
 
-    if (x < info.StartX)
-    {
-        info.StartX = x;
-    }
-
-    if (y < info.StartY)
-    {
-        info.StartY = y;
-    }
-
-    if (info.EndX < x + dim.Width)
-    {
-        info.EndX = x + dim.Width;
-    }
-
-    if (info.EndY < y + dim.Height)
-    {
-        info.EndY = y + dim.Height;
-    }
+    IncludeFrameBounds(info, x, y, dim.Width, dim.Height);
 }
 CAnimationManager::CAnimationManager()
 {
@@ -1631,6 +1850,7 @@ CAnimationManager::CollectFrameInformation(CGameObject *gameObject, bool checkLa
             // graphic-driven equipment draw order (ItemDrawOrder.h)
             int layerOrder[USED_LAYER_COUNT > ItemDrawOrder::LAYER_SLOTS ? USED_LAYER_COUNT : ItemDrawOrder::LAYER_SLOTS];
             const int layerCount = ItemDrawOrder::ResolveWorldOrder(obj, rawDir, layerOrder);
+            auto *offHand = obj->GetOffHandWeapon();
             for (int l = 0; l < layerCount; l++)
             {
                 goi = obj->FindLayer(layerOrder[l]);
@@ -1643,7 +1863,23 @@ CAnimationManager::CollectFrameInformation(CGameObject *gameObject, bool checkLa
                 if (!IsCovered(goi->Layer, obj))
                 {
                     list.push_back(goi);
-                    CalculateFrameInformation(info, goi, mirror, animIndex);
+                    if (goi == offHand)
+                    {
+                        const auto *conv = uo_get_equipconv(obj->Graphic, goi->AnimID);
+                        const auto graphic = conv != nullptr ? conv->Graphic : goi->AnimID;
+                        const auto pose = ResolveOffHandPose(*this, *obj, *goi, graphic, mirror, animIndex);
+                        const auto dim = ReadGripFrame(*this, graphic, pose.group, pose.direction, pose.frame);
+                        if (dim.Width != 0)
+                        {
+                            const int fromCenter = pose.mirror ? dim.Width - dim.CenterX : dim.CenterX;
+                            IncludeFrameBounds(info, pose.x - fromCenter,
+                                pose.y - dim.Height - dim.CenterY - 3, dim.Width, dim.Height);
+                        }
+                    }
+                    else
+                    {
+                        CalculateFrameInformation(info, goi, mirror, animIndex);
+                    }
                 }
             }
         }
@@ -1710,41 +1946,45 @@ bool CAnimationManager::DrawEquippedLayers(
     int lightOffset)
 {
     SCOPED_GL_DEBUG_MARKER_LABEL("CAnimationManager::DrawEquippedLayers");
-    bool result = false;
-    const auto &list = obj->m_DrawLayeredObjects;
-    uint16_t bodyGraphic = obj->Graphic;
-    if (obj->IsCorpse())
-    {
-        bodyGraphic = obj->Count;
-    }
+    const auto body = Anim;
+    auto *character = obj->NPC ? obj->GameCharacterPtr() : nullptr;
+    auto *offHand = character != nullptr ? character->GetOffHandWeapon() : nullptr;
+    const uint16_t bodyGraphic = obj->IsCorpse() ? obj->Count : obj->Graphic;
 
-    if (selection)
+    for (auto *item : obj->m_DrawLayeredObjects)
     {
-        for (auto i = list.begin(); i != list.end() && !result; ++i)
+        uint16_t id = item->AnimID;
+        uint16_t convColor = 0;
+        if (const auto *conv = uo_get_equipconv(bodyGraphic, id))
         {
-            uint16_t id = (*i)->AnimID;
-            const auto *const conv = uo_get_equipconv(bodyGraphic, id);
-            if (conv != nullptr)
-            {
-                id = conv->Graphic;
-            }
-            result = TestPixels(*i, drawX, drawY, mirror, animIndex, id);
+            id = conv->Graphic;
+            convColor = conv->Color;
         }
-    }
-    else
-    {
-        for (auto i = list.begin(); i != list.end(); ++i)
+
+        Anim = body;
+        auto pose = item == offHand ? ResolveOffHandPose(*this, *character, *item, id, mirror, animIndex) :
+            OffHandPose{ body.Group, body.Direction, animIndex, mirror, 0, 0 };
+        Anim.Group = pose.group;
+        Anim.Direction = pose.direction;
+        if (selection)
         {
-            CGameItem *item = *i;
-            uint16_t id = item->AnimID;
-            uint16_t convColor = 0;
-            const auto *const conv = uo_get_equipconv(bodyGraphic, id);
-            if (conv != nullptr)
+            if (TestPixels(item, drawX + pose.x, drawY + pose.y, pose.mirror, pose.frame, id))
             {
-                id = conv->Graphic;
-                convColor = conv->Color;
+                Anim = body;
+                return true;
             }
-            Draw(item, drawX, drawY, mirror, animIndex, id, convColor);
+        }
+        else
+        {
+            const float depth = g_WorldObjectDepth;
+            if (pose.behindBody)
+            {
+                // Keep the far grip under the torso at the rear guard angle.
+                // The offset stays within this character's ground depth band.
+                g_WorldObjectDepth -= 0.005f;
+            }
+            Draw(item, drawX + pose.x, drawY + pose.y, pose.mirror, pose.frame, id, false, convColor);
+            g_WorldObjectDepth = depth;
             if (item->IsLightSource() && g_GameScreen.UseLight)
             {
                 g_GameScreen.AddLight(obj, item, drawX, drawY - lightOffset);
@@ -1752,7 +1992,8 @@ bool CAnimationManager::DrawEquippedLayers(
         }
     }
 
-    return result;
+    Anim = body;
+    return false;
 }
 
 bool CAnimationManager::IsCovered(int layer, CGameObject *owner)

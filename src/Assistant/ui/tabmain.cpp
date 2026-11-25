@@ -18,6 +18,7 @@
 #include "../core/world.h" // g_Player
 #include "../core/assist.h"
 #include "../core/global.h"
+#include "../core/targetassist.h"
 #include "Managers/PacketManager.h" // ::g_PacketManager (the light/weather/season apply-cores)
 #include "CrossUO.h" // ::g_Game (the client config accessors)
 
@@ -287,73 +288,126 @@ void draw_main_page()
 
     ImGui::Separator();
 
-    // Profiles: combo + Save
-    const vector<astr_t> &profiles = g_AssistantConfig.GetProfiles();
-    static int currentProfile = -1;
-    const astr_t currentName = g_AssistantConfig.ProfileName;
-    if (currentProfile < 0 || (currentProfile < (int)profiles.size() && profiles[currentProfile] != currentName))
-    {
-        currentProfile = -1;
-        for (int i = 0; i < (int)profiles.size(); i++)
-        {
-            if (profiles[i] == currentName)
-            {
-                currentProfile = i;
-                break;
-            }
-        }
-    }
-    static char newProfile[64] = { 0 };
-    ImGui::TextUnformatted("Profiles:");
+    const auto currentName = g_AssistantConfig.ProfileName;
+    static char profileName[64] = { 0 };
+    static astr_t profileStatus;
+    static astr_t archiveName;
+    static bool clone = false;
+
+    const auto profileChanged = [] {
+        AssistantUI_ClearOptionsDirty();
+        AssistantUI_RecompileDisplayTitle();
+    };
+    ImGui::TextUnformatted("Profiles");
     ImGui::SetNextItemWidth(160.0f);
     if (ImGui::BeginCombo("##profile", currentName.c_str()))
     {
-        for (int i = 0; i < (int)profiles.size(); i++)
+        for (const auto &name : g_AssistantConfig.GetProfiles())
         {
-            if (ImGui::Selectable(profiles[i].c_str(), i == currentProfile))
+            if (ImGui::Selectable(name.c_str(), name == currentName) && name != currentName)
             {
-                // persist pending edits under the OLD name before the switch:
-                // LoadProfile overwrites the config RAM, and the shutdown
-                // flush would then write the NEW profile's values over the
-                // discarded edits. There is no public dirty query, so this
-                // saves unconditionally (a no-op rewrite when nothing changed)
-                // and clears the flag so the shutdown flush cannot re-save the
-                // old edits onto the new profile.
-                g_AssistantConfig.SaveProfile();
-                AssistantUI_ClearOptionsDirty();
-                // load + remember
-                g_AssistantConfig.SetCurrentProfile(profiles[i]);
-                g_AssistantConfig.LoadProfile();
-                if (g_Connected && g_Player != nullptr)
+                if (g_AssistantConfig.SwitchProfile(name))
                 {
-                    g_AssistantConfig.SaveProfileMap();
+                    profileStatus.clear();
+                    profileChanged();
                 }
-                // recompile the display title
-                AssistantUI_RecompileDisplayTitle();
+                else
+                {
+                    profileStatus = "Could not switch profiles.";
+                }
+                break;
             }
         }
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    const float saveWidth =
-        ImGui::CalcTextSize("Save").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    ImGui::SetNextItemWidth(
-        ImGui::GetContentRegionAvail().x - saveWidth - ImGui::GetStyle().ItemSpacing.x);
-    ImGui::InputTextWithHint("##new_profile", "(new profile name)", newProfile, sizeof(newProfile));
-    ImGui::SameLine();
     if (ImGui::Button("Save"))
     {
-        // save under the (possibly new) name
-        if (newProfile[0] != '\0')
+        if (g_AssistantConfig.SaveProfile())
         {
-            g_AssistantConfig.SetCurrentProfile(newProfile);
-            newProfile[0] = '\0';
+            AssistantUI_ClearOptionsDirty();
+            profileStatus = "Profile saved.";
         }
-        g_AssistantConfig.SaveProfile();
-        g_AssistantConfig.ScanProfiles();
-        g_AssistantConfig.SaveProfileMap();
-        g_Assistant.ClientPrint("Configuration saved.");
-        AssistantUI_ClearOptionsDirty(); // everything was just written
+        else
+        {
+            profileStatus = "Could not save the profile.";
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("New"))
+    {
+        clone = false;
+        profileName[0] = '\0';
+        ImGui::OpenPopup("Create profile");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clone"))
+    {
+        clone = true;
+        profileName[0] = '\0';
+        ImGui::OpenPopup("Create profile");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Archive"))
+    {
+        archiveName = currentName;
+        ImGui::OpenPopup("Archive profile");
+    }
+
+    if (ImGui::BeginPopupModal("Create profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted(clone ? "Copy the current profile." : "Start with default settings.");
+        ImGui::InputText("Name", profileName, sizeof(profileName));
+        ImGui::TextUnformatted("Use letters, numbers, spaces, hyphens or underscores.");
+        if (ImGui::Button(clone ? "Clone profile" : "Create profile"))
+        {
+            if (g_AssistantConfig.CreateProfile(profileName, clone))
+            {
+                profileChanged();
+                profileStatus = clone ? "Profile cloned." : "Profile created.";
+            }
+            else
+            {
+                profileStatus = "Could not create the profile. Check the name and that it is unused.";
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopupModal("Archive profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("Move %s to Profile Archives?", archiveName.c_str());
+        ImGui::TextUnformatted("Characters using it will switch to another profile.");
+        if (ImGui::Button("Move to archive"))
+        {
+            astr_t savePath;
+            if (g_AssistantConfig.ProfileName == archiveName &&
+                g_AssistantConfig.ArchiveCurrentProfile(savePath))
+            {
+                profileStatus = "Archived in " + savePath;
+                profileChanged();
+            }
+            else
+            {
+                profileStatus = "Could not archive the profile.";
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (!profileStatus.empty())
+    {
+        ImGui::TextWrapped("%s", profileStatus.c_str());
     }
 
     ImGui::Separator();
@@ -361,10 +415,27 @@ void draw_main_page()
     // Assistant windows opacity: 30-100
     int opacity = g_AssistantConfig.WindowsOpacity();
     ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::SliderInt("Assistant windows opacity:", &opacity, 30, 100))
+    if (ImGui::SliderInt("Assistant windows opacity:", &opacity, 30, 100, "%d%%"))
     {
         g_AssistantConfig.m_WindowsOpacity = opacity;
         AssistantUI_MarkOptionsDirty();
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        g_AssistantConfig.SaveMainOptions();
+    }
+
+    // UI text & control scale: 85-150%
+    int uiScale = g_AssistantConfig.UiScale();
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::SliderInt("Assistant UI scale:", &uiScale, 85, 150, "%d%%"))
+    {
+        g_AssistantConfig.m_UiScale = uiScale;
+        AssistantUI_MarkOptionsDirty();
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        g_AssistantConfig.SaveMainOptions();
     }
 
     ImGui::Separator();
@@ -415,8 +486,13 @@ void draw_options_page()
 
 void TabMain_Draw()
 {
-    // left: the 23-option checklist
-    ImGui::BeginChild("##options_list", ImVec2(190.0f, 0.0f), ImGuiChildFlags_Borders);
+    // left: the 23-option checklist (scales with Assistant UI scale so labels don't clip)
+    float optionsWidth = ImGui::GetFontSize() * 15.5f;
+    if (optionsWidth < 210.0f)
+    {
+        optionsWidth = 210.0f;
+    }
+    ImGui::BeginChild("##options_list", ImVec2(optionsWidth, 0.0f), ImGuiChildFlags_Borders);
     ImGui::TextUnformatted("Options:");
     ImGui::Separator();
     for (int i = 0; i < int(sizeof(s_Options) / sizeof(s_Options[0])); i++)
@@ -446,6 +522,11 @@ void TabMain_Draw()
         if (ImGui::BeginTabItem("Options"))
         {
             draw_options_page();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Targeting"))
+        {
+            TargetAssist_DrawOptions();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

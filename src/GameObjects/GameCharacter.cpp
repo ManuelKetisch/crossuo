@@ -24,6 +24,9 @@
 #include "../GameObjects/GamePlayer.h"
 #include "../Utility/PerfMarker.h"
 #include "GameObjects/GameObject.h"
+#if defined(XUO_ASSISTANT)
+#include <core/gameplayfilters.h>
+#endif
 
 #define USE_NEW_ANIM_CODE 1
 
@@ -447,6 +450,46 @@ void CGameCharacter::OnGraphicChange(int direction)
             CPacketStatusRequest(Serial).Send();
         }
     }
+}
+
+CGameItem *CGameCharacter::GetOffHandWeapon() const
+{
+    auto *weapon = FindLayer(OL_2_HAND);
+    const auto *tile = weapon != nullptr ? weapon->GetStaticData() : nullptr;
+    if (tile == nullptr || tile->Layer != OL_1_HAND || !::IsWeapon(tile->Flags))
+    {
+        return nullptr;
+    }
+
+    const auto *primary = FindLayer(OL_1_HAND);
+    return primary != nullptr ? weapon : nullptr;
+}
+
+void CGameCharacter::StartOffHandSwing(CGameItem *weapon, uint8_t group, uint16_t frames)
+{
+    m_OffHandSwingWeapon = weapon->Serial;
+    m_OffHandSwingStart = g_Ticks;
+    m_OffHandSwingFrames = frames;
+    m_OffHandSwingGroup = group;
+}
+
+bool CGameCharacter::GetOffHandSwing(const CGameItem *weapon, uint8_t &group, uint8_t &frame) const
+{
+    if (weapon->Serial != m_OffHandSwingWeapon || g_AnimCharactersDelayValue <= 0)
+    {
+        return false;
+    }
+
+    // Server animations with a delay byte of zero advance at twice the base frame delay.
+    const auto index = static_cast<uint32_t>((g_Ticks - m_OffHandSwingStart) / (2 * g_AnimCharactersDelayValue));
+    if (index >= m_OffHandSwingFrames)
+    {
+        return false;
+    }
+
+    group = m_OffHandSwingGroup;
+    frame = static_cast<uint8_t>(index);
+    return true;
 }
 
 void CGameCharacter::SetAnimation(
@@ -1373,6 +1416,9 @@ uint16_t CGameCharacter::GetGraphicForAnimation()
         Warning(Client, "animation graphic out of range: 0x%04X", graphic);
         return 0;
     }
+#if defined(XUO_ASSISTANT)
+    graphic = xuoassist::GameplayFilters_AnimationBody(Serial, graphic);
+#endif
     return graphic;
 }
 

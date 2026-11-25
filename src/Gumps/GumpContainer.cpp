@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2016 Hotride
 
 #include "GumpContainer.h"
@@ -22,6 +22,10 @@
 #include "../Utility/PerfMarker.h"
 #include "../Renderer/RenderAPI.h"
 #include "../Renderer/RenderShader.h" // g_ColorizerShader and friends
+#if defined(XUO_ASSISTANT)
+#include <core/itemcounters.h>
+#include "GUI/GUIText.h"
+#endif
 #include <cstdint>
 
 const uint32_t CGumpContainer::ID_GC_LOCK_MOVING = 0xFFFFFFFE;
@@ -64,6 +68,12 @@ CGumpContainer::CGumpContainer(uint32_t serial, uint32_t id, short x, short y)
     m_DataBox = (CGUIDataBox *)Add(new CGUIDataBox());
 
     Add(new CGUIShader(&g_ColorizerShader, false));
+
+#if defined(XUO_ASSISTANT)
+    m_AssistantLabel = static_cast<CGUIText *>(Add(new CGUIText(0x0481, 8, 3)));
+    m_AssistantLabel->Visible = false;
+    m_AssistantLabel->DrawOnly = true;
+#endif
 }
 
 CGumpContainer::~CGumpContainer()
@@ -145,6 +155,27 @@ void CGumpContainer::InitToolTip()
 
 void CGumpContainer::PrepareContent()
 {
+#if defined(XUO_ASSISTANT)
+    const auto *container = g_World->FindWorldItem(Serial);
+    static const astr_t empty;
+    const auto &label = container != nullptr
+        ? xuoassist::ItemCounters_ContainerLabel(Serial, container->Graphic)
+        : empty;
+    if (m_AssistantLabelText != label)
+    {
+        m_AssistantLabelText = label;
+        m_AssistantLabel->Visible = !label.empty();
+        m_AssistantLabel->m_Texture.Clear();
+        if (!label.empty())
+        {
+            m_AssistantLabel->CreateTextureW(
+                1, wstr_from("[" + label + "]"), 30, 110, TS_LEFT,
+                UOFONT_BLACK_BORDER | UOFONT_CROPPED);
+        }
+        WantUpdateContent = true;
+        WantRedraw = true;
+    }
+#endif
     if (!g_Player->IsDead() &&
         GetTopObjDistance(g_Player, g_World->FindWorldObject(Serial)) <= DRAG_ITEMS_DISTANCE &&
         g_PressedObject.LeftGump == this && !g_ObjectInHand.Enabled &&
@@ -268,7 +299,7 @@ void CGumpContainer::UpdateContent()
     {
         int count = obj->Count;
 
-        if ((obj->Layer == OL_NONE || (container->IsCorpse() && LAYER_UNSAFE[obj->Layer])) &&
+        if ((obj->Layer == OL_NONE || (container->IsCorpse() && IsLayerUnsafe(obj->Layer))) &&
             count > 0)
         {
             bool doubleDraw = false;
@@ -511,13 +542,14 @@ bool CGumpContainer::OnLeftMouseButtonDoubleClick()
     {
         auto *item = g_World->FindWorldItem(g_PressedObject.LeftSerial);
         auto *container = g_World->FindWorldItem(Serial);
-        if (item && container && item->Container == Serial && !IsGameBoard && !item->IsContainer() &&
+        if (item && container && item->Container == Serial && !IsGameBoard && item->GetStaticData() != nullptr &&
+            !item->IsContainer() &&
             !item->IsCorpse() && !g_ObjectInHand.Enabled && !g_Target.IsTargeting() &&
             !g_Player->IsDead())
         {
             const auto modifiers = SDL_GetModState();
             const bool option = (modifiers & SDL_KMOD_ALT) != 0;
-            const bool loot = g_ConfigManager.DoubleClickLoot && container->IsCorpse();
+            const bool loot = g_Game.CanQuickLoot(item);
             const bool split = option && item->IsStackable() && item->Count > 1 &&
                 (loot || IsInBackpack(container));
             if (split)

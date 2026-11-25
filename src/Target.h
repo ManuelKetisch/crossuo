@@ -10,6 +10,7 @@
 #include <vector>
 #endif
 
+class CGameObject;
 class CMulti;
 class CMultiObject;
 struct CDataReader;
@@ -61,6 +62,7 @@ public:
 private:
     uint8_t m_Data[19];
     uint8_t m_LastData[19];
+    bool m_LastTargetWasSelected = false;
     CMulti *m_Multi{ nullptr };
 
 #if defined(XUO_ASSISTANT)
@@ -78,6 +80,8 @@ public:
     ~CTarget() = default;
 
     void SetLastTargetObject(int serial);
+    // Stores a selected world object without changing or answering any open cursor.
+    void RememberTargetObject(const CGameObject &object);
     // Parses a cursor reply (0x6C / 0x99). Returns false when the reply was
     // consumed (WaitTarget hook, assistant UI selection or a playing macro):
     // the client keeps no open cursor and skips its own processing.

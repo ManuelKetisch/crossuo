@@ -229,6 +229,7 @@ void MapSettings_Draw()
         ImGui::Checkbox("Show statics", s_Settings.ShowStaticsPtr());
         ImGui::Checkbox("Apply altitude", s_Settings.ApplyAltitudePtr());
         ImGui::Checkbox("Show last corpse", s_Settings.ShowLastCorpsePtr());
+        ImGui::Checkbox("Show server waypoints", s_Settings.ShowServerWaypointsPtr());
         ImGui::Checkbox("Mark dead mobiles", s_Settings.MarkDeadMobilesPtr());
         ImGui::Checkbox("Rotate map", s_Settings.RotateMapPtr());
         ImGui::Unindent();

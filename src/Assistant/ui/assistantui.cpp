@@ -14,6 +14,7 @@
 #include <common/logging/logging.h>
 
 #include "../../GameWindow.h" // g_GameWindow (the display caption)
+#include "../AssistantWindow.h" // AssistantWindow_Show
 
 #include "assistanteventsui.h"
 #include "widgets.h"
@@ -35,6 +36,18 @@
 #include "editors.h"
 #include "../script/scriptlist.h" // g_LoadedScripts (Autostart entry)
 #include "tabscripts.h"
+#include "tabtools.h"
+#include "tabinventory.h"
+#include "../core/damagemeter.h"
+#include "../core/bandageheal.h"
+#include "../core/potionhands.h"
+#include "Gumps/GumpToolbar.h"
+#include "tabrazorimport.h"
+#include "../core/inventoryagent.h"
+#include "../core/itemcounters.h"
+#include "../core/targetassist.h"
+#include "../core/packettrace.h"
+#include "../core/gameplayfilters.h"
 #include "mapwindow.h"
 #include "inspector.h"
 #include "textdialog.h"
@@ -53,13 +66,16 @@ namespace xuoassist {
 
 namespace {
 
-// the default: 650x400, non-resizable; ImGui keeps
-constexpr int SHELL_DEFAULT_WIDTH = 650;
-constexpr int SHELL_DEFAULT_HEIGHT = 400;
+// Comfortable default shell geometry so all 11 main tabs, sub-tabs, and the
+// optional journal pane stay readable without crowding.
+constexpr int SHELL_DEFAULT_WIDTH = 900;
+constexpr int SHELL_DEFAULT_HEIGHT = 640;
+constexpr float SHELL_MIN_WIDTH = 760.0f;
+constexpr float SHELL_MIN_HEIGHT = 480.0f;
 
 const char *const MAIN_TABS[] = {
     "Main", "Display", "Lists", "Hotkeys", "Macros",
-    "Scripts", "Agents", "Skills", "Filters", "About",
+    "Scripts", "Agents", "Skills", "Filters", "Tools", "About",
 };
 enum MAIN_TAB
 {
@@ -72,11 +88,12 @@ enum MAIN_TAB
     MT_AGENTS,
     MT_SKILLS,
     MT_FILTERS,
+    MT_TOOLS,
     MT_ABOUT
 };
 
 const char *const LIST_TABS[] = { "Types", "Objects", "Find", "Ignore", "Friends", "Enemies" };
-const char *const FILTER_TABS[] = { "Speech", "Replaces", "Sound" };
+const char *const FILTER_TABS[] = { "Speech", "Replaces", "Sound", "Gameplay" };
 // which module delivers the remaining tabs
 const char *const PLACEHOLDER_PHASE[] = {
     "",  // Main
@@ -88,6 +105,7 @@ const char *const PLACEHOLDER_PHASE[] = {
     "",  // Agents (nested: Dress/Party/Shop)
     "",  // Skills
     "",  // Filters
+    "",  // Tools
     "",  // About
 };
 
@@ -106,6 +124,12 @@ uint32_t s_LastStepTick = 0;
 
 // the Autostart script run (
 uint32_t s_AutostartAt = 0;
+
+// one-shot programmatic main tab selection (consumed on next AssistantUI_Draw)
+int s_PendingMainTab = -1;
+bool s_PendingBandageTab = false;
+// keep the shell in its own platform viewport when explicitly popped out
+bool s_ForcePopOut = false;
 
 // the display caption: compose the plain textual title and apply it to the
 // client window when it changed
@@ -205,6 +229,30 @@ void draw_agents_tabs()
     // the nested bar (Dress/Party/Shop), agent pages
     if (ImGui::BeginTabBar("##agents_tabs", ImGuiTabBarFlags_None))
     {
+        if (BeginSubTab("Inventory", "##agents_inventory"))
+        {
+            TabInventory_Draw();
+            EndSubTab();
+        }
+        const ImGuiTabItemFlags bandageFlags =
+            s_PendingBandageTab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        s_PendingBandageTab = false;
+        if (ImGui::BeginTabItem("Bandage Heal", nullptr, bandageFlags))
+        {
+            float height = ImGui::GetContentRegionAvail().y;
+            if (height < 1.0f)
+            {
+                height = 1.0f;
+            }
+            ImGui::BeginChild("##agents_bandages", ImVec2(0.0f, height), ImGuiChildFlags_None);
+            BandageHeal_Draw();
+            EndSubTab();
+        }
+        if (BeginSubTab("Potion Hands", "##agents_potion_hands"))
+        {
+            PotionHands_Draw();
+            EndSubTab();
+        }
         if (BeginSubTab("Dress", "##agents_dress"))
         {
             TabDress_Draw();
@@ -269,9 +317,14 @@ void AssistantUI_Init()
     // client cwd == binary dir) once, on the main thread
     ScriptFile_SetSandboxRoot(fs_path_str(g_AssistantConfig.GetRootPath()));
     s_Initialized = true;
+    if (g_Connected && g_AssistantConfig.Autostart() && s_AutostartAt == 0)
+    {
+        AssistantUI_QueueAutostart();
+    }
     // the profile list for the combo (was AssistForm::Init's scan); the
     // serial-mapped profile is selected + loaded at login (LoadProfileBySerial)
     g_AssistantConfig.ScanProfiles();
+    g_AssistantConfig.LoadShopList();
     // compile the display title data from the just-loaded profile (was
     // AssistForm::LoadCurrentProfile -> g_TabDisplay->RecompileData)
     // and paint the initial caption
@@ -285,6 +338,16 @@ void AssistantUI_RecompileDisplayTitle()
 {
     g_DisplayManager.RecompileData(g_AssistantConfig.DisplayTitleData());
     TabDisplay_RequestTitleRedraw();
+}
+
+void AssistantUI_OpenDisplayCounters()
+{
+    if (!AssistantWindow_Show(true))
+    {
+        return;
+    }
+    s_PendingMainTab = MT_DISPLAY;
+    TabDisplay_SelectCounters();
 }
 
 void AssistantUI_RequestClientClose()
@@ -312,6 +375,7 @@ void AssistantUI_Tick()
         // runs the loaded script named Autoload.js (the Scripts tab list's
         // autostart entry), else nothing: there is no shared editor buffer
         // anymore and silently running an arbitrary file would surprise
+        g_LoadedScripts.DrainPendingRestore();
         const vector<CLoadedScript> &scripts = g_LoadedScripts.Scripts();
         for (const CLoadedScript &script : scripts)
         {
@@ -328,23 +392,34 @@ void AssistantUI_Tick()
     ScriptQueue_Drain();
     ScriptManager_Get()->Tick();
     tick_reconnect();
-    // macro playback (frame-tick driven): a
-    g_MacroExecutor.Tick();
-    // corpse auto-open: the client manager holds
-    if (g_AssistantConfig.CorpsesAutoopen())
+    PotionHands_Tick();
+    if (!PotionHands_Busy())
     {
-        if (::g_CorpseManager.CheckCorpses(
-                g_AssistantConfig.OpenCorpsesDistance(),
-                g_AssistantConfig.UseItemsDelay(),
-                g_LastUseObjectTimer))
+        // macro playback (frame-tick driven): a
+        if (!InventoryAgent_MoveInFlight())
         {
-            g_LastUseObjectTimer = g_Ticks;
+            g_MacroExecutor.Tick();
         }
+        // corpse auto-open: the client manager holds
+        if (g_AssistantConfig.CorpsesAutoopen())
+        {
+            if (::g_CorpseManager.CheckCorpses(
+                    g_AssistantConfig.OpenCorpsesDistance(),
+                    g_AssistantConfig.UseItemsDelay(),
+                    g_LastUseObjectTimer))
+            {
+                g_LastUseObjectTimer = g_Ticks;
+            }
+        }
+        // the dress sequence state machine
+        g_DressAgent.Tick();
+        // the shop engine progress countdown
+        g_ShopAgent.Tick();
+        BandageHeal_Tick();
+        InventoryAgent_Tick();
     }
-    // the dress sequence state machine
-    g_DressAgent.Tick();
-    // the shop engine progress countdown
-    g_ShopAgent.Tick();
+    TabTools_Tick();
+    CGumpToolbar::Tick();
     // the display caption painter
     tick_display_title();
 }
@@ -353,6 +428,20 @@ void AssistantUI_Shutdown()
 {
     // disarm a pending Autostart run
     s_AutostartAt = 0;
+    s_PendingMainTab = -1;
+    s_PendingBandageTab = false;
+    s_ForcePopOut = false;
+    TabTools_ResetSession();
+    TabRazorImport_Reset();
+    InventoryAgent_ResetSession();
+    ItemCounters_ResetSession();
+    DamageMeter_Reset();
+    BandageHeal_ResetSession();
+    PotionHands_ResetSession();
+    CGumpToolbar::ResetSession();
+    TargetAssist_ResetSession();
+    GameplayFilters_ResetSession();
+    PacketTrace_Stop();
     // the queue closes FIRST: its shutdown completes (and wakes) every queued
     // command waiter, so scripts blocked in a pending call fall through
     // immediately instead of outliving the join timeout and being detached
@@ -467,6 +556,7 @@ void CancelPendingFromTargets()
     TabLists_CancelPendingFromTargets();
     TabDress_CancelPendingFromTargets();
     TabParty_CancelPendingFromTargets();
+    TabInventory_CancelPendingTarget();
 }
 
 void AssistantUI_MarkOptionsDirty()
@@ -499,6 +589,19 @@ void AssistantUI_Draw(bool *open, uint32_t sessionStartTicks)
 
     ImGui::SetNextWindowSize(
         ImVec2((float)SHELL_DEFAULT_WIDTH, (float)SHELL_DEFAULT_HEIGHT), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(SHELL_MIN_WIDTH, SHELL_MIN_HEIGHT), ImVec2(FLT_MAX, FLT_MAX));
+    if (s_ForcePopOut)
+    {
+        ImGuiWindowClass popoutClass;
+        popoutClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+        ImGui::SetNextWindowClass(&popoutClass);
+    }
+    if (s_PendingMainTab >= 0)
+    {
+        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
+        ImGui::SetNextWindowFocus();
+    }
 
     // assistant windows opacity: clamped to the
     const float opacity = g_AssistantConfig.WindowsOpacity() / 100.0f;
@@ -519,26 +622,81 @@ void AssistantUI_Draw(bool *open, uint32_t sessionStartTicks)
     {
         if (ImGui::Button("Dock in game window"))
         {
+            s_ForcePopOut = false;
+            const ImVec2 maxDockSize(
+                mainViewport->WorkSize.x > 64.0f ? mainViewport->WorkSize.x - 64.0f : mainViewport->WorkSize.x,
+                mainViewport->WorkSize.y > 64.0f ? mainViewport->WorkSize.y - 64.0f : mainViewport->WorkSize.y);
+            const ImVec2 currSize = ImGui::GetWindowSize();
+            if (currSize.x > maxDockSize.x || currSize.y > maxDockSize.y)
+            {
+                ImGui::SetWindowSize(ImVec2(
+                    currSize.x < maxDockSize.x ? currSize.x : maxDockSize.x,
+                    currSize.y < maxDockSize.y ? currSize.y : maxDockSize.y));
+            }
             ImGui::SetWindowPos(ImVec2(
-                mainViewport->Pos.x + 32.0f,
-                mainViewport->Pos.y + 32.0f));
+                mainViewport->WorkPos.x + 32.0f,
+                mainViewport->WorkPos.y + 32.0f));
         }
     }
     else
     {
-        // placing the window outside the main viewport work area makes ImGui
-        // spawn a real OS window for it on the next frame
+        // Request a dedicated platform viewport via NoAutoMerge, and only move
+        // the window to another monitor or adjacent visible desktop space so it
+        // never gets flung off-screen on single-monitor setups.
         if (ImGui::Button("Pop out"))
         {
-            ImGui::SetWindowPos(ImVec2(
-                mainViewport->Pos.x + mainViewport->WorkSize.x + 48.0f,
-                mainViewport->Pos.y + 48.0f));
+            s_ForcePopOut = true;
+            const ImVec2 winSize = ImGui::GetWindowSize();
+            const ImVector<ImGuiPlatformMonitor> &monitors = ImGui::GetPlatformIO().Monitors;
+            const ImGuiPlatformMonitor *mainMonitor = nullptr;
+            const ImGuiPlatformMonitor *otherMonitor = nullptr;
+            for (int m = 0; m < monitors.Size; ++m)
+            {
+                const ImGuiPlatformMonitor &mon = monitors[m];
+                const bool containsMain =
+                    mainViewport->Pos.x >= mon.MainPos.x && mainViewport->Pos.y >= mon.MainPos.y &&
+                    mainViewport->Pos.x < mon.MainPos.x + mon.MainSize.x &&
+                    mainViewport->Pos.y < mon.MainPos.y + mon.MainSize.y;
+                if (containsMain)
+                {
+                    mainMonitor = &mon;
+                }
+                else if (otherMonitor == nullptr && mon.WorkSize.x >= 200.0f && mon.WorkSize.y >= 200.0f)
+                {
+                    otherMonitor = &mon;
+                }
+            }
+            if (otherMonitor != nullptr)
+            {
+                ImGui::SetWindowPos(ImVec2(otherMonitor->WorkPos.x + 48.0f, otherMonitor->WorkPos.y + 48.0f));
+            }
+            else if (mainMonitor != nullptr)
+            {
+                const float rightX = mainViewport->Pos.x + mainViewport->Size.x + 24.0f;
+                const float leftX = mainViewport->Pos.x - winSize.x - 24.0f;
+                if (rightX + winSize.x <= mainMonitor->WorkPos.x + mainMonitor->WorkSize.x)
+                {
+                    ImGui::SetWindowPos(ImVec2(rightX, mainViewport->Pos.y + 48.0f));
+                }
+                else if (leftX >= mainMonitor->WorkPos.x)
+                {
+                    ImGui::SetWindowPos(ImVec2(leftX, mainViewport->Pos.y + 48.0f));
+                }
+            }
         }
     }
 
     // the title carries "X:UO Assist v<version> <playerName>"
     ImGui::SameLine();
-    ImGui::TextDisabled("v" PRODUCT_VERSION_STR "%s", astr_t(g_SelectedCharName).c_str());
+    const astr_t charName(g_SelectedCharName);
+    if (!charName.empty())
+    {
+        ImGui::TextDisabled("v" PRODUCT_VERSION_STR " %s", charName.c_str());
+    }
+    else
+    {
+        ImGui::TextDisabled("v" PRODUCT_VERSION_STR);
+    }
     ImGui::SameLine();
     static bool journalOpen = true;
     ImGui::Checkbox("Journal", &journalOpen);
@@ -547,27 +705,63 @@ void AssistantUI_Draw(bool *open, uint32_t sessionStartTicks)
     {
         AssetViewer_Toggle();
     }
+    ImGui::SameLine();
+    const bool autoHealOn = BandageHeal_Running();
+    if (autoHealOn)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.50f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.60f, 0.32f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.42f, 0.20f, 1.0f));
+    }
+    if (ImGui::Button(autoHealOn ? "Auto-Heal: ON" : "Auto-Heal: OFF"))
+    {
+        if (autoHealOn)
+        {
+            BandageHeal_Stop();
+        }
+        else if (!BandageHeal_Start())
+        {
+            s_PendingMainTab = MT_AGENTS;
+            s_PendingBandageTab = true;
+        }
+    }
+    if (autoHealOn)
+    {
+        ImGui::PopStyleColor(3);
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+    {
+        s_PendingMainTab = MT_AGENTS;
+        s_PendingBandageTab = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Bandage Auto-Heal: %s\nLeft-click to toggle. Right-click to configure.",
+            BandageHeal_Status());
+    }
     ImGui::Separator();
 
     // content: tabs on the left/top, journal pane below, status bar pinned last.
     // The tab bar stays fixed; only each tab's content scrolls (its child).
     const float footerHeight = ImGui::GetFrameHeightWithSpacing();
     float tabsHeight = ImGui::GetContentRegionAvail().y - footerHeight;
-    const float journalHeight = 150.0f;
-    if (journalOpen && tabsHeight > journalHeight + footerHeight)
+    const float maxJournalHeight = tabsHeight * 0.30f;
+    const float journalHeight = maxJournalHeight < 140.0f ? maxJournalHeight : 140.0f;
+    const bool showJournal = journalOpen && journalHeight >= 72.0f && tabsHeight > journalHeight + footerHeight * 4.0f;
+    if (showJournal)
     {
         tabsHeight -= journalHeight;
     }
-    else
-    {
-        journalOpen = false;
-    }
 
+    const int pendingMainTab = s_PendingMainTab;
+    s_PendingMainTab = -1;
     if (ImGui::BeginTabBar("##main_tabs", ImGuiTabBarFlags_None))
     {
         for (int i = 0; i < int(sizeof(MAIN_TABS) / sizeof(MAIN_TABS[0])); i++)
         {
-            if (!ImGui::BeginTabItem(MAIN_TABS[i]))
+            const ImGuiTabItemFlags tabFlags =
+                pendingMainTab == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+            if (!ImGui::BeginTabItem(MAIN_TABS[i], nullptr, tabFlags))
             {
                 continue;
             }
@@ -597,7 +791,20 @@ void AssistantUI_Draw(bool *open, uint32_t sessionStartTicks)
                     TabMacros_Draw();
                     break;
                 case MT_SCRIPTS:
-                    TabScripts_Draw();
+                    if (ImGui::BeginTabBar("##script_tools"))
+                    {
+                        if (ImGui::BeginTabItem("Scripts"))
+                        {
+                            TabScripts_Draw();
+                            ImGui::EndTabItem();
+                        }
+                        if (ImGui::BeginTabItem("Razor Import"))
+                        {
+                            TabRazorImport_Draw();
+                            ImGui::EndTabItem();
+                        }
+                        ImGui::EndTabBar();
+                    }
                     break;
                 case MT_FILTERS:
                     draw_filters_tabs();
@@ -607,6 +814,9 @@ void AssistantUI_Draw(bool *open, uint32_t sessionStartTicks)
                     break;
                 case MT_SKILLS:
                     TabSkills_Draw();
+                    break;
+                case MT_TOOLS:
+                    TabTools_Draw();
                     break;
                 case MT_ABOUT:
                     TabAbout_Draw();
@@ -621,7 +831,7 @@ void AssistantUI_Draw(bool *open, uint32_t sessionStartTicks)
         ImGui::EndTabBar();
     }
 
-    if (journalOpen)
+    if (showJournal)
     {
         JournalPane_Draw(journalHeight);
     }

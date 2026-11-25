@@ -358,7 +358,9 @@ enum GUMP_TYPE
     GT_PROPERTY_ICON,
     GT_RESOURCETRACKER,
     GT_RACE_CHANGE,
-    GT_CHAT_CHOOSE_NAME
+    GT_CHAT_CHOOSE_NAME,
+    GT_FPS_COUNTER,
+    GT_ASSISTANT_TOOLBAR
 };
 
 // Chat conference: client -> server commands (0xB3 body)
@@ -751,7 +753,14 @@ enum OBJECT_LAYERS
     OL_BUY_RESTOCK, //26
     OL_BUY,         //27
     OL_SELL,        //28
-    OL_BANK         //29
+    OL_BANK,        //29
+    OL_RING_2,      //30 (0x1E)
+    OL_RING_3,      //31 (0x1F)
+    OL_RING_4,      //32 (0x20)
+    OL_RING_5,      //33 (0x21)
+    OL_RING_6,      //34 (0x22)
+    OL_EARRINGS_2,  //35 (0x23)
+    OL_EXTENDED_COUNT //36
 };
 
 enum SPEECH_TYPE

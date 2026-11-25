@@ -161,12 +161,18 @@ const int WEATHER_TIMER = (6 * 60 * 1000);
 
 const int WAIT_FOR_TARGET_DELAY = 5000;
 
-static const bool LAYER_UNSAFE[30] = { false, //0
+static const bool LAYER_UNSAFE[36] = { false, //0
                                        true,  true, true,  true,  true,  true,  true,  true,
                                        true,  true, false, false, true,  true,  false, false,
                                        true,  true, true,  true,
                                        false, //0x15
-                                       true,  true, true,  false, false, false, false, false };
+                                       true,  true, true,  false, false, false, false, false,
+                                       true,  true, true,  true,  true,  true };
+
+inline bool IsLayerUnsafe(int layer)
+{
+    return layer >= 0 && layer < 36 && LAYER_UNSAFE[layer];
+}
 
 struct TREE_UNIONS
 {

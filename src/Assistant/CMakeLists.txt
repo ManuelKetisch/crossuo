@@ -30,6 +30,19 @@ set(XUOASSIST_SRCS
   "ui/tabshop.cpp"
   "ui/tabskills.cpp"
   "ui/tabdisplay.cpp"
+  "ui/tabtools.cpp"
+  "core/itemcounters.cpp"
+  "core/damagemeter.cpp"
+  "core/bandageheal.cpp"
+  "core/potionhands.cpp"
+  "core/targetassist.cpp"
+  "core/packettrace.cpp"
+  "core/gameplayfilters.cpp"
+  "core/inventoryagent.cpp"
+  "ui/tabinventory.cpp"
+  "compat/razorimport.cpp"
+  "compat/razorenhancedimport.cpp"
+  "ui/tabrazorimport.cpp"
   "script/commandqueue.cpp"
   "script/journal.cpp"
   "script/engine.cpp"
@@ -38,6 +51,7 @@ set(XUOASSIST_SRCS
   "script/scriptlist.cpp"
   "script/scriptgump.cpp"
   "script/scriptstate.cpp"
+  "script/externalruntime.cpp"
   "script/scripthandle.cpp"
   "ui/scriptmenu.cpp"
   "ui/editor.cpp"
@@ -170,6 +184,7 @@ if(XUO_ASSISTANT_SCRIPT_TESTS)
     # the engine + handle lifecycle (the run/terminate suite drives the real
     # CScriptHandle flow: thread, QuickJS runtime, interrupt-based terminate)
     script/engine.cpp
+    script/externalruntime.cpp
     script/scripthandle.cpp
   )
   target_compile_definitions(xuoassist-script-test PRIVATE XUO_ASSISTANT=1 XUO_ASSISTANT_HARNESS=1)

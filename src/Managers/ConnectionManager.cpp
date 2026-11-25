@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2016 Hotride
 
 #include "ConnectionManager.h"
@@ -8,10 +8,20 @@
 #include <xuocore/mappedfile.h>
 #include "../Config.h"
 #include "../CrossUO.h"
+#include "../UseItemsList.h"
 #include "../ScreenStages/ConnectionScreen.h"
 #include "../ScreenStages/GameBlockedScreen.h"
 #include "../Crypt/CryptEntry.h"
 #include "Sockets.h"
+#if defined(XUO_ASSISTANT)
+#include <core/packettrace.h>
+#include <core/itemcounters.h>
+#include <core/bandageheal.h>
+#include <core/potionhands.h>
+#include <core/inventoryagent.h>
+#include <core/shopagent.h>
+#include <managers/trademanager.h>
+#endif
 
 CConnectionManager g_ConnectionManager;
 
@@ -324,11 +334,34 @@ int CConnectionManager::Send(uint8_t *buf, int size)
         return 0;
     }
 
+#if defined(XUO_ASSISTANT)
+    xuoassist::PacketTrace_Record(true, buf, static_cast<size_t>(size));
+#endif
     std::vector<uint8_t> cbuf(size);
     Crypt::Encrypt(false, &buf[0], &cbuf[0], size);
-    return m_GameSocket.Send(cbuf);
-
-    return 0;
+    const int sent = m_GameSocket.Send(cbuf);
+    if (sent == size && size > 0 && buf[0] == 0x06)
+    {
+        g_UseItemActions.NoteActionSent();
+    }
+#if defined(XUO_ASSISTANT)
+    if (sent == size)
+    {
+        if (size > 0 && (buf[0] == 0x06 || buf[0] == 0x07))
+        {
+            xuoassist::InventoryAgent_OnItemActionSent();
+        }
+        if (size > 0 && (buf[0] == 0x07 || buf[0] == 0x08 || buf[0] == 0x13))
+        {
+            xuoassist::g_ShopAgent.OnItemMoveSent();
+        }
+        xuoassist::ItemCounters_OnGameSend(buf, static_cast<size_t>(size));
+        xuoassist::BandageHeal_OnGameSend(buf, static_cast<size_t>(size));
+        xuoassist::PotionHands_OnGameSend(buf, static_cast<size_t>(size));
+        xuoassist::g_TradeManager.ObserveGameSend(buf, size);
+    }
+#endif
+    return sent;
 }
 
 int CConnectionManager::Send(const std::vector<uint8_t> &data)

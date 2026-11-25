@@ -103,7 +103,7 @@ void TabMacros_Draw()
         g_MacroExecutor.IsPlaying() && g_MacroExecutor.PlayingIndex() == s_SelectedMacro;
 
     // the macro list pane left, the actions pane right
-    ImGui::BeginChild("##macros_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##macros_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     ImGui::TextUnformatted("Macro list:");
     const bool listChanged = NameList(
         "##macro_list", macros, &s_SelectedMacro, &MacroNameOf, &MacroSetNameOf, false, 150.0f);

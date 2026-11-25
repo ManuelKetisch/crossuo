@@ -48,6 +48,10 @@ public:
 protected:
     void CorrectAnimationGroup(uint16_t graphic, ANIMATION_GROUPS group, uint8_t &animation);
     bool m_Dead = false;
+    uint32_t m_OffHandSwingWeapon = 0;
+    uint32_t m_OffHandSwingStart = 0;
+    uint16_t m_OffHandSwingFrames = 0;
+    uint8_t m_OffHandSwingGroup = AG_INVALID;
 
 public:
     CGameCharacter(int serial);
@@ -74,6 +78,11 @@ public:
         bool repeat = false,
         bool frameDirection = false,
         bool pingPong = false);
+
+    static constexpr uint16_t OffHandSwingRepeatMode = 0x4001;
+    CGameItem *GetOffHandWeapon() const;
+    void StartOffHandSwing(CGameItem *weapon, uint8_t group, uint16_t frames);
+    bool GetOffHandSwing(const CGameItem *weapon, uint8_t &group, uint8_t &frame) const;
 
     uint16_t GetGraphicForAnimation() override;
     uint8_t GetGroupForAnimation(uint16_t graphic, bool isParent);

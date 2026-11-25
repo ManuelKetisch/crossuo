@@ -19,7 +19,19 @@ CGumpSpell::CGumpSpell(uint32_t serial, SPELLBOOK_TYPE type, uint16_t graphic, s
     , SpellType(type)
 {
     Graphic = graphic;
-    BaseSpell = GetSpellByGraphicAndType(Graphic, SpellType);
+    BaseSpell = FindSpellByGraphicAndType(Graphic, SpellType);
+    if (BaseSpell == nullptr && serial > 0u && serial <= 0xFFFFu)
+    {
+        BaseSpell = GetSpellById(static_cast<uint16_t>(serial));
+    }
+    if (BaseSpell != nullptr)
+    {
+        // Normalize legacy book-local serials (0x100 + spellIndex) to the
+        // globally unique spell ID so cross-book icons never collide.
+        Serial = BaseSpell->Id;
+        SpellType = BaseSpell->Type;
+        Graphic = BaseSpell->SpellIconGraphic;
+    }
     Active = IsSpellActive(SpellID());
     m_Locker.Serial = ID_GS_LOCK_MOVING;
     m_Blender = (CGUIAlphaBlending *)Add(new CGUIAlphaBlending(
@@ -72,7 +84,7 @@ void CGumpSpell::InitToolTip()
     {
         g_ToolTip.Set(L"Remove spell from group", 80);
     }
-    else
+    else if (BaseSpell != nullptr)
     {
         g_ToolTip.Set(g_ClilocManager.Cliloc(g_Language)->GetW(BaseSpell->NameCliloc, true), 80);
     }
@@ -390,6 +402,7 @@ void CGumpSpell::GUMP_BUTTON_EVENT_C
     if (serial == ID_GS_LOCK_MOVING)
     {
         LockMoving = !LockMoving;
+        g_Game.RequestDesktopSave();
     }
     else if (serial == ID_GS_BUTTON_REMOVE_FROM_GROUP)
     {
@@ -405,11 +418,16 @@ void CGumpSpell::GUMP_BUTTON_EVENT_C
             oldGroup->UpdateGroup(0, 0);
             oldGroup->WantRedraw = true;
         }
+        g_Game.RequestDesktopSave();
     }
 }
 
 bool CGumpSpell::OnLeftMouseButtonDoubleClick()
 {
+    if (BaseSpell == nullptr)
+    {
+        return false;
+    }
     g_Game.CastSpell(BaseSpell->Id);
     return true;
 }

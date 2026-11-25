@@ -43,6 +43,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <memory>
 #include <mutex>
 
 namespace xuoassist {
@@ -137,6 +138,24 @@ enum XA_SCRIPT_COMMAND_TAG
     SC_FRIEND_CMD,        // Add/Remove/Clear Friend/Enemy (SubTag = op)
     SC_HOTKEYS,           // SaveHotkeys/LoadHotkeys/OnOffHotkeys (SubTag = op)
 
+    SC_INVENTORY_AGENT,   // RunInventoryAgent(modeOrName, index)
+
+    SC_NATIVE_AGENT,       // damage meter, Bandage Heal, and Classic Razor hotkeys
+
+    // Razor Enhanced-compatible shared game script API
+    SC_RE_PLAYER_INFO,     // Position / Backpack / GetLayerItem / WarMode
+    SC_RE_ITEM_QUERY,      // FindBySerial / FindByID / BackpackCount / Props / WaitForContents
+    SC_RE_ITEM_ACTION,     // UseItem / UseItemByID / Move / MoveOnGround
+    SC_RE_MOBILE_QUERY,    // FindBySerial / ApplyFilter / UseMobile / WaitForStats
+    SC_RE_TARGET,          // TargetExecute / Self / Last / Cancel / SetLast / PromptTarget
+    SC_RE_JOURNAL,         // Search / SearchByName / Clear / GetTextBy*
+    SC_RE_GUMP,            // HasGump / CurrentGump / SendAction / LastGumpGetLineList / CloseGump
+    SC_RE_TIMER,           // Countdown Timer.Create / Check / Remaining / Remove / Clear
+    SC_RE_SHARED,          // Misc.*SharedValue
+    SC_RE_IGNORE,          // Misc.*IgnoreObject / ClearIgnore
+    SC_RE_AGENT,           // AutoLoot / BandageHeal / Organizer / Restock / Scavenger facades
+    SC_RE_WALK,            // Walk / Run / PathFindTo / CheckPosition / Stop
+
     SC_TAG_COUNT
 };
 
@@ -158,6 +177,8 @@ struct XA_SCRIPT_COMMAND
     // Pointer results ride here, never in SerialA: a 32-bit slot truncates
     // 64-bit heap pointers.
     void *PointerA{ nullptr };
+    // Ownership-safe heap snapshot result (automatically reclaimed on timeout/drop).
+    std::shared_ptr<void> SharedResult;
     astr_t TextA;
     astr_t TextB;
     astr_t TextC;
@@ -195,6 +216,11 @@ void ScriptCommand_Execute(XA_SCRIPT_COMMAND *command);
 // Returns false when the wait was aborted by the cancel check (results are
 // marked dropped).
 bool ScriptQueue_Exec(XA_SCRIPT_COMMAND *command, uint32_t timeoutMs = 2000);
+
+// Cleanup-only variant used on script abort (e.g. canceling an assistant
+// prompt cursor or stopping auto-walk): bypasses the per-thread cancel hook
+// so cleanup still reaches the main thread unless the queue is shut down.
+bool ScriptQueue_ExecCleanup(XA_SCRIPT_COMMAND *command, uint32_t timeoutMs = 200);
 
 // The per-thread forced-stop hook (nullptr = never cancels), installed by the
 // script worker around its run:

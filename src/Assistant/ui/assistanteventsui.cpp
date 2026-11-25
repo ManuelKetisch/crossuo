@@ -8,6 +8,7 @@
 #include <external/gfx/imgui/imgui.h>
 
 #include "assistanteventsui.h"
+#include "../core/itemcounters.h"
 #include "assistantui.h" // TabDisplay_RequestTitleRedraw / AssistantUI_RequestClientClose
 #include "widgets.h"
 #include "../config/assistantconfig.h" // g_AssistantConfig (Autostart gate)
@@ -32,12 +33,17 @@ CAssistantUIEvents *AssistantUIEvents_Get()
 
 void CAssistantUIEvents::OnBuffAdd(uint16_t graphic, uint32_t timer, const astr_t &name)
 {
-    // the script-visible buff mirror;
+    const bool newBuff = ScriptBuffs_GetName(graphic).empty();
     ScriptBuffs_Add(graphic, timer, name);
+    if (newBuff)
+    {
+        ItemCounters_OnBuffChange(name, true);
+    }
 }
 
 void CAssistantUIEvents::OnBuffRemove(uint16_t graphic)
 {
+    ItemCounters_OnBuffChange(ScriptBuffs_GetName(graphic), false);
     ScriptBuffs_Remove(graphic);
 }
 
@@ -46,6 +52,7 @@ void CAssistantUIEvents::OnJournalMessage(const CJournalMessage &message)
     // the script-visible mirror (script/journal.cpp) shares the same ring
     // ring semantics
     ScriptJournal_Add(message);
+    ItemCounters_OnJournalMessage(message);
     // copy the payload, cap the ring
     Line line;
     line.Text = message.Text;
@@ -225,9 +232,17 @@ void JournalPane_Draw(float height)
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
             {
                 const CAssistantUIEvents::Line &line = lines[i];
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(UOColorToRGBA(line.Color)));
-                ImGui::TextUnformatted(line.Text.c_str());
-                ImGui::PopStyleColor();
+                if (line.Color != 0u)
+                {
+                    ImGui::PushStyleColor(
+                        ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(UOColorToReadableTextRGBA(line.Color)));
+                    ImGui::TextUnformatted(line.Text.c_str());
+                    ImGui::PopStyleColor();
+                }
+                else
+                {
+                    ImGui::TextUnformatted(line.Text.c_str());
+                }
             }
         }
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f)

@@ -56,6 +56,9 @@ void AssistantUI_ClearOptionsDirty();
 // called at init and after a profile switch.
 void AssistantUI_RecompileDisplayTitle();
 
+// Opens the assistant window and selects Display -> Counters on the next draw.
+void AssistantUI_OpenDisplayCounters();
+
 // The post-shutdown half of the texture lifecycle (runs from
 // AssistantWindow.cpp right AFTER ui_shutdown/DestroyContext): frees the CPU
 // pixels of the UI-owned textures (icon atlas, map radar, About logo) whose
@@ -100,7 +103,8 @@ enum TAB_FILTERS
 {
     TAB_FILTERS_SPEECH = 0,
     TAB_FILTERS_REPLACES,
-    TAB_FILTERS_SOUND
+    TAB_FILTERS_SOUND,
+    TAB_FILTERS_GAMEPLAY
 };
 void TabFilters_Draw(int subTab);
 
@@ -122,6 +126,8 @@ void TabShop_DrawProgress();
 void TabDisplay_RequestTitleRedraw();
 // Returns and clears the title-redraw flag (AssistantUI_Tick).
 bool TabDisplay_ConsumeTitleDirty();
+// Selects the Counters sub-tab inside TabDisplay on its next draw.
+void TabDisplay_SelectCounters();
 
 // Per-tab from-target disarms (CancelPendingFromTargets,
 // shutdown: a request armed before shutdown must not swallow a 0x6C after

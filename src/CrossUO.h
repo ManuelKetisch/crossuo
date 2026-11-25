@@ -77,6 +77,7 @@ public:
     void LoadStartupConfig(int serial);
     void LoadLocalConfig(int serial, const astr_t& characterName);
     void SaveLocalConfig(int serial);
+    void RequestDesktopSave();
 
     bool InTileFilter(uint16_t graphic);
 
@@ -169,9 +170,10 @@ public:
     void AddJournalMessage(CTextData *msg, const astr_t &name);
     void ChangeMap(uint8_t newmap);
     void PickupItem(class CGameItem *obj, int count = 0, bool isGameFigure = false);
+    bool CanQuickLoot(class CGameItem *item) const;
     void LootItem(class CGameItem *item, int count);
     void DropItem(int container, uint16_t x, uint16_t y, char z);
-    void EquipItem(uint32_t container = 0);
+    void EquipItem(uint32_t container = 0, uint8_t layerOverride = 0);
     void ChangeWarmode(uint8_t status = 0xFF);
     void Click(uint32_t serial);
     void DoubleClick(uint32_t serial);

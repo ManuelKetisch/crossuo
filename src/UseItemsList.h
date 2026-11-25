@@ -1,14 +1,15 @@
-﻿// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2017 Hotride
 
 #pragma once
 
+#include <cstdint>
+#include "UseItemsList_rules.h"
+
 class CUseItemActions
 {
-    uint32_t Timer = 0;
-
 private:
-    std::deque<uint32_t> m_List;
+    xuo_container_restore::UseItemQueue m_Queue;
 
 public:
     CUseItemActions() = default;
@@ -16,7 +17,11 @@ public:
 
     void Add(int serial);
 
-    void Clear() { m_List.clear(); }
+    void Clear() { m_Queue.Clear(); }
+
+    bool Empty() const { return m_Queue.Empty(); }
+
+    void NoteActionSent();
 
     void Process();
 };

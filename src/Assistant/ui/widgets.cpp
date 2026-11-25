@@ -26,6 +26,8 @@
 #include "GameObjects/GameWorld.h" // client g_World (status bar census)
 
 #include "../core/hotkeys.h" // hotkey engine state
+#include "../AssistantWindow_rules.h" // AssistantOverlay_ReadableTextOnDark
+#include <xuocore/uodata_color.h> // uo_hue_index, uo_hue_get_color_poly
 
 #include <ctype.h>
 #include <stdio.h>
@@ -293,11 +295,23 @@ void IconImage(XA_ICON icon, const ImVec2 &topLeft, const ImVec2 &size)
 
 ImU32 UOColorToRGBA(uint16_t color)
 {
-    // 15-bit (5-5-5) UO color, channels scaled x8 like the common conversions
-    const uint32_t r = ((color >> 10) & 0x1F) * 8;
-    const uint32_t g = ((color >> 5) & 0x1F) * 8;
-    const uint32_t b = (color & 0x1F) * 8;
-    return IM_COL32(r, g, b, 255);
+    const uint16_t hue = color & 0x3FFF;
+    int group = 0;
+    int entry = 0;
+    if (hue != 0u && uo_hue_index(hue, group, entry))
+    {
+        // Step 28 of the 32-entry UO hue ramp gives the vibrant Unicode text tone
+        // without clipping pastel hues to white at step 31.
+        const uint32_t resolved = uo_hue_get_color_poly(28, hue);
+        return (resolved & 0x00FFFFFFu) | IM_COL32_A_MASK;
+    }
+    // Fallback for hue 0 (default), out-of-range hues, or before hues.mul is loaded
+    return IM_COL32(230, 230, 230, 255);
+}
+
+ImU32 UOColorToReadableTextRGBA(uint16_t color)
+{
+    return AssistantOverlay_ReadableTextOnDark(UOColorToRGBA(color));
 }
 
 void HueSwatch(uint16_t uoColor, float size)
@@ -424,11 +438,11 @@ bool ComboGroup(const char *id, int *current, const char *const items[], int cou
         const bool group = items[i][0] == '#';
         if (group)
         {
-            // CComboDelegate: lightGray background, darkGray text; the row is
-            // a separator and cannot be selected (Selectable(false) semantics)
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.29f, 0.29f, 0.29f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.777f, 0.777f, 0.777f, 0.5f));
-            ImGui::Selectable(items[i], false, ImGuiSelectableFlags_Disabled);
+            // Section header row inside combo dropdown: high-contrast label on dark theme
+            const char *headerLabel = items[i][1] != '\0' ? items[i] + 1 : items[i];
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.84f, 0.94f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.24f, 0.27f, 0.32f, 0.9f));
+            ImGui::Selectable(headerLabel, false, ImGuiSelectableFlags_Disabled);
             ImGui::PopStyleColor(2);
             continue;
         }
@@ -904,18 +918,33 @@ static const XA_CAP s_Row5[] = {
 
 void HotkeyKeyboard_Draw(const char *id, int selectedRow)
 {
-    (void)id;
-    // the four key-cap state colors
-    static const ImU32 COLOR_UNSET = IM_COL32(60, 60, 60, 255); // ImGui button default stand-in
-    static const ImU32 COLOR_MODIFIER = IM_COL32(200, 200, 200, 255);
-    static const ImU32 COLOR_SET = IM_COL32(183, 255, 183, 255);
-    static const ImU32 COLOR_DUPLICATE = IM_COL32(255, 183, 183, 255);
-    static const ImU32 COLOR_SELECTED = IM_COL32(183, 183, 255, 255);
+    // High-contrast dark-theme keycap colors (light text on dark unset keys,
+    // dark text on bright pastel status keys).
+    static const ImU32 COLOR_UNSET = IM_COL32(74, 74, 74, 255);
+    static const ImU32 COLOR_UNSET_HOVER = IM_COL32(96, 96, 96, 255);
+    static const ImU32 COLOR_UNSET_ACTIVE = IM_COL32(118, 118, 118, 255);
+    static const ImU32 COLOR_MODIFIER = IM_COL32(204, 212, 224, 255);
+    static const ImU32 COLOR_SET = IM_COL32(158, 232, 168, 255);
+    static const ImU32 COLOR_DUPLICATE = IM_COL32(246, 152, 152, 255);
+    static const ImU32 COLOR_SELECTED = IM_COL32(154, 190, 248, 255);
+    static const ImU32 TEXT_LIGHT = IM_COL32(236, 236, 236, 255);
+    static const ImU32 TEXT_DARK = IM_COL32(20, 20, 20, 255);
 
-    const float cell = ImGui::GetTextLineHeight() * 2.1f;
+    const float spacing = 3.0f;
+    const float availWidth = ImGui::GetContentRegionAvail().x;
+    const float minCell = ImGui::GetTextLineHeight() * 1.55f;
+    const float maxCell = ImGui::GetTextLineHeight() * 2.0f;
+    // Row 1 is the widest row (~22.8 key units + 20 gaps); fit cleanly when possible.
+    float cell = availWidth > 0.0f ? (availWidth - 20.0f * spacing) / 22.8f : maxCell;
+    if (cell < minCell)
+    {
+        cell = minCell;
+    }
+    if (cell > maxCell)
+    {
+        cell = maxCell;
+    }
     const float height = ImGui::GetFrameHeight();
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const ImVec2 size(cell, height);
 
     struct XA_ROW
     {
@@ -933,13 +962,18 @@ void HotkeyKeyboard_Draw(const char *id, int selectedRow)
     };
 
     ImGui::PushID(id);
-    for (const XA_ROW &row : rows)
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, 3.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2.0f, ImGui::GetStyle().FramePadding.y));
+    const int rowCount = (int)(sizeof(rows) / sizeof(rows[0]));
+    for (int rowIdx = 0; rowIdx < rowCount; ++rowIdx)
     {
+        const XA_ROW &row = rows[rowIdx];
         for (int i = 0; i < row.Count; i++)
         {
             const XA_CAP &cap = row.Caps[i];
             const ImVec2 capSize(cap.Units * cell + (cap.Units - 1.0f) * spacing, height);
             ImU32 color = COLOR_UNSET;
+            bool brightCap = false;
             if (cap.Modifier)
             {
                 uint8_t flag = 0;
@@ -958,6 +992,7 @@ void HotkeyKeyboard_Draw(const char *id, int selectedRow)
                 if (flag != 0 && g_Hotkeys.StickyModifierSet(flag))
                 {
                     color = COLOR_MODIFIER;
+                    brightCap = true;
                 }
             }
             else if (cap.KeyId != XKI_INVALID)
@@ -966,22 +1001,28 @@ void HotkeyKeyboard_Draw(const char *id, int selectedRow)
                 {
                     case 1:
                         color = COLOR_SET;
+                        brightCap = true;
                         break;
                     case 2:
                         color = COLOR_DUPLICATE;
+                        brightCap = true;
                         break;
                     case 3:
                         color = COLOR_SELECTED;
+                        brightCap = true;
                         break;
                     default:
                         break;
                 }
             }
 
+            const ImU32 hoverColor = brightCap ? color : COLOR_UNSET_HOVER;
+            const ImU32 activeColor = brightCap ? color : COLOR_UNSET_ACTIVE;
+            ImGui::PushID(cap.KeyId != XKI_INVALID ? cap.KeyId : (10000 + rowIdx * 64 + i));
             ImGui::PushStyleColor(ImGuiCol_Button, color);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, color);
-            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(20, 20, 20, 255));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
+            ImGui::PushStyleColor(ImGuiCol_Text, brightCap ? TEXT_DARK : TEXT_LIGHT);
             if (ImGui::Button(cap.Label, capSize))
             {
                 if (cap.Modifier)
@@ -995,12 +1036,34 @@ void HotkeyKeyboard_Draw(const char *id, int selectedRow)
                 }
             }
             ImGui::PopStyleColor(4);
+            ImGui::PopID();
             if (i + 1 < row.Count)
             {
                 ImGui::SameLine();
             }
         }
     }
+    ImGui::PopStyleVar(2);
+
+    // Compact legend so keycap highlight colors are immediately understandable
+    const auto drawLegend = [](ImU32 swatch, const char *label) {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float box = ImGui::GetTextLineHeight() * 0.78f;
+        const float yOff = (ImGui::GetTextLineHeight() - box) * 0.5f;
+        dl->AddRectFilled(ImVec2(p.x, p.y + yOff), ImVec2(p.x + box, p.y + yOff + box), swatch, 2.0f);
+        ImGui::Dummy(ImVec2(box, ImGui::GetTextLineHeight()));
+        ImGui::SameLine(0.0f, 4.0f);
+        ImGui::TextDisabled("%s", label);
+    };
+    drawLegend(COLOR_SET, "Assigned");
+    ImGui::SameLine(0.0f, 12.0f);
+    drawLegend(COLOR_SELECTED, "Selected");
+    ImGui::SameLine(0.0f, 12.0f);
+    drawLegend(COLOR_DUPLICATE, "Duplicate");
+    ImGui::SameLine(0.0f, 12.0f);
+    drawLegend(COLOR_MODIFIER, "Modifier active");
+
     ImGui::PopID();
 }
 

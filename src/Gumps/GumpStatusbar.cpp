@@ -5,8 +5,10 @@
 #include "GumpStatusbar.h"
 #include "../Renderer/RenderShader.h" // g_ColorizerShader and friends
 #include <SDL3/SDL_rect.h>
+#include <algorithm>
 #include <common/utils.h> // countof
 #include <cstdint>
+#include <utility>
 #include <xuocore/uodata.h>
 #include <xuocore/vfs.h>
 #include "../Config.h"
@@ -27,6 +29,10 @@
 #include "../GameObjects/GamePlayer.h"
 #include "../Network/Packets.h"
 #include "Platform.h"
+#if defined(XUO_ASSISTANT)
+#include "../Assistant/core/itemcounters_rules.h"
+#include "../Assistant/ui/assistantui.h"
+#endif
 
 int CGumpStatusbar::m_StatusbarDefaultWidth = 154;
 int CGumpStatusbar::m_StatusbarDefaultHeight = 59;
@@ -121,6 +127,67 @@ static const wstr_t tooltip[] = {
 
 static_assert(countof(tooltip) == ID_GSB_COUNT, "Wrong amount of entries in tooltip table");
 
+#if defined(XUO_ASSISTANT)
+enum
+{
+    ID_GSB_SUPPLIES_TOGGLE = 1000,
+    ID_GSB_SUPPLIES_COUNTERS,
+    ID_GSB_SUPPLIES_RECOUNT,
+    ID_GSB_SUPPLIES_PREVIOUS,
+    ID_GSB_SUPPLIES_NEXT,
+    ID_GSB_SUPPLIES_COVERAGE,
+    ID_GSB_SUPPLIES_STATUS,
+    ID_GSB_SUPPLY_FIRST,
+};
+
+namespace
+{
+void AppendStatusSegment(
+    astr_t &out,
+    const char *separator,
+    const char *prefix,
+    const astr_t &value,
+    const char *altMatch = nullptr)
+{
+    if (value.empty())
+    {
+        return;
+    }
+    if (!out.empty())
+    {
+        out += separator;
+    }
+    if (prefix != nullptr && prefix[0] != '\0')
+    {
+        const astr_t lowerValue = str_lower(value);
+        const astr_t lowerPrefix = str_lower(prefix);
+        const bool hasPrefix = lowerValue.find(lowerPrefix) != astr_t::npos ||
+            (altMatch != nullptr && altMatch[0] != '\0' && lowerValue.find(altMatch) != astr_t::npos);
+        if (!hasPrefix)
+        {
+            out += prefix;
+            out += " ";
+        }
+    }
+    out += value;
+}
+
+astr_t FormatSuppliesStatusText(const xuoassist::SuppliesSnapshot &supplies, const char *separator)
+{
+    astr_t text;
+    if (!supplies.CastSpellName.empty())
+    {
+        AppendStatusSegment(text, separator, "Cast:", supplies.CastSpellName);
+    }
+    AppendStatusSegment(text, separator, "Bandage", supplies.BandageText);
+    AppendStatusSegment(text, separator, "Gate", supplies.GateText);
+    AppendStatusSegment(text, separator, "Criminal", supplies.CriminalText, "crim");
+    AppendStatusSegment(text, separator, "Gold", supplies.GoldText, "gp");
+    return text;
+}
+} // namespace
+#endif
+
 CGumpStatusbar::CGumpStatusbar(uint32_t serial, short x, short y, bool minimized)
     : CGump(GT_STATUSBAR, serial, x, y)
 {
@@ -153,6 +220,89 @@ CGumpStatusbar::~CGumpStatusbar()
 void CGumpStatusbar::InitToolTip()
 {
     const uint32_t id = g_SelectedObject.Serial;
+#if defined(XUO_ASSISTANT)
+    if (id >= ID_GSB_SUPPLY_FIRST && id - ID_GSB_SUPPLY_FIRST < m_Supplies.Entries.size())
+    {
+        const auto &counter = m_Supplies.Entries[id - ID_GSB_SUPPLY_FIRST];
+        astr_t tip = counter.Name;
+        if (counter.Count >= 0)
+        {
+            tip += ": " + str_from(counter.Count);
+        }
+        else
+        {
+            tip += ": --";
+        }
+        if (counter.Warning > 0)
+        {
+            tip += "\nLow-stock alert below " + str_from(counter.Warning) + ".";
+        }
+        if (counter.Highlighted)
+        {
+            tip += "\nUsed by active spell.";
+        }
+        tip += "\nDouble-click to use.";
+        g_ToolTip.Set(wstr_from_utf8(tip), 180);
+        return;
+    }
+    if (id == ID_GSB_SUPPLIES_COUNTERS)
+    {
+        g_ToolTip.Set(L"Open Assistant Display > Counters to edit tracked items and timers.", 190);
+        return;
+    }
+    if (id == ID_GSB_SUPPLIES_RECOUNT)
+    {
+        g_ToolTip.Set(
+            m_Supplies.Recounting
+                ? L"Stop opening backpack bags."
+                : (m_Supplies.SkipPouches
+                      ? L"Open unopened backpack bags to sync counts. Pouches are skipped for safety."
+                      : L"Open unopened backpack bags to sync counts."),
+            190);
+        return;
+    }
+    if (id == ID_GSB_SUPPLIES_COVERAGE)
+    {
+        if (m_Supplies.Recounting)
+        {
+            g_ToolTip.Set(
+                m_Supplies.SkipPouches
+                    ? L"Opening unopened backpack bags to sync counts. Pouches are skipped for safety."
+                    : L"Opening unopened backpack bags to sync counts.",
+                190);
+        }
+        else if (m_Supplies.Coverage == xuoassist::SuppliesCoverage::Complete)
+        {
+            g_ToolTip.Set(
+                m_Supplies.AutoRecount
+                    ? L"Counts stay in sync automatically across your backpack and opened bags."
+                    : L"Counts include your backpack and opened bags.",
+                190);
+        }
+        else if (m_Supplies.Coverage == xuoassist::SuppliesCoverage::Partial)
+        {
+            g_ToolTip.Set(
+                m_Supplies.SkipPouches
+                    ? L"Some unopened bags are not counted yet (pouches are skipped for safety). Use Recount to check safe bags."
+                    : L"Some unopened bags are not counted yet. Use Recount to check them.",
+                190);
+        }
+        else
+        {
+            g_ToolTip.Set(L"Open your backpack or use Recount to sync supply counts.", 190);
+        }
+        return;
+    }
+    if (id == ID_GSB_SUPPLIES_STATUS)
+    {
+        const astr_t tip = FormatSuppliesStatusText(m_Supplies, "\n");
+        if (!tip.empty())
+        {
+            g_ToolTip.Set(wstr_from_utf8(tip), 190);
+        }
+        return;
+    }
+#endif
     if (id == ID_GSB_NONE || id >= ID_GSB_COUNT)
     {
         return;
@@ -503,6 +653,25 @@ void CGumpStatusbar::CalculateGumpState()
 
 void CGumpStatusbar::PrepareContent()
 {
+#if defined(XUO_ASSISTANT)
+    // A counter refresh must not replace a hitbox midway through a click or drag.
+    if (g_Config.AssistantEnabled && Serial == g_PlayerSerial && !Minimized && m_SuppliesExpanded &&
+        g_PressedObject.LeftGump != this)
+    {
+        const uint64_t revision = xuoassist::ItemCounters_Revision();
+        if (revision != m_SuppliesRevision || g_Ticks - m_SuppliesSampleAt >= 250)
+        {
+            m_SuppliesSampleAt = g_Ticks;
+            auto snapshot = xuoassist::ItemCounters_GetSupplies();
+            m_SuppliesRevision = xuoassist::ItemCounters_Revision();
+            if (!(m_Supplies == snapshot))
+            {
+                m_Supplies = std::move(snapshot);
+                WantUpdateContent = true;
+            }
+        }
+    }
+#endif
     if (m_HitsBody != nullptr)
     {
         CGameCharacter *obj = g_World->FindWorldCharacter(Serial);
@@ -532,6 +701,258 @@ void CGumpStatusbar::PrepareContent()
         }
     }
 }
+
+#if defined(XUO_ASSISTANT)
+void CGumpStatusbar::AddSupplies(int x, int y, int width)
+{
+    constexpr int Padding = 10;
+    constexpr int HeaderHeight = 31;
+    constexpr int StatusHeight = 20;
+    constexpr int CellWidth = 62;
+    constexpr int CellHeight = 52;
+    constexpr int IconBoxWidth = 44;
+    constexpr int IconBoxHeight = 32;
+    constexpr int ToggleWidth = 74;
+    constexpr uint16_t Ink = 0x0386;
+    constexpr uint16_t Muted = 0x03B2;
+    constexpr uint16_t LowHue = 0x0021;
+    constexpr uint16_t HighlightTextHue = 0x0481;
+    constexpr uint16_t HighlightLowHue = 0x0035;
+    constexpr uint32_t HighlightBorder = 0xFF1D1E87;
+    constexpr uint32_t HighlightFill = 0xFF3336A6;
+
+    const auto addFill = [this, x](int left, int top, int w, int h, uint32_t color) {
+        Add(new CGUIColoredPolygone(0, 0, x + left, top, w, h, color));
+    };
+    const auto addText = [this, x](const astr_t &label, int left, int top, uint16_t hue,
+                             int textWidth = 0, TEXT_ALIGN_TYPE align = TS_LEFT) {
+        auto *text = static_cast<CGUIText *>(Add(new CGUIText(hue, x + left, top)));
+        text->CreateTextureA(9, label, textWidth, align, textWidth > 0 ? UOFONT_CROPPED : 0);
+    };
+    const auto addControl = [this, x, &addFill, &addText](int id, const char *label, int left, int top, int w) {
+        addFill(left, top, w, 17, 0xFF627B89);
+        addFill(left + 1, top + 1, w - 2, 15, 0xFFD5E1E6);
+        addText(label, left, top + 2, Ink, w, TS_CENTER);
+        Add(new CGUIHitBox(id, x + left, top, w, 17, true));
+    };
+
+    if (!m_SuppliesInitialized)
+    {
+        m_SuppliesInitialized = true;
+        m_SuppliesExpanded = xuoassist::ItemCounters_StatusExpanded();
+    }
+
+    if (m_SuppliesExpanded)
+    {
+        m_Supplies = xuoassist::ItemCounters_GetSupplies();
+        m_SuppliesRevision = xuoassist::ItemCounters_Revision();
+        m_SuppliesSampleAt = g_Ticks;
+    }
+
+    const astr_t statusLine = m_SuppliesExpanded ? FormatSuppliesStatusText(m_Supplies, " | ") : astr_t{};
+    const int statusStripHeight = statusLine.empty() ? 0 : StatusHeight;
+    const int columns = std::max(1, (width - 2 * Padding) / CellWidth);
+    const int step = (width - 2 * Padding) / columns;
+    const size_t pageSize = static_cast<size_t>(columns) * 2;
+    const size_t count = m_Supplies.Entries.size();
+    const size_t pages = std::max(size_t{ 1 }, (count + pageSize - 1) / pageSize);
+    m_SuppliesPage = std::min(m_SuppliesPage, pages - 1);
+    const size_t first = m_SuppliesPage * pageSize;
+    const size_t visible = std::min(count - first, pageSize);
+    const int rows = static_cast<int>((visible + columns - 1) / columns);
+    const int footer = pages > 1 ? 24 : 0;
+    const int height = !m_SuppliesExpanded ? HeaderHeight :
+        HeaderHeight + statusStripHeight + (rows == 0 ? 22 : rows * CellHeight) + footer + 8;
+
+    addFill(0, y, width, height, 0xFF323E44);
+    addFill(1, y + 1, width - 2, height - 2, 0xFF5D8698);
+    addFill(3, y + 3, width - 6, height - 6, 0xFFC5CDCF);
+    addControl(ID_GSB_SUPPLIES_TOGGLE, m_SuppliesExpanded ? "- Supplies" : "+ Supplies", Padding, y + 7, ToggleWidth);
+    if (!m_SuppliesExpanded)
+    {
+        return;
+    }
+
+    const bool compactHeader = width < 310;
+    const int recountWidth = compactHeader ? 52 : 58;
+    const int countersWidth = compactHeader ? 34 : 66;
+    const int recountLeft = width - Padding - recountWidth;
+    const int countersLeft = recountLeft - 4 - countersWidth;
+    const int coverageLeft = Padding + ToggleWidth + 6;
+    const int coverageWidth = countersLeft - coverageLeft - 4;
+
+    const char *coverage = m_Supplies.AutoRecount ? "Backpack (auto)" : "Backpack";
+    if (m_Supplies.Recounting)
+    {
+        coverage = m_Supplies.AutoRecount ? "Auto-syncing..." : "Recounting...";
+    }
+    else if (m_Supplies.Coverage == xuoassist::SuppliesCoverage::Unknown)
+    {
+        coverage = "Counts unknown";
+    }
+    else if (m_Supplies.Coverage == xuoassist::SuppliesCoverage::Partial)
+    {
+        coverage = "Partial counts";
+    }
+    if (coverageWidth > 12)
+    {
+        addText(coverage, coverageLeft, y + 9, Ink, coverageWidth, TS_LEFT);
+        Add(new CGUIHitBox(ID_GSB_SUPPLIES_COVERAGE, x + coverageLeft, y + 7, coverageWidth, 17));
+    }
+
+    addControl(
+        ID_GSB_SUPPLIES_COUNTERS,
+        compactHeader ? "Edit" : "Counters",
+        countersLeft,
+        y + 7,
+        countersWidth);
+
+    const char *recount = m_Supplies.Recounting ? "Cancel" : "Recount";
+    if (m_Supplies.CanRecount || m_Supplies.Recounting)
+    {
+        addControl(ID_GSB_SUPPLIES_RECOUNT, recount, recountLeft, y + 7, recountWidth);
+    }
+    else
+    {
+        addText(recount, recountLeft, y + 9, Muted, recountWidth, TS_CENTER);
+    }
+    Add(new CGUILine(x + Padding, y + HeaderHeight - 3, x + width - Padding,
+        y + HeaderHeight - 3, 0xFF516771));
+
+    const int gridTop = y + HeaderHeight + statusStripHeight;
+    if (!statusLine.empty())
+    {
+        const int statusTop = y + HeaderHeight;
+        const int statusWidth = width - 2 * Padding;
+        addFill(Padding, statusTop, statusWidth, StatusHeight - 2, 0xFF7B939D);
+        addFill(Padding + 1, statusTop + 1, statusWidth - 2, StatusHeight - 4, 0xFFD5E1E6);
+        const uint16_t statusHue = !m_Supplies.CriminalText.empty() ? LowHue : Ink;
+        addText(statusLine, Padding + 6, statusTop + 2, statusHue, statusWidth - 12, TS_LEFT);
+        Add(new CGUIHitBox(ID_GSB_SUPPLIES_STATUS, x + Padding, statusTop, statusWidth, StatusHeight - 2));
+    }
+
+    if (visible == 0)
+    {
+        addText(
+            "Click Counters to choose tracked items.",
+            Padding,
+            gridTop + 5,
+            Ink,
+            width - 2 * Padding,
+            TS_LEFT);
+        return;
+    }
+
+    for (size_t i = 0; i < visible; ++i)
+    {
+        const auto &entry = m_Supplies.Entries[first + i];
+        const int cellLeft = Padding + static_cast<int>(i % static_cast<size_t>(columns)) * step;
+        const int cellTop = gridTop + static_cast<int>(i / static_cast<size_t>(columns)) * CellHeight;
+        if (entry.Highlighted)
+        {
+            addFill(cellLeft + 2, cellTop + 2, step - 4, CellHeight - 4, HighlightBorder);
+            addFill(cellLeft + 3, cellTop + 3, step - 6, CellHeight - 6, HighlightFill);
+        }
+        bool doubleDraw = false;
+        const uint16_t drawGraphic = entry.Icon
+            ? get_stack_graphic(entry.Graphic, entry.Count > 1 ? entry.Count : 1, doubleDraw)
+            : 0;
+        const auto *sprite = entry.Icon ? g_Game.ExecuteStaticArt(drawGraphic) : nullptr;
+        if (sprite != nullptr && sprite->Width > 0 && sprite->Height > 0)
+        {
+            const int iconBoxX = x + cellLeft + (step - IconBoxWidth) / 2;
+            const int iconBoxY = cellTop + 4;
+            const auto layout = xuoassist::ItemCounters_ComputeBackpackIconLayout(
+                iconBoxX,
+                iconBoxY,
+                IconBoxWidth,
+                IconBoxHeight,
+                sprite->Width,
+                sprite->Height,
+                sprite->ImageOffsetX,
+                sprite->ImageOffsetY,
+                sprite->ImageWidth,
+                sprite->ImageHeight,
+                doubleDraw);
+            const uint16_t hue = entry.Hue == 0xFFFF ? 0 : static_cast<uint16_t>(entry.Hue & 0x3FFF);
+            const bool partialHue = IsPartialHue(g_Game.GetStaticFlags(drawGraphic));
+            Add(new CGUIShader(&g_ColorizerShader, true));
+            if (layout.Downscaled)
+            {
+                auto *tile = static_cast<CGUITilepicScaled *>(Add(new CGUITilepicScaled(
+                    drawGraphic,
+                    hue,
+                    iconBoxX,
+                    iconBoxY,
+                    IconBoxWidth,
+                    IconBoxHeight,
+                    layout.DrawX,
+                    layout.DrawY,
+                    layout.DrawWidth,
+                    layout.DrawHeight)));
+                tile->PartialHue = partialHue;
+            }
+            else
+            {
+                auto *tile = static_cast<CGUITilepic *>(Add(new CGUITilepic(
+                    drawGraphic,
+                    hue,
+                    layout.DrawX,
+                    layout.DrawY,
+                    layout.DoubleDraw)));
+                tile->PartialHue = partialHue;
+            }
+            Add(new CGUIShader(&g_ColorizerShader, false));
+        }
+        else
+        {
+            addText(
+                entry.Key,
+                cellLeft,
+                cellTop + 12,
+                entry.Highlighted ? HighlightTextHue : Ink,
+                step,
+                TS_CENTER);
+        }
+        const uint16_t countHue = entry.Highlighted
+            ? (entry.Low ? HighlightLowHue : HighlightTextHue)
+            : (entry.Low ? LowHue : Ink);
+        addText(
+            entry.Count < 0 ? astr_t("--") : str_from(entry.Count),
+            cellLeft,
+            cellTop + 36,
+            countHue,
+            step,
+            TS_CENTER);
+        Add(new CGUIHitBox(
+            ID_GSB_SUPPLY_FIRST + static_cast<int>(first + i),
+            x + cellLeft,
+            cellTop,
+            step,
+            CellHeight));
+    }
+
+    if (pages > 1)
+    {
+        const int footerTop = gridTop + rows * CellHeight + 3;
+        if (m_SuppliesPage > 0)
+        {
+            addControl(ID_GSB_SUPPLIES_PREVIOUS, "<", width / 2 - 59, footerTop, 30);
+        }
+        addText(
+            str_from(m_SuppliesPage + 1) + "/" + str_from(pages),
+            width / 2 - 28,
+            footerTop + 2,
+            Ink,
+            56,
+            TS_CENTER);
+        if (m_SuppliesPage + 1 < pages)
+        {
+            addControl(ID_GSB_SUPPLIES_NEXT, ">", width / 2 + 29, footerTop, 30);
+        }
+    }
+}
+#endif
 
 void CGumpStatusbar::UpdateContent()
 {
@@ -1252,6 +1673,39 @@ void CGumpStatusbar::UpdateContent()
                 p.y = 180;
                 Add(new CGUIHitBox(ID_GSB_MINIMIZE, p.x, p.y, 16, 16, true));
             }
+#if defined(XUO_ASSISTANT)
+            if (g_Config.AssistantEnabled && io.Width >= 240 && io.Height > 0)
+            {
+                int left = 0;
+                int right = io.Width - 1;
+                int bottom = io.Height - 1;
+                // Some status art includes transparent gutters around the visible frame.
+                if (auto *body = g_Game.ExecuteGump(gumpId))
+                {
+                    const int row = body->Height / 2;
+                    while (left < right && !body->TestHit(left, row, true))
+                    {
+                        ++left;
+                    }
+                    while (right > left && !body->TestHit(right, row, true))
+                    {
+                        --right;
+                    }
+                    const int middle = (left + right) / 2;
+                    while (bottom > row && !body->TestHit(middle, bottom, true))
+                    {
+                        --bottom;
+                    }
+                }
+                if (right - left + 1 < 240)
+                {
+                    left = 0;
+                    right = io.Width - 1;
+                    bottom = io.Height - 1;
+                }
+                AddSupplies(left, std::max(bottom + 1, p.y + 16) + 2, right - left + 1);
+            }
+#endif
         }
         else // Reduced status bar version
         {
@@ -1592,7 +2046,11 @@ void CGumpStatusbar::UpdateContent()
 
     for (CBaseGUI *item = (CBaseGUI *)m_Items; item != nullptr; item = (CBaseGUI *)item->m_Next)
     {
-        if (item->Serial != ID_GSB_MINIMIZE)
+        if (item->Serial != ID_GSB_MINIMIZE
+#if defined(XUO_ASSISTANT)
+            && !(item->Serial >= ID_GSB_SUPPLIES_TOGGLE && item->Serial <= ID_GSB_SUPPLIES_NEXT)
+#endif
+        )
         {
             item->MoveOnDrag = true;
         }
@@ -1624,6 +2082,44 @@ void CGumpStatusbar::GUMP_BUTTON_EVENT_C
         return;
     }
 
+#if defined(XUO_ASSISTANT)
+    if (Serial == g_PlayerSerial && !Minimized && g_Config.AssistantEnabled &&
+        serial >= ID_GSB_SUPPLIES_TOGGLE && serial <= ID_GSB_SUPPLIES_NEXT)
+    {
+        switch (serial)
+        {
+            case ID_GSB_SUPPLIES_TOGGLE:
+                m_SuppliesInitialized = true;
+                m_SuppliesExpanded = !m_SuppliesExpanded;
+                xuoassist::ItemCounters_SetStatusExpanded(m_SuppliesExpanded);
+                break;
+            case ID_GSB_SUPPLIES_COUNTERS:
+                xuoassist::AssistantUI_OpenDisplayCounters();
+                return;
+            case ID_GSB_SUPPLIES_RECOUNT:
+                if (m_Supplies.Recounting)
+                {
+                    xuoassist::ItemCounters_CancelRecount();
+                }
+                else
+                {
+                    xuoassist::ItemCounters_StartRecount();
+                }
+                break;
+            case ID_GSB_SUPPLIES_PREVIOUS:
+                if (m_SuppliesPage > 0)
+                {
+                    --m_SuppliesPage;
+                }
+                break;
+            case ID_GSB_SUPPLIES_NEXT:
+                ++m_SuppliesPage;
+                break;
+        }
+        WantUpdateContent = true;
+        return;
+    }
+#endif
     if (serial == ID_GSB_MINIMIZE && Serial == g_PlayerSerial)
     {
         Minimized = true;
@@ -1696,6 +2192,30 @@ bool CGumpStatusbar::OnLeftMouseButtonDoubleClick()
         return false;
     }
 
+#if defined(XUO_ASSISTANT)
+    if (Serial == g_PlayerSerial && !Minimized && g_Config.AssistantEnabled)
+    {
+        const uint32_t pressed = g_PressedObject.LeftSerial;
+        if (pressed >= ID_GSB_SUPPLIES_TOGGLE && pressed <= ID_GSB_SUPPLIES_NEXT)
+        {
+            return true;
+        }
+        if (pressed >= ID_GSB_SUPPLY_FIRST)
+        {
+            const size_t index = static_cast<size_t>(pressed - ID_GSB_SUPPLY_FIRST);
+            if (index < m_Supplies.Entries.size())
+            {
+                const auto &entry = m_Supplies.Entries[index];
+                xuoassist::ItemCounters_UseCounter(entry.Graphic, entry.Hue);
+                return true;
+            }
+        }
+        if (pressed == ID_GSB_SUPPLIES_COVERAGE || pressed == ID_GSB_SUPPLIES_STATUS)
+        {
+            return true;
+        }
+    }
+#endif
     if ((g_PressedObject.LeftSerial == 0u) && Serial == g_PlayerSerial && Minimized)
     {
         Minimized = false;

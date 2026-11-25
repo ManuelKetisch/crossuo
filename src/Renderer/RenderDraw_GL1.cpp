@@ -1118,7 +1118,8 @@ bool RenderDraw_GetFrameBufferPixels(const GetFrameBufferPixelsCmd &cmd, RenderS
 
     if (cmd.dataSize >= neededSize)
     {
-        GL_CALL(glReadPixels(cmd.x, cmd.y, cmd.width, cmd.height, format, GL_UNSIGNED_BYTE, cmd.data));
+        const int bottom = static_cast<int>(cmd.window_height) - cmd.y - static_cast<int>(cmd.height);
+        GL_CALL(glReadPixels(cmd.x, bottom, cmd.width, cmd.height, format, GL_UNSIGNED_BYTE, cmd.data));
     }
 
     return true;

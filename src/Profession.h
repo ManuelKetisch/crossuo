@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include "BaseQueue.h"
 #include <xuocore/enumlist.h>
 
@@ -48,6 +49,9 @@ private:
     uint8_t m_SkillValue[4];
 
 public:
+    static constexpr int MinStartingStat = 10;
+    static constexpr int MaxStartingSkillPoints = 50;
+
     CProfession();
     virtual ~CProfession() override;
 
@@ -75,5 +79,71 @@ public:
             return m_SkillValue[index];
         else
             return 0xFF;
+    }
+
+    int GetStatPointsLeft(int budget) const
+    {
+        return budget - Str - Dex - Int;
+    }
+
+    void AllocateStatPoints(int slot, int requested, int budget, int maximum)
+    {
+        if (slot < 0 || slot >= 3)
+        {
+            return;
+        }
+        uint8_t *const stats[] = { &Str, &Dex, &Int };
+        const int available = *stats[slot] + GetStatPointsLeft(budget);
+        const int value = std::min({ requested, available, maximum });
+        *stats[slot] = std::max(int{ MinStartingStat }, value);
+    }
+
+    int GetSkillPointsLeft(int slots) const
+    {
+        int remaining = slots == 4 ? 120 : 100;
+        for (int slot = 0; slot < slots; ++slot)
+        {
+            remaining -= GetSkillValue(slot);
+        }
+        return remaining;
+    }
+
+    void AllocateSkillPoints(int slot, int requested, int slots)
+    {
+        if (slot < 0 || slot >= slots)
+        {
+            return;
+        }
+        const int available = GetSkillValue(slot) + GetSkillPointsLeft(slots);
+        const int value = std::min({ requested, available, MaxStartingSkillPoints });
+        SetSkillValue(slot, std::max(0, value));
+    }
+
+    bool CanChooseStartingSkill(int slot, uint8_t skill, int slots) const
+    {
+        if (skill == 0xFF)
+        {
+            return false;
+        }
+        for (int other = 0; other < slots; ++other)
+        {
+            if (other != slot && GetSkillIndex(other) == skill)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    int GetUnnamedSkillWithPoints(int slots) const
+    {
+        for (int slot = 0; slot < slots; ++slot)
+        {
+            if (GetSkillValue(slot) > 0 && GetSkillIndex(slot) == 0xFF)
+            {
+                return slot;
+            }
+        }
+        return -1;
     }
 };

@@ -46,7 +46,8 @@ public:
     void MoveToTop(CGameObject *obj);
     void Dump(uint8_t tCount = 0, uint32_t serial = 0xFFFFFFFF);
     CGameObject *SearchWorldObject(
-        int serialStart, int scanDistance, SCAN_TYPE_OBJECT scanType, SCAN_MODE_OBJECT scanMode);
+        int serialStart, int scanDistance, SCAN_TYPE_OBJECT scanType, SCAN_MODE_OBJECT scanMode,
+        bool (*accept)(const CGameObject *) = nullptr);
 
     void UpdateContainedItem(
         uint32_t serial,

@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -110,7 +111,8 @@ enum HOTKEY_TYPES
     HT_TARGETING,
     HT_BANDAGE_HEALING,
     HT_NEW_TARGETING_SYSTEM_SET,
-    HT_LAST // == the original HT_COUNT_OF_ITEMS (26)
+    HT_INVENTORY_AGENT,
+    HT_LAST
 };
 
 // gui/worldobjectlistitem.h (friends / enemies / party accept / decline lists)
@@ -216,6 +218,13 @@ struct CDressSetEntry
     CDressSetEntry() { memset(&m_Items[0], 0, sizeof(m_Items)); }
 };
 
+enum class HotkeyPassMode : uint8_t
+{
+    Inherit,
+    Pass,
+    Consume,
+};
+
 // gui/hotkeytableitem.h (data subset; SDL key codes since Hotkeys version 1)
 struct CHotkeyEntry
 {
@@ -226,6 +235,12 @@ struct CHotkeyEntry
     astr_t ScriptOrMacroName{ "" };
     astr_t ExternalCode{ "" };
     bool RunningMode{ false };
+    HotkeyPassMode PassMode{ HotkeyPassMode::Inherit };
+
+    bool PassesToGame(bool profileDefault) const
+    {
+        return PassMode == HotkeyPassMode::Inherit ? profileDefault : PassMode == HotkeyPassMode::Pass;
+    }
 };
 
 // gui/macrolistitem.h (owner of the CMacro action list)
@@ -266,16 +281,22 @@ public:
     // --- profiles ----------------------------------------------------------
     const vector<astr_t> &GetProfiles() const { return m_Profiles; }
     void ScanProfiles();
+    bool SwitchProfile(const astr_t &name);
+    bool CreateProfile(const astr_t &name, bool clone);
+    // Publish an inactive profile only after all imported data is stored.
+    bool CreateImportedProfile(const astr_t &name,
+        const std::function<bool(CAssistantConfig &)> &populate);
+    bool ArchiveCurrentProfile(astr_t &archivePath);
     bool LoadProfileBySerial(uint32_t serial);
     void SetCurrentProfile(const astr_t &name); // case-insensitive, like TabMain
     bool LoadProfile();                         // persisted to/from its INI file
     bool SaveProfile();                         // persisted to/from its INI file
     void SaveProfileMap();                      // GlobalConfig/Profiles.ini
-    void LoadProfileMap();
+    bool LoadProfileMap();
     const std::map<uint32_t, astr_t> &GetProfileMap() const { return m_ProfileMap; }
 
     // --- Options.ini (assistform.cpp SaveMainOptions + 4 tab SaveConfigs) ---
-    void SaveMainOptions();
+    bool SaveMainOptions(bool includeScripts = true);
     void LoadMainOptions();
 
     // --- global files (GlobalConfig/) ---------------------------------------
@@ -301,17 +322,17 @@ public:
     void LoadDisplayGroups(); // (with allreag/default on empty)
 
     // --- per-profile files ---------------------------------------------------
-    void SaveObjects();       // persisted to/from its INI file (Objects.ini)
+    bool SaveObjects();       // persisted to/from its INI file (Objects.ini)
     void LoadObjects();
-    void SaveHotkeys();       // persisted to/from its INI file (Hotkeys.ini)
+    bool SaveHotkeys();       // persisted to/from its INI file (Hotkeys.ini)
     bool LoadHotkeys();
-    void SaveParty();         // persisted to/from its INI file (Party.ini)
+    bool SaveParty();         // persisted to/from its INI file (Party.ini)
     void LoadParty();
-    void SaveFriends();       // persisted to/from its INI file (Friends.ini)
+    bool SaveFriends();       // persisted to/from its INI file (Friends.ini)
     void LoadFriends();
-    void SaveEnemies();       // persisted to/from its INI file (Enemies.ini)
+    bool SaveEnemies();       // persisted to/from its INI file (Enemies.ini)
     void LoadEnemies();
-    void SaveMacros();        // persisted to/from its INI file (Macros.ini)
+    bool SaveMacros();        // persisted to/from its INI file (Macros.ini)
     bool LoadMacros();        // persisted to/from its INI file
     bool SaveDress();         // persisted to/from its INI file (Dress.coa)
     bool LoadDress();         // persisted to/from its INI file
@@ -352,6 +373,7 @@ public:
     int MoveItemsDelay() const { return m_MoveItemsDelay; }
     int UseItemsDelay() const { return m_UseItemsDelay; }
     int WindowsOpacity() const { return m_WindowsOpacity; }
+    int UiScale() const { return m_UiScale; }
     bool AutoReconnect() const { return m_AutoReconnect; }
     int AutoReconnectSeconds() const { return m_AutoReconnectSeconds; }
     bool DoubleClickForOpenDoors() const { return m_DoubleClickForOpenDoors; }
@@ -450,6 +472,7 @@ public:
     int m_MoveItemsDelay{ 600 };
     int m_UseItemsDelay{ 600 };
     int m_WindowsOpacity{ 100 };
+    int m_UiScale{ 100 };
     bool m_AutoReconnect{ false };
     int m_AutoReconnectSeconds{ 60 };
     bool m_DoubleClickForOpenDoors{ false };
@@ -506,6 +529,9 @@ public:
     std::map<uint32_t, astr_t> m_ProfileMap;
 
 private:
+    bool ActivateProfile(const astr_t &name);
+    bool BuildProfile(const astr_t &name, bool clone,
+        const std::function<bool(CAssistantConfig &)> &populate = {});
     vector<astr_t> m_Profiles;
 };
 

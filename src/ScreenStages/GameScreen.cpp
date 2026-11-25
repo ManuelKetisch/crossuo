@@ -51,6 +51,7 @@
 #include "../Gumps/GumpPaperdoll.h"
 #include "../Gumps/GumpCustomHouse.h"
 #include "../Gumps/GumpConsoleType.h"
+#include "../Gumps/GumpFpsCounter.h"
 #include "../Gumps/GumpTargetSystem.h"
 #include "../Gumps/GumpSkills.h"
 #include "../Gumps/GumpContainer.h"
@@ -2119,24 +2120,22 @@ void CGameScreen::Render()
 
         if (g_DeveloperMode == DM_SHOW_FPS_ONLY)
         {
-            char dbf[100] = { 0 };
-
-            sprintf_s(
-                dbf,
-                "FPS=%i (%ims) (Min=%d, Max=%d) scale=%.1f\n%s",
-                FPScount,
-                g_FrameDelay[WINDOW_ACTIVE],
-                FPSMin,
-                FPSMax,
-                g_GlobalScale,
-                g_PingString.c_str());
-
-            g_FontManager.DrawA(
-                3,
-                dbf,
-                0x35,
-                g_RenderBounds.GameWindowPosX + g_RenderBounds.GameWindowWidth + 10,
-                g_RenderBounds.GameWindowPosY);
+            auto *counter = static_cast<CGumpFpsCounter *>(g_GumpManager.GetGump(0, 0, GT_FPS_COUNTER));
+            if (counter != nullptr)
+            {
+                char reading[160];
+                snprintf(
+                    reading,
+                    sizeof(reading),
+                    "FPS=%i (%ims) (Min=%d, Max=%d) scale=%.1f\n%s",
+                    FPScount,
+                    g_FrameDelay[WINDOW_ACTIVE],
+                    FPSMin == INT_MAX ? 0 : FPSMin,
+                    FPSMax,
+                    g_GlobalScale,
+                    g_PingString.c_str());
+                counter->SetReading(reading);
+            }
         }
         else if (g_DeveloperMode == DM_DEBUGGING)
         {
@@ -2298,6 +2297,7 @@ void CGameScreen::Render()
     }
 
     CVfsStatusHud::Draw(); // streamed-install HUD, top-right (gone when idle)
+    g_ScreenshotBuilder.CaptureFrame();
 #if defined(USE_GL3) || defined(USE_GLES)
     RenderDebug_ProcessFrame(g_renderCmdList);
     RenderDraw_Execute(g_renderCmdList);
@@ -2312,7 +2312,6 @@ void CGameScreen::Render()
     // "non-gen name")
     Render_SwapBuffers();
     g_FontManager.ClearTextSpritePool(); // Clear text sprites (GPU is done with them)
-    g_ScreenshotBuilder.GPUDataReady();
 #else
 #if defined(XUO_ASSISTANT)
     // the assistant draws inside the game context, before the frame is shown
@@ -2320,6 +2319,7 @@ void CGameScreen::Render()
 #endif
     Render_GL1EndDraw();
 #endif // #if defined(USE_GL3) || defined(USE_GLES)
+    g_ScreenshotBuilder.GPUDataReady();
 }
 
 void CGameScreen::SelectObject()
@@ -2449,7 +2449,8 @@ void CGameScreen::OnLeftMouseButtonDown()
 void CGameScreen::OnLeftMouseButtonUp()
 {
 #if defined(XUO_ASSISTANT)
-    if (AssistantOverlay_WantsMouse())
+    if (AssistantOverlay_WantsMouse() &&
+        (g_PressedObject.LeftGump == nullptr || g_ObjectInHand.Enabled))
     {
         return;
     }
@@ -2681,6 +2682,18 @@ void CGameScreen::OnLeftMouseButtonUp()
     }
 }
 
+static bool QuickLootWorldItem(CGameItem *item)
+{
+    constexpr auto UseModifiers = SDL_KMOD_ALT | SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_GUI;
+    if (item == nullptr || item->Container != 0xFFFFFFFF ||
+        (SDL_GetModState() & UseModifiers) != 0 || !g_Game.CanQuickLoot(item))
+    {
+        return false;
+    }
+    g_Game.LootItem(item, item->Count);
+    return true;
+}
+
 bool CGameScreen::OnLeftMouseButtonDoubleClick()
 {
 #if defined(XUO_ASSISTANT)
@@ -2702,7 +2715,10 @@ bool CGameScreen::OnLeftMouseButtonDoubleClick()
             CGameObject *obj = (CGameObject *)g_SelectedObject.Object;
             if (!obj->NPC)
             {
-                g_Game.DoubleClick(g_SelectedObject.Serial);
+                if (!QuickLootWorldItem(static_cast<CGameItem *>(obj)))
+                {
+                    g_Game.DoubleClick(g_SelectedObject.Serial);
+                }
             }
             else
             {
@@ -2728,6 +2744,10 @@ bool CGameScreen::OnLeftMouseButtonDoubleClick()
                         g_Game.DoubleClick(serial);
                     }
                     result = true;
+                }
+                else if (obj != nullptr)
+                {
+                    result = QuickLootWorldItem(static_cast<CGameItem *>(obj));
                 }
             }
         }

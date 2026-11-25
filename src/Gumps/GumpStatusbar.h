@@ -6,6 +6,10 @@
 #include "Gump.h"
 #include "../Platform.h"
 
+#if defined(XUO_ASSISTANT)
+#include <core/itemcounters.h>
+#endif
+
 class CGumpStatusbar : public CGump
 {
 protected:
@@ -21,6 +25,16 @@ protected:
     CGUITextEntry *m_Entry{ nullptr };
 
     astr_t m_Name;
+
+#if defined(XUO_ASSISTANT)
+    void AddSupplies(int x, int y, int width);
+    bool m_SuppliesInitialized = false;
+    bool m_SuppliesExpanded = false;
+    size_t m_SuppliesPage = 0;
+    uint32_t m_SuppliesSampleAt = 0;
+    uint64_t m_SuppliesRevision = 0;
+    xuoassist::SuppliesSnapshot m_Supplies;
+#endif
 
 public:
     CGumpStatusbar(uint32_t serial, short x, short y, bool minimized);

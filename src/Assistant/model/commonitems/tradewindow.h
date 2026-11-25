@@ -18,6 +18,8 @@ public:
     astr_t Name = "";
     bool Check1 = false;
     bool Check2 = false;
+    bool WatchFirstOffer = false;
+    uint32_t OpenedAt = 0;
 
     CTradeWindow();
     CTradeWindow(const uint32_t &serial, const uint32_t &id1, const uint32_t &id2, const astr_t &name);

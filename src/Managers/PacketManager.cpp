@@ -26,6 +26,7 @@
 #include "ConnectionManager.h"
 #include "ChatManager.h"
 #include "SoundManager.h" // g_SoundManager (stop-music command)
+#include "PaperdollSlots_rules.h"
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
@@ -38,6 +39,13 @@
 #include <core/global.h>    // xuoassist mirrored state (light, weather, season, status requests)
 #include "../Misc.h"        // pack16 (the morph/corpse-graphic in-place 0x78 patches)
 #include <core/assist.h>    // xuoassist::g_Assistant (status requests)
+#include <core/gameplayfilters.h>
+#include <core/packettrace.h>
+#include <core/inventoryagent.h> // item-move failure notification
+#include <core/potionhands.h>
+#include <core/itemcounters.h>
+#include <core/damagemeter.h>
+#include <core/bandageheal.h>
 #include <core/shopagent.h> // xuoassist::g_ShopAgent (buy-list agent)
 #include <managers/menumanager.h>        // xuoassist::g_MenuManager
 #include <managers/trademanager.h>       // xuoassist::g_TradeManager
@@ -66,6 +74,7 @@
 #include "../GameWindow.h"
 #include "../Multi.h"
 #include "../ContainerStack.h"
+#include "../UseItemsList.h"
 #include "../Container.h"
 #include "../CharacterList.h"
 #include "../TextEngine/GameConsole.h"
@@ -723,6 +732,9 @@ void CPacketManager::OnReadFailed()
 
 void CPacketManager::OnPacket()
 {
+#if defined(XUO_ASSISTANT)
+    xuoassist::PacketTrace_Record(false, Start, Size);
+#endif
     uint32_t ticks = g_Ticks;
     g_TotalRecvSize += (uint32_t)Size;
     CPacketInfo &info = m_Packets[*Start];
@@ -908,10 +920,23 @@ PACKET_HANDLER(CharacterList)
 
 PACKET_HANDLER(ResendCharacterList)
 {
-    g_Game.InitScreen(GS_CHARACTER);
+    const bool refresh = *Start == 0x86;
+    // ModernUO sends the refreshed list immediately after a deletion refusal.
+    const bool showingDeleteError = refresh && g_GameState == GS_DELETE &&
+        g_ConnectionScreen.GetType() == CST_CHARACTER_LIST && g_ConnectionScreen.GetConnectionFailed();
+
+    if (refresh)
+    {
+        g_Game.RequireCharacterSelection();
+    }
+
+    if (!showingDeleteError)
+    {
+        g_Game.InitScreen(GS_CHARACTER);
+    }
 
     int numSlots = ReadInt8();
-    if (*Start == 0x86)
+    if (refresh)
     {
         Info(Network, "resend chars");
     }
@@ -979,12 +1004,12 @@ PACKET_HANDLER(ResendCharacterList)
         }
     }
 
-    if (*Start == 0x86)
+    if (refresh)
     {
         g_CharacterListScreen.UpdateContent();
     }
 
-    if (!haveCharacter)
+    if (!haveCharacter && !showingDeleteError)
     {
         g_Game.InitScreen(GS_PROFESSION_SELECT);
     }
@@ -1231,12 +1256,16 @@ PACKET_HANDLER(UpdateHitpoints)
         return;
     }
 
+#if defined(XUO_ASSISTANT)
+    const auto previous = xuoassist::ItemCounters_MobileStats(*obj);
+#endif
     obj->MaxHits = ReadUInt16BE();
     obj->Hits = ReadUInt16BE();
 
     g_GumpManager.UpdateContent(serial, 0, GT_STATUSBAR);
     g_GumpManager.UpdateContent(serial, 0, GT_TARGET_SYSTEM);
 #if defined(XUO_ASSISTANT)
+    xuoassist::ItemCounters_OnMobileStats(*obj, previous);
     if (serial == g_PlayerSerial)
     {
         xuoassist::g_AssistantEvents->OnTitleRedraw();
@@ -1260,10 +1289,14 @@ PACKET_HANDLER(UpdateMana)
         return;
     }
 
+#if defined(XUO_ASSISTANT)
+    const auto previous = xuoassist::ItemCounters_MobileStats(*obj);
+#endif
     obj->MaxMana = ReadUInt16BE();
     obj->Mana = ReadUInt16BE();
     g_GumpManager.UpdateContent(serial, 0, GT_STATUSBAR);
 #if defined(XUO_ASSISTANT)
+    xuoassist::ItemCounters_OnMobileStats(*obj, previous);
     if (serial == g_PlayerSerial)
     {
         xuoassist::g_AssistantEvents->OnTitleRedraw();
@@ -1287,10 +1320,14 @@ PACKET_HANDLER(UpdateStamina)
         return;
     }
 
+#if defined(XUO_ASSISTANT)
+    const auto previous = xuoassist::ItemCounters_MobileStats(*obj);
+#endif
     obj->MaxStam = ReadUInt16BE();
     obj->Stam = ReadUInt16BE();
     g_GumpManager.UpdateContent(serial, 0, GT_STATUSBAR);
 #if defined(XUO_ASSISTANT)
+    xuoassist::ItemCounters_OnMobileStats(*obj, previous);
     if (serial == g_PlayerSerial)
     {
         xuoassist::g_AssistantEvents->OnTitleRedraw();
@@ -1315,18 +1352,20 @@ PACKET_HANDLER(MobileAttributes)
         return;
     }
 
+#if defined(XUO_ASSISTANT)
+    const auto previous = xuoassist::ItemCounters_MobileStats(*obj);
+#endif
     obj->MaxHits = ReadUInt16BE();
     obj->Hits = ReadUInt16BE();
-
     obj->MaxMana = ReadUInt16BE();
     obj->Mana = ReadUInt16BE();
-
     obj->MaxStam = ReadUInt16BE();
     obj->Stam = ReadUInt16BE();
 
     g_GumpManager.UpdateContent(serial, 0, GT_STATUSBAR);
     g_GumpManager.UpdateContent(serial, 0, GT_TARGET_SYSTEM);
 #if defined(XUO_ASSISTANT)
+    xuoassist::ItemCounters_OnMobileStats(*obj, previous);
     if (serial == g_PlayerSerial)
     {
         xuoassist::g_AssistantEvents->OnTitleRedraw();
@@ -1507,6 +1546,9 @@ PACKET_HANDLER(CharacterStatus)
     auto name = ReadString(30);
     obj->SetName(name);
 
+#if defined(XUO_ASSISTANT)
+    const auto previous = xuoassist::ItemCounters_MobileStats(*obj);
+#endif
     obj->Hits = ReadUInt16BE();
     obj->MaxHits = ReadUInt16BE();
     obj->CanChangeName = (ReadUInt8() != 0);
@@ -1658,6 +1700,7 @@ PACKET_HANDLER(CharacterStatus)
     g_GumpManager.UpdateContent(serial, 0, GT_STATUSBAR);
     g_GumpManager.UpdateContent(serial, 0, GT_TARGET_SYSTEM);
 #if defined(XUO_ASSISTANT)
+    xuoassist::ItemCounters_OnMobileStats(*obj, previous);
     xuoassist::g_AssistantEvents->OnMapUpdate(serial);
     if (flag > 0 && serial == g_PlayerSerial)
     {
@@ -2078,7 +2121,7 @@ PACKET_HANDLER(EquipItem)
     {
         obj->Clear();
     }
-    else if (layer < OL_MOUNT)
+    else if (layer < OL_MOUNT || IsExtendedJewelryLayer(layer))
     {
         g_GumpManager.UpdateContent(containerSerial, 0, GT_PAPERDOLL);
     }
@@ -2239,6 +2282,10 @@ PACKET_HANDLER(UpdateContainedItems)
 
 PACKET_HANDLER(DenyMoveItem)
 {
+#if defined(XUO_ASSISTANT)
+    xuoassist::InventoryAgent_OnMoveRejected();
+    xuoassist::PotionHands_OnMoveRejected();
+#endif
     if (g_World == nullptr)
     {
         return;
@@ -2370,6 +2417,9 @@ void CPacketManager::DeleteObject(uint32_t serial)
         return;
     }
 
+#if defined(XUO_ASSISTANT)
+    xuoassist::InventoryAgent_ForgetProperties(serial);
+#endif
     CGameObject *obj = g_World->FindWorldObject(serial);
     if (obj != nullptr)
     {
@@ -3100,6 +3150,9 @@ PACKET_HANDLER(OpenContainer)
     CGump *gump = nullptr;
     if (gumpid == 0xFFFF) //Spellbook
     {
+#if defined(XUO_ASSISTANT)
+        xuoassist::ItemCounters_MarkNonBag(serial);
+#endif
         int gameWindowCenterX =
             (g_ConfigManager.GameWindowX - 4) + g_ConfigManager.GameWindowWidth / 2;
         int gameWindowCenterY =
@@ -3293,6 +3346,7 @@ PACKET_HANDLER(OpenContainer)
 
     if (gumpid != 0x0030)
     {
+        bool appliedSavedState = false;
         if (static_cast<unsigned int>(!g_ContainerStack.empty()) != 0u)
         {
             for (auto cont = g_ContainerStack.begin(); cont != g_ContainerStack.end(); ++cont)
@@ -3319,14 +3373,32 @@ PACKET_HANDLER(OpenContainer)
                     }
 
                     g_ContainerStack.erase(cont);
+                    appliedSavedState = true;
 
                     break;
                 }
             }
 
-            if (g_CheckContainerStackTimer < g_Ticks)
+            if (g_UseItemActions.Empty() && g_CheckContainerStackTimer < g_Ticks)
             {
                 g_ContainerStack.clear();
+            }
+        }
+
+        if (!appliedSavedState && gumpid != 0x0009)
+        {
+            if (const auto *saved = FindSavedContainerPosition(serial))
+            {
+                gump->SetX(saved->X);
+                gump->SetY(saved->Y);
+                gump->MinimizedX = saved->MinimizedX;
+                gump->MinimizedY = saved->MinimizedY;
+                gump->LockMoving = saved->LockMoving;
+                if (gumpid != 0xFFFF)
+                {
+                    gump->Minimized = false;
+                    gump->Page = 2;
+                }
             }
         }
 
@@ -4063,11 +4135,12 @@ PACKET_HANDLER(ExtendedCommand)
             Move(1);
             uint32_t serial = ReadUInt32BE();
             CGameCharacter *character = g_World->FindWorldCharacter(serial);
-
+            const int damage = ReadUInt8();
+#if defined(XUO_ASSISTANT)
+            xuoassist::DamageMeter_OnDamage(serial, character != nullptr ? character->GetName() : astr_t{}, damage);
+#endif
             if (character != nullptr)
             {
-                int damage = ReadUInt8();
-
                 CTextData *text = new CTextData();
                 text->Unicode = false;
                 text->Font = 3;
@@ -4352,10 +4425,20 @@ void CPacketManager::DisplayTalkTextA(
 
     Info(Network, "%s: %s", name.c_str(), text.c_str());
 
-    if (type == ST_BROADCAST || /*type == ST_SYSTEM ||*/ serial == 0xFFFFFFFF || serial == 0u ||
-        (str_lower(name) == "system" && obj == nullptr))
+    const bool system = type == ST_BROADCAST || serial == 0xFFFFFFFF || serial == 0u ||
+        (str_lower(name) == "system" && obj == nullptr);
+    bool show = true;
+#if defined(XUO_ASSISTANT)
+    show = !g_Config.AssistantEnabled ||
+        xuoassist::GameplayFilters_AllowSpeech(
+            serial, system, false, obj != nullptr && obj->NPC, wstr_from(text));
+#endif
+    if (system)
     {
-        g_Game.CreateTextMessage(TT_SYSTEM, serial, (uint8_t)font, color, text);
+        if (show)
+        {
+            g_Game.CreateTextMessage(TT_SYSTEM, serial, (uint8_t)font, color, text);
+        }
     }
     else
     {
@@ -4388,7 +4471,10 @@ void CPacketManager::DisplayTalkTextA(
             }
         }
 
-        g_Game.CreateTextMessage(TT_OBJECT, serial, (uint8_t)font, color, text);
+        if (show)
+        {
+            g_Game.CreateTextMessage(TT_OBJECT, serial, (uint8_t)font, color, text);
+        }
     }
 }
 
@@ -4415,11 +4501,20 @@ void CPacketManager::DisplayTalkTextW(
         text = L"[Alliance][" + wstr_from(name) + L"]: " + text;
     }
 
-    if (type == ST_BROADCAST /*|| type == ST_SYSTEM*/ || serial == 0xFFFFFFFF || (serial == 0u) ||
-        (str_lower(name) == "system" && obj == nullptr))
+    const bool system = type == ST_BROADCAST || serial == 0xFFFFFFFF || serial == 0u ||
+        (str_lower(name) == "system" && obj == nullptr);
+    bool show = true;
+#if defined(XUO_ASSISTANT)
+    show = xuoassist::GameplayFilters_AllowSpeech(
+        serial, system, name == "X:UO Assist", obj != nullptr && obj->NPC, text);
+#endif
+    if (system)
     {
         const uint8_t speechFont = uint8_t(g_ConfigManager.SpeechFont);
-        g_Game.CreateUnicodeTextMessage(TT_SYSTEM, serial, speechFont, color, text);
+        if (show)
+        {
+            g_Game.CreateUnicodeTextMessage(TT_SYSTEM, serial, speechFont, color, text);
+        }
     }
     else
     {
@@ -4453,7 +4548,10 @@ void CPacketManager::DisplayTalkTextW(
         }
 
         const uint8_t speechFont = uint8_t(g_ConfigManager.SpeechFont);
-        g_Game.CreateUnicodeTextMessage(TT_OBJECT, serial, speechFont, color, text);
+        if (show)
+        {
+            g_Game.CreateUnicodeTextMessage(TT_OBJECT, serial, speechFont, color, text);
+        }
     }
 }
 
@@ -5029,7 +5127,9 @@ void CPacketManager::PlaySoundEffect(
             xuoassist::g_AssistantEvents->OnJournalMessage(message);
         }
 
-        if (xuoassist::g_AssistantConfig.CheckSoundInFilter(index))
+        const bool blocked = xuoassist::g_AssistantConfig.CheckSoundInFilter(index);
+        xuoassist::GameplayFilters_ReportSound(index, blocked);
+        if (blocked)
         {
             return;
         }
@@ -5311,6 +5411,15 @@ PACKET_HANDLER(CharacterAnimation)
         // applied later, during group resolution
         if (obj->Container == 0)
         {
+            if (!repeat && repeatMode == CGameCharacter::OffHandSwingRepeatMode)
+            {
+                if (auto *weapon = obj->GetOffHandWeapon())
+                {
+                    obj->StartOffHandSwing(weapon, uint8_t(action), frameCount);
+                    return;
+                }
+            }
+
             obj->SetAnimation(uint8_t(action), delay, frameCount, repeatMode, repeat, forward, repeat);
             obj->AnimationFromServer = true;
         }
@@ -5367,9 +5476,26 @@ PACKET_HANDLER(ClientViewRange)
 
 PACKET_HANDLER(KrriosClientSpecial)
 {
+    uint8_t *end = Start + Size;
+    if (end - Ptr < 1)
+    {
+        return;
+    }
+
     uint8_t type = ReadUInt8();
     if (type == 0xFE)
     {
+        // ModernUO/RunUO assistant negotiation over 0xF0 0xFE carries the
+        // 8-byte disallowed-assistant-features bitmask (high dword first).
+        if (end - Ptr >= 8)
+        {
+            g_ServerAssistantFeatures = (uint64_t(ReadUInt32BE()) << 32) | ReadUInt32BE();
+            Info(
+                Network,
+                "assistant negotiate: server disallowed features 0x%08x%08x",
+                uint32_t(g_ServerAssistantFeatures >> 32),
+                uint32_t(g_ServerAssistantFeatures));
+        }
         // reply after 5s delay for Razor ACK
         g_RazorNegotiateTimer = g_Ticks + 5000;
     }
@@ -5378,17 +5504,62 @@ PACKET_HANDLER(KrriosClientSpecial)
         // accepted
         Info(Network, "KrriosClientSpecial accepted");
     }
-    else if (type == 0x01 || type == 0x02)
+    else if (type == 0x01)
     {
-        const bool locations = type == 0x01 ? ReadUInt8() : 0u;
-        const int bytesPerEntry = locations != 0u ? 4 + 6 : 4;
-        const int count = int(Size - 4) / bytesPerEntry;
-        for (int i = 0; i < count; i++)
+        // MapUO party member locations: repeated (serial, x, y, map) terminated by serial == 0.
+        while (end - Ptr >= 4)
         {
             const auto serial = ReadUInt32BE();
+            if (serial == 0u || end - Ptr < 5)
+            {
+                break;
+            }
             const auto x = ReadUInt16BE();
             const auto y = ReadUInt16BE();
             const auto map = ReadUInt8();
+#if defined(XUO_ASSISTANT)
+            xuoassist::XA_PARTY_MEMBER_INFO info;
+            info.Serial = serial;
+            info.X = x;
+            info.Y = y;
+            info.Map = map;
+            xuoassist::g_AssistantEvents->OnPartyMemberInfo(info);
+#else
+            (void)x;
+            (void)y;
+            (void)map;
+#endif
+        }
+    }
+    else if (type == 0x02)
+    {
+        // MapUO guild member locations: 1-byte sendLocations flag, then repeated entries
+        // terminated by serial == 0. When sendLocations is set, each entry carries
+        // (serial, x, y, map, hitsPercent); otherwise serial only.
+        if (end - Ptr < 1)
+        {
+            return;
+        }
+        const bool locations = (ReadUInt8() != 0u);
+        while (end - Ptr >= 4)
+        {
+            const auto serial = ReadUInt32BE();
+            if (serial == 0u)
+            {
+                break;
+            }
+            if (!locations)
+            {
+                continue;
+            }
+            if (end - Ptr < 6)
+            {
+                break;
+            }
+            const auto x = ReadUInt16BE();
+            const auto y = ReadUInt16BE();
+            const auto map = ReadUInt8();
+            (void)ReadUInt8(); // hits percent
 #if defined(XUO_ASSISTANT)
             xuoassist::XA_GUILD_MEMBER_INFO info;
             info.Serial = serial;
@@ -5396,6 +5567,10 @@ PACKET_HANDLER(KrriosClientSpecial)
             info.Y = y;
             info.Map = map;
             xuoassist::g_AssistantEvents->OnGuildMemberInfo(info);
+#else
+            (void)x;
+            (void)y;
+            (void)map;
 #endif
         }
     }
@@ -5628,12 +5803,16 @@ PACKET_HANDLER(DisplayClilocString)
     if (serial == 0xFFFFFFFF || (serial == 0u) || (str_lower(name) == "system" && obj == nullptr))
     {
         journal.Flags = xuoassist::JMT_SYSTEM;
+        xuoassist::BandageHeal_OnCliloc(cliloc);
+        xuoassist::PotionHands_OnCliloc(cliloc);
     }
     else if (obj != nullptr)
     {
         if (serial == g_PlayerSerial)
         {
             journal.Flags = xuoassist::JMT_MY;
+            xuoassist::BandageHeal_OnCliloc(cliloc);
+            xuoassist::PotionHands_OnCliloc(cliloc);
         }
         else if (obj->GetName() == name && textA != name)
         {
@@ -5694,7 +5873,7 @@ PACKET_HANDLER(DisplayClilocString)
 
 PACKET_HANDLER(MegaCliloc)
 {
-    if (g_World == nullptr)
+    if (g_World == nullptr || Start + Size - Ptr < 12)
     {
         return;
     }
@@ -5711,22 +5890,33 @@ PACKET_HANDLER(MegaCliloc)
 
     uint8_t *end = Start + Size;
     std::vector<wstr_t> list;
-    while (Ptr < end)
+#if defined(XUO_ASSISTANT)
+    std::vector<std::pair<uint32_t, wstr_t>> properties;
+#endif
+    bool terminated = false;
+    while (end - Ptr >= 4)
     {
-        uint32_t cliloc = ReadUInt32BE();
-        if (cliloc == 0u)
+        const uint32_t cliloc = ReadUInt32BE();
+        if (cliloc == 0)
         {
+            terminated = (Ptr == end);
             break;
         }
-
-        const int len = ReadInt16BE();
-        wstr_t argument;
-        if (len > 0)
+        if (end - Ptr < 2)
         {
-            argument = ReadWStringLE(len / 2);
+            return;
         }
-
-        DEBUG(Network, "Cliloc: 0x%08X len=%i arg=%s", cliloc, len, str_from(argument).c_str());
+        const auto length = ReadUInt16BE();
+        if ((length & 1) != 0 || end - Ptr < length)
+        {
+            return;
+        }
+        const auto argument = length != 0 ? ReadWStringLE(length / 2) : wstr_t{};
+#if defined(XUO_ASSISTANT)
+        properties.emplace_back(cliloc, argument);
+#endif
+        DEBUG(Network, "Cliloc: 0x%08X len=%i arg=%s", cliloc,
+            static_cast<int>(length), str_from(argument).c_str());
         auto str = g_ClilocManager.ParseArgumentsToClilocString(cliloc, true, argument);
         DEBUG(Network, "Cliloc: argstr=%s", str_from(str).c_str());
 
@@ -5745,6 +5935,15 @@ PACKET_HANDLER(MegaCliloc)
             list.push_back(str);
         }
     }
+
+    if (!terminated)
+    {
+        return;
+    }
+#if defined(XUO_ASSISTANT)
+    xuoassist::InventoryAgent_OnPropertyList(serial, clilocRevision, properties);
+    xuoassist::PotionHands_OnPropertyList(serial, clilocRevision, properties);
+#endif
 
     CGameItem *container = nullptr;
     CGameObject *obj = g_World->FindWorldObject(serial);
@@ -5859,13 +6058,17 @@ PACKET_HANDLER(Damage)
 
     uint32_t serial = ReadUInt32BE();
     CGameCharacter *character = g_World->FindWorldCharacter(serial);
-
+    const int damage = ReadUInt16BE();
+#if defined(XUO_ASSISTANT)
+    xuoassist::DamageMeter_OnDamage(serial, character != nullptr ? character->GetName() : astr_t{}, damage);
+#endif
     if (character != nullptr)
     {
-        int damage = ReadUInt16BE();
-
         if (damage != 0) // no overhead text for zero damage
         {
+#if defined(XUO_ASSISTANT)
+            xuoassist::ItemCounters_OnDamage(*character, damage);
+#endif
             CTextData *text = new CTextData();
             text->Unicode = false;
             text->Font = 3;
@@ -6041,6 +6244,7 @@ PACKET_HANDLER(BuffDebuff)
 #if defined(XUO_ASSISTANT)
         if (_serial == g_PlayerSerial)
         {
+            xuoassist::BandageHeal_OnBuff(iconID + buffIconStart, mode != 0u, timer);
             // the script-visible buff mirror
             if (mode != 0u)
             {
@@ -7896,15 +8100,14 @@ PACKET_HANDLER(Logout)
 
 PACKET_HANDLER(OPLInfo)
 {
-    if (g_TooltipsEnabled)
+    const uint32_t serial = ReadUInt32BE();
+    const uint32_t revision = ReadUInt32BE();
+#if defined(XUO_ASSISTANT)
+    xuoassist::InventoryAgent_OnPropertyRevision(serial, revision);
+#endif
+    if (g_TooltipsEnabled && !g_ObjectPropertiesManager.RevisionCheck(serial, revision))
     {
-        uint32_t serial = ReadUInt32BE();
-        uint32_t revision = ReadUInt32BE();
-
-        if (!g_ObjectPropertiesManager.RevisionCheck(serial, revision))
-        {
-            AddMegaClilocRequest(serial);
-        }
+        AddMegaClilocRequest(serial);
     }
 }
 

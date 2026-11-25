@@ -578,6 +578,8 @@ void TabShop_Draw()
     ImGui::Separator();
 
     // Buy / Sell with the Auto switches (cb_AutoBuy/SellSelectedList)
+    const bool haveList = s_SelectedList >= 0 && s_SelectedList < (int)lists.size();
+    g_ShopAgent.SetAutoShopListName(haveList ? lists[s_SelectedList].Name : astr_t{});
     bool autoBuy = g_ShopAgent.AutoBuy();
     if (ImGui::Checkbox("Auto##buy", &autoBuy))
     {
@@ -598,7 +600,6 @@ void TabShop_Draw()
         ImGui::SetTooltip("Automatically sell selected shop list.");
     }
 
-    const bool haveList = s_SelectedList >= 0 && s_SelectedList < (int)lists.size();
     ImGui::BeginDisabled(!haveList);
     if (ImGui::Button("Buy"))
     {
@@ -614,6 +615,30 @@ void TabShop_Draw()
         g_ShopAgent.Sell(lists[s_SelectedList].Name);
     }
     ImGui::EndDisabled();
+
+    bool restrictSell = g_ShopAgent.SellHotBagEnabled();
+    if (ImGui::Checkbox("Restrict agent sales to a bag", &restrictSell))
+    {
+        g_ShopAgent.SetSellHotBagEnabled(restrictSell);
+    }
+    if (restrictSell)
+    {
+        if (ImGui::Button("Select sell bag"))
+        {
+            g_ShopAgent.RequestSellHotBag();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear sell bag"))
+        {
+            g_ShopAgent.ClearSellHotBag();
+        }
+        ImGui::TextUnformatted(g_ShopAgent.SellHotBagLabel().c_str());
+        ImGui::TextDisabled("Open the bag and any inner bags you want to sell from.");
+    }
+    if (!g_ShopAgent.SellHotBagStatus().empty())
+    {
+        ImGui::TextWrapped("%s", g_ShopAgent.SellHotBagStatus().c_str());
+    }
 
     ImGui::Separator();
 

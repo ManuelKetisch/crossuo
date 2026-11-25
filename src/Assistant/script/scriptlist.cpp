@@ -6,6 +6,8 @@
 
 #include "scriptlist.h"
 
+#include <algorithm>
+
 #define LOGGER_MODULE Assistant
 
 #include <common/logging/logging.h>
@@ -211,6 +213,19 @@ void CLoadedScriptList::Clear()
 {
     m_Scripts.clear();
     m_PendingRestore.clear();
+}
+
+vector<astr_t> CLoadedScriptList::ScriptsForSave() const
+{
+    auto paths = m_PendingRestore;
+    for (const auto &script : m_Scripts)
+    {
+        if (std::find(paths.begin(), paths.end(), script.Path) == paths.end())
+        {
+            paths.push_back(script.Path);
+        }
+    }
+    return paths;
 }
 
 void CLoadedScriptList::SetPendingRestore(const vector<astr_t> &paths)

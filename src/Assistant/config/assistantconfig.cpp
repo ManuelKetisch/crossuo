@@ -7,12 +7,25 @@
 
 #include "assistantconfig.h"
 #include <algorithm>
+#include <chrono>
+#include <iterator>
 #include <string.h>
+
+#if defined(_WIN32)
+#include <direct.h>
+#include <windows.h>
+#else
+#include <cerrno>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <common/fs.h>
 #include <common/logging/logging.h>
 #include <common/str.h> // wstr_from
 
+#include "../AssistantWindow_rules.h"
 #include "../core/assist.h"
 #include "../script/scriptlist.h"
 #include "../macros/macro.h"
@@ -44,17 +57,259 @@ static astr_t to_lower(astr_t text)
 {
     for (char &c : text)
     {
-        c = (char)tolower(c);
+        c = (char)tolower((unsigned char)c);
     }
     return text;
 }
 
-static astr_t fs_entry_name(const fs_path &path)
+namespace {
+
+struct ProfileEntry
 {
-    const astr_t full = fs_path_str(path);
-    const size_t slash = full.find_last_of('/');
-    return (slash == astr_t::npos) ? full : full.substr(slash + 1);
+    astr_t Name;
+    fs_type Type;
+};
+
+bool list_profile_directory(const fs_path &parent, std::vector<ProfileEntry> &entries)
+{
+#if defined(_WIN32)
+    WIN32_FIND_DATAW file;
+    const auto glob = fs_path_wstr(parent) + L"\\*";
+    HANDLE scan = FindFirstFileW(glob.c_str(), &file);
+    if (scan == INVALID_HANDLE_VALUE)
+    {
+        return GetLastError() == ERROR_FILE_NOT_FOUND;
+    }
+    do
+    {
+        const auto name = fs_path_str(fs_path_from(file.cFileName));
+        if (name != "." && name != "..")
+        {
+            const DWORD attrs = file.dwFileAttributes;
+            const auto type = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ? FS_ERROR :
+                (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 ? FS_DIR : FS_FILE;
+            entries.push_back({ name, type });
+        }
+    } while (FindNextFileW(scan, &file));
+    const bool complete = GetLastError() == ERROR_NO_MORE_FILES;
+    FindClose(scan);
+    return complete;
+#else
+    DIR *scan = opendir(fs_path_ascii(parent));
+    if (scan == nullptr)
+    {
+        return false;
+    }
+    bool complete = true;
+    for (;;)
+    {
+        errno = 0;
+        const auto *entry = readdir(scan);
+        if (entry == nullptr)
+        {
+            complete = errno == 0;
+            break;
+        }
+        const astr_t name = entry->d_name;
+        if (name != "." && name != "..")
+        {
+            struct stat info = {};
+            const auto path = fs_path_join(parent, name);
+            const auto type = lstat(fs_path_ascii(path), &info) != 0 ? FS_ERROR :
+                S_ISDIR(info.st_mode) ? FS_DIR : S_ISREG(info.st_mode) ? FS_FILE : FS_ERROR;
+            entries.push_back({ name, type });
+        }
+    }
+    closedir(scan);
+    return complete;
+#endif
 }
+
+bool make_profile_directory(const fs_path &path)
+{
+#if defined(_WIN32)
+    return _wmkdir(fs_path_wstr(path).c_str()) == 0;
+#else
+    return mkdir(fs_path_ascii(path), 0777) == 0;
+#endif
+}
+
+void remove_staged_profile(const fs_path &path)
+{
+    std::vector<ProfileEntry> entries;
+    if (list_profile_directory(path, entries))
+    {
+        for (const auto &entry : entries)
+        {
+            const auto child = fs_path_join(path, entry.Name);
+            if (entry.Type == FS_DIR)
+            {
+                remove_staged_profile(child);
+            }
+            else
+            {
+                fs_del(child);
+            }
+        }
+    }
+#if defined(_WIN32)
+    _wrmdir(fs_path_wstr(path).c_str());
+#else
+    rmdir(fs_path_ascii(path));
+#endif
+}
+
+bool move_profile_directory(const fs_path &from, const fs_path &to)
+{
+#if defined(_WIN32)
+    return MoveFileW(fs_path_wstr(from).c_str(), fs_path_wstr(to).c_str()) != 0;
+#else
+    return !fs_path_exists(to) && rename(fs_path_ascii(from), fs_path_ascii(to)) == 0;
+#endif
+}
+
+astr_t make_profile_staging_directory(const fs_path &parent, const astr_t &prefix)
+{
+    const auto stamp = std::chrono::system_clock::now().time_since_epoch().count();
+    for (int attempt = 0; attempt < 10; ++attempt)
+    {
+        const auto name = prefix + std::to_string(stamp) + "-" + std::to_string(attempt);
+        if (make_profile_directory(fs_path_join(parent, name)))
+        {
+            return name;
+        }
+    }
+    return {};
+}
+
+bool clone_profile_files(const fs_path &source, const fs_path &destination)
+{
+    std::vector<ProfileEntry> entries;
+    if (!list_profile_directory(source, entries))
+    {
+        return false;
+    }
+    for (const auto &entry : entries)
+    {
+        const auto from = fs_path_join(source, entry.Name);
+        const auto to = fs_path_join(destination, entry.Name);
+        if (entry.Type == FS_DIR)
+        {
+            if (!make_profile_directory(to) || !clone_profile_files(from, to))
+            {
+                return false;
+            }
+        }
+        else if (entry.Type != FS_FILE || !fs_copy(from, to))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool rebase_profile_scripts(const fs_path &source, const fs_path &destination, const fs_path &staging)
+{
+    const auto sourceRoot = ScriptList_NormalizePath(fs_path_str(source));
+    const auto destinationRoot = fs_path_str(destination);
+    const auto rebase = [&](astr_t &value) {
+        if (value.empty())
+        {
+            return false;
+        }
+        const auto normalized = ScriptList_NormalizePath(value);
+        if (normalized == sourceRoot)
+        {
+            value = destinationRoot;
+            return true;
+        }
+        if (normalized.compare(0, sourceRoot.size() + 1, sourceRoot + "/") == 0)
+        {
+            value = destinationRoot + normalized.substr(sourceRoot.size());
+            return true;
+        }
+        return false;
+    };
+
+    const auto optionsPath = fs_path_join(staging, "Options.ini");
+    CIniFile options;
+    if (!options.Load(optionsPath))
+    {
+        return false;
+    }
+    auto scripts = options.Sections.find("scripts");
+    if (scripts != options.Sections.end())
+    {
+        bool changed = false;
+        for (auto &setting : scripts->second)
+        {
+            if (setting.first == "lastdir" || setting.first == "scriptfile" ||
+                (setting.first != "loadedscripts" && setting.first.compare(0, 12, "loadedscript") == 0))
+            {
+                changed = rebase(setting.second) || changed;
+            }
+        }
+        if (changed && !options.Save(optionsPath))
+        {
+            return false;
+        }
+    }
+
+    const auto hotkeysPath = fs_path_join(staging, "Hotkeys.ini");
+    CIniFile hotkeys;
+    if (!hotkeys.Load(hotkeysPath))
+    {
+        return false;
+    }
+    bool changed = false;
+    for (auto &section : hotkeys.Sections)
+    {
+        if (hotkeys.GetInt(section.first, "type", -1) == HT_SCRIPT)
+        {
+            auto name = section.second.find("name");
+            if (name != section.second.end())
+            {
+                changed = rebase(name->second) || changed;
+            }
+        }
+    }
+    return !changed || hotkeys.Save(hotkeysPath);
+}
+
+bool valid_new_profile_name(const astr_t &name)
+{
+    if (name.empty() || name.size() > 63 || name.front() == ' ' || name.back() == ' ' ||
+        name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-") != astr_t::npos)
+    {
+        return false;
+    }
+    const auto lower = to_lower(name);
+    // A serial-looking profile is auto-assigned by older clients. Keep new names independent.
+    if (lower.compare(0, 2, "0x") == 0)
+    {
+        return false;
+    }
+    const char *reserved[] = { "con", "prn", "aux", "nul",
+        "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+        "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9" };
+    return std::find(std::begin(reserved), std::end(reserved), lower) == std::end(reserved);
+}
+
+bool write_profile_map(const fs_path &path, const std::map<uint32_t, astr_t> &assignments)
+{
+    CIniFile ini;
+    int index = 0;
+    for (const auto &assignment : assignments)
+    {
+        const auto section = ini_section("Profile", index++);
+        ini.Set(section, "serial", CAssistant::SerialToText(assignment.first));
+        ini.Set(section, "file", assignment.second);
+    }
+    ini.SetInt(INI_META, "count", index);
+    return ini.Save(path);
+}
+
+} // namespace
 
 CMacroEntry::~CMacroEntry()
 {
@@ -141,46 +396,215 @@ void CAssistantConfig::EnsureDirectories() const
 
 void CAssistantConfig::ScanProfiles()
 {
-    // Was the AssistForm::Init profile scan: every
-    // non-hidden subdirectory of Config/ is a profile; serial-looking names
-    // ("0x...") feed the profile map.
+    // Only immediate directories are profiles. The generic file scanner
+    // returns files recursively and cannot discover these directories.
     m_Profiles.clear();
-    LoadProfileMap();
-
-    fs_path configDir = GetConfigPath();
-    std::vector<fs_path> entries;
-    fs_path_list(configDir, entries);
+    const bool mapReadable = LoadProfileMap();
+    std::vector<ProfileEntry> entries;
+    list_profile_directory(GetConfigPath(), entries);
 
     bool profileAdded = false;
-    for (const fs_path &entry : entries)
+    for (const auto &entry : entries)
     {
-        if (!fs_path_is_dir(entry))
-        {
-            continue;
-        }
-        const astr_t name = fs_entry_name(entry);
-        if (name.empty() || name[0] == '.')
+        const auto &name = entry.Name;
+        if (entry.Type != FS_DIR || name.empty() || name.front() == '.')
         {
             continue;
         }
         m_Profiles.push_back(name);
-        if (name.size() > 2 && name[0] == '0' && name[1] == 'x')
+        if (mapReadable && name.size() > 2 && name[0] == '0' && name[1] == 'x')
         {
             const uint32_t serial = CAssistant::TextToSerial(name);
             if (serial != 0u && m_ProfileMap.find(serial) == m_ProfileMap.end())
             {
-                m_ProfileMap.insert(std::make_pair(serial, name));
+                m_ProfileMap.emplace(serial, name);
                 profileAdded = true;
             }
         }
     }
-
     std::sort(m_Profiles.begin(), m_Profiles.end());
-
     if (profileAdded)
     {
-        SaveProfileMap();
+        fs_path_create(GetGlobalConfigPath());
+        write_profile_map(fs_path_join(GetGlobalConfigPath(), "Profiles.ini"), m_ProfileMap);
     }
+}
+
+bool CAssistantConfig::ActivateProfile(const astr_t &name)
+{
+    if (!LoadProfileMap())
+    {
+        return false;
+    }
+    if (g_Connected && g_Player != nullptr)
+    {
+        auto assignments = m_ProfileMap;
+        assignments[g_PlayerSerial] = name;
+        if (!write_profile_map(fs_path_join(GetGlobalConfigPath(), "Profiles.ini"), assignments))
+        {
+            return false;
+        }
+        m_ProfileMap = std::move(assignments);
+    }
+    SetCurrentProfile(name);
+    return LoadProfile();
+}
+
+bool CAssistantConfig::SwitchProfile(const astr_t &name)
+{
+    if (name == ProfileName)
+    {
+        return true;
+    }
+    const auto path = fs_path_join(GetConfigPath(), name);
+    if (std::find(m_Profiles.begin(), m_Profiles.end(), name) == m_Profiles.end() ||
+        !fs_path_exists(path) || !fs_path_is_dir(path))
+    {
+        return false;
+    }
+    return SaveProfile() && ActivateProfile(name);
+}
+
+bool CAssistantConfig::CreateProfile(const astr_t &name, bool clone)
+{
+    return SaveProfile() && BuildProfile(name, clone) &&
+        ActivateProfile(name);
+}
+
+bool CAssistantConfig::CreateImportedProfile(const astr_t &name,
+    const std::function<bool(CAssistantConfig &)> &populate)
+{
+    return populate && BuildProfile(name, false, populate);
+}
+
+bool CAssistantConfig::BuildProfile(const astr_t &name, bool clone,
+    const std::function<bool(CAssistantConfig &)> &populate)
+{
+    if (!valid_new_profile_name(name))
+    {
+        return false;
+    }
+    ScanProfiles();
+    for (const auto &profile : m_Profiles)
+    {
+        if (to_lower(profile) == to_lower(name))
+        {
+            return false;
+        }
+    }
+    const auto root = GetConfigPath();
+    const auto destination = fs_path_join(root, name);
+    const auto stagingName = make_profile_staging_directory(root, ".profile-");
+    if (stagingName.empty())
+    {
+        return false;
+    }
+    const auto staging = fs_path_join(root, stagingName);
+    bool ready = false;
+    if (clone)
+    {
+        const auto source = GetProfilePath();
+        ready = clone_profile_files(source, staging) &&
+            rebase_profile_scripts(source, destination, staging);
+    }
+    else
+    {
+        CAssistantConfig fresh;
+        fresh.ProfileName = stagingName;
+        CIniFile objects;
+        objects.SetInt(INI_META, "count", 0);
+        objects.Set(INI_META, "dressbag", "0");
+        ready = fresh.SaveMainOptions(false) && objects.Save(fs_path_join(staging, "Objects.ini")) &&
+            fresh.SaveDress() && fresh.SaveHotkeys() && fresh.SaveParty() &&
+            fresh.SaveFriends() && fresh.SaveEnemies() && fresh.SaveMacros() &&
+            (!populate || populate(fresh));
+    }
+    if (!ready || !move_profile_directory(staging, destination))
+    {
+        remove_staged_profile(staging);
+        return false;
+    }
+    ScanProfiles();
+    return true;
+}
+
+bool CAssistantConfig::ArchiveCurrentProfile(astr_t &archivePath)
+{
+    ScanProfiles();
+    const auto source = ProfileName;
+    if (std::find(m_Profiles.begin(), m_Profiles.end(), source) == m_Profiles.end() ||
+        !SaveProfile() || !LoadProfileMap())
+    {
+        return false;
+    }
+
+    astr_t replacement;
+    for (const auto &profile : m_Profiles)
+    {
+        if (profile != source && (replacement.empty() || to_lower(profile) == "default"))
+        {
+            replacement = profile;
+        }
+    }
+    if (replacement.empty())
+    {
+        replacement = to_lower(source) == "default" ? "New Profile" : "Default";
+        if (!BuildProfile(replacement, false))
+        {
+            return false;
+        }
+    }
+
+    const auto archiveRoot = fs_path_join(GetRootPath(), "Profile Archives");
+    if (!make_profile_directory(archiveRoot) &&
+        (!fs_path_exists(archiveRoot) || !fs_path_is_dir(archiveRoot)))
+    {
+        return false;
+    }
+    const auto backupName = make_profile_staging_directory(archiveRoot, "Archive-");
+    if (backupName.empty())
+    {
+        return false;
+    }
+    const auto backup = fs_path_join(archiveRoot, backupName);
+    const auto target = fs_path_join(backup, source);
+    const auto mapPath = fs_path_join(GetGlobalConfigPath(), "Profiles.ini");
+    const auto previous = m_ProfileMap;
+    auto assignments = previous;
+    for (auto &assignment : assignments)
+    {
+        if (to_lower(assignment.second) == to_lower(source))
+        {
+            assignment.second = replacement;
+        }
+    }
+    if (g_Connected && g_Player != nullptr)
+    {
+        assignments[g_PlayerSerial] = replacement;
+    }
+
+    if (!write_profile_map(fs_path_join(backup, "Assignments.ini"), previous) ||
+        !write_profile_map(mapPath, assignments))
+    {
+        remove_staged_profile(backup);
+        return false;
+    }
+    if (!move_profile_directory(fs_path_join(GetConfigPath(), source), target))
+    {
+        if (!write_profile_map(mapPath, previous))
+        {
+            // Keep the original mapping receipt if restoring it also failed.
+            ScanProfiles();
+            ActivateProfile(replacement);
+            return false;
+        }
+        remove_staged_profile(backup);
+        return false;
+    }
+    ScanProfiles();
+    SetCurrentProfile(replacement);
+    archivePath = fs_path_str(target);
+    return LoadProfile();
 }
 
 void CAssistantConfig::SetCurrentProfile(const astr_t &name)
@@ -219,17 +643,18 @@ bool CAssistantConfig::LoadProfileBySerial(uint32_t serial)
     // only set the name, so nothing was ever restored from disk on login).
     // A serial without a mapping binds to the current profile and persists
     // the map, so the character restores it on its next login.
-    LoadProfileMap();
+    const bool mapReadable = LoadProfileMap();
     std::map<uint32_t, astr_t>::iterator it = m_ProfileMap.find(serial);
     if (it != m_ProfileMap.end())
     {
         SetCurrentProfile(it->second);
         Info(Assistant, "login serial 0x%08X -> profile '%s'\n", serial, it->second.c_str());
     }
-    else
+    else if (mapReadable)
     {
         m_ProfileMap[serial] = ProfileName;
-        SaveProfileMap();
+        EnsureDirectories();
+        write_profile_map(fs_path_join(GetGlobalConfigPath(), "Profiles.ini"), m_ProfileMap);
         Info(Assistant,
              "login serial 0x%08X unmapped, bound to profile '%s'\n",
              serial,
@@ -240,35 +665,33 @@ bool CAssistantConfig::LoadProfileBySerial(uint32_t serial)
 
 void CAssistantConfig::SaveProfileMap()
 {
-    // Was AssistForm::SaveProfileMap -> GlobalConfig/Profiles.ini.
+    // Merge the current character into the latest saved assignments.
+    if (!LoadProfileMap())
+    {
+        return;
+    }
     EnsureDirectories();
     if (g_Connected && g_Player != nullptr)
     {
         m_ProfileMap[g_PlayerSerial] = ProfileName;
     }
-
-    CIniFile ini;
-    int index = 0;
-    for (std::map<uint32_t, astr_t>::iterator i = m_ProfileMap.begin(); i != m_ProfileMap.end(); ++i)
-    {
-        const astr_t section = ini_section("Profile", index++);
-        ini.Set(section, "serial", CAssistant::SerialToText(i->first));
-        ini.Set(section, "file", i->second);
-    }
-    ini.SetInt(INI_META, "count", index);
-
-    ini.Save(fs_path_join(GetGlobalConfigPath(), "Profiles.ini"));
+    write_profile_map(fs_path_join(GetGlobalConfigPath(), "Profiles.ini"), m_ProfileMap);
 }
 
-void CAssistantConfig::LoadProfileMap()
+bool CAssistantConfig::LoadProfileMap()
 {
-    // Was AssistForm::LoadProfileMap.
-    m_ProfileMap.clear();
+    const auto path = fs_path_join(GetGlobalConfigPath(), "Profiles.ini");
     CIniFile ini;
-    if (!ini.Load(fs_path_join(GetGlobalConfigPath(), "Profiles.ini")))
+    if (!ini.Load(path))
     {
-        return;
+        if (fs_path_exists(path))
+        {
+            return false;
+        }
+        m_ProfileMap.clear();
+        return true;
     }
+    m_ProfileMap.clear();
     const int count = ini.GetInt(INI_META, "count", 0);
     for (int i = 0; i < count; i++)
     {
@@ -276,6 +699,7 @@ void CAssistantConfig::LoadProfileMap()
         const uint32_t serial = CAssistant::TextToSerial(ini.Get(section, "serial"));
         m_ProfileMap[serial] = ini.Get(section, "file");
     }
+    return true;
 }
 
 bool CAssistantConfig::LoadProfile()
@@ -339,17 +763,14 @@ bool CAssistantConfig::SaveProfile()
     }
 
     EnsureDirectories();
-    SaveMainOptions();
-    SaveObjects();
-    SaveHotkeys();
-    SaveDress();
-    SaveParty();
-    SaveFriends();
-    SaveEnemies();
-
-    Info(Assistant, "profile '%s' saved\n", ProfileName.c_str());
-    g_Assistant.ClientPrint("Configuration saved.");
-    return true;
+    const bool saved = SaveMainOptions() && SaveObjects() && SaveHotkeys() && SaveDress() &&
+        SaveParty() && SaveFriends() && SaveEnemies();
+    if (saved)
+    {
+        Info(Assistant, "profile '%s' saved\n", ProfileName.c_str());
+        g_Assistant.ClientPrint("Configuration saved.");
+    }
+    return saved;
 }
 
 // --- Options.ini -------------------------------------------------------------
@@ -406,6 +827,8 @@ void CAssistantConfig::LoadMainOptions()
 {
     // Was AssistForm::LoadCurrentProfile's Options.ini block dispatching into
     // TabMain/TabDisplay/TabHotkeys/TabScripts::LoadConfig.
+    m_WindowsOpacity = 100;
+    m_UiScale = AssistantUiScaleDefault;
     CIniFile ini;
     if (!ini.Load(fs_path_join(GetProfilePath(), "Options.ini")))
     {
@@ -458,7 +881,11 @@ void CAssistantConfig::LoadMainOptions()
     }
     if (ini.Has("main", "windowsopacity"))
     {
-        m_WindowsOpacity = ini.GetInt("main", "windowsopacity", 0);
+        m_WindowsOpacity = AssistantOverlay_SanitizeOpacity(ini.GetInt("main", "windowsopacity", 100));
+    }
+    if (ini.Has("main", "uiscale"))
+    {
+        m_UiScale = AssistantOverlay_ClampUiScale(ini.GetInt("main", "uiscale", AssistantUiScaleDefault));
     }
     if (ini.Has("main", "usefontcolor"))
     {
@@ -547,10 +974,11 @@ void CAssistantConfig::LoadMainOptions()
     }
     // the UI restores the list on its first draw (the config loads before the
     // assistant window exists; scriptlist.h owns the existence checks)
+    g_LoadedScripts.Clear();
     g_LoadedScripts.SetPendingRestore(m_LoadedScripts);
 }
 
-void CAssistantConfig::SaveMainOptions()
+bool CAssistantConfig::SaveMainOptions(bool includeScripts)
 {
     // Was AssistForm::SaveMainOptions: the main/display/hotkeys/scripts
     // records.
@@ -577,6 +1005,7 @@ void CAssistantConfig::SaveMainOptions()
     ini.SetInt("main", "moveitemsdelay", m_MoveItemsDelay);
     ini.SetInt("main", "useitemsdelay", m_UseItemsDelay);
     ini.SetInt("main", "windowsopacity", m_WindowsOpacity);
+    ini.SetInt("main", "uiscale", m_UiScale);
     ini.SetBool("main", "usefontcolor", m_UseFontColor);
     ini.Set("main", "fontcolor", m_FontColor);
     ini.SetBool("main", "usecharactersfontcolor", m_UseCharactersFontColor);
@@ -601,17 +1030,17 @@ void CAssistantConfig::SaveMainOptions()
         // entries there are (an indexed set alone cannot tell a shrinking
         // list from the previous file's tail, and the parser always wrote the
         // whole document back)
-        const vector<CLoadedScript> &scripts = g_LoadedScripts.Scripts();
+        const auto scripts = includeScripts ? g_LoadedScripts.ScriptsForSave() : vector<astr_t>();
         int index = 0;
-        for (const CLoadedScript &script : scripts)
+        for (const auto &script : scripts)
         {
-            ini.Set("scripts", astr_t("loadedscript") + str_from(index++), script.Path);
+            ini.Set("scripts", astr_t("loadedscript") + str_from(index++), script);
         }
         ini.SetInt("scripts", "loadedscripts", index);
     }
     ini.Set("scripts", "lastdir", m_ScriptLastDir);
 
-    ini.Save(fs_path_join(GetProfilePath(), "Options.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Options.ini"));
 }
 
 // --- main option gates (TabMain getters, feature-flag gated) ------------------
@@ -1698,7 +2127,7 @@ void CAssistantConfig::LoadDisplayGroups()
 
 // --- Objects.ini -----------------------------------------------------------------------
 
-void CAssistantConfig::SaveObjects()
+bool CAssistantConfig::SaveObjects()
 {
     CIniFile ini;
     ini.Set(INI_META, "dressbag", CAssistant::SerialToText(g_DressBag));
@@ -1712,7 +2141,7 @@ void CAssistantConfig::SaveObjects()
     }
     ini.SetInt(INI_META, "count", index);
 
-    ini.Save(fs_path_join(GetProfilePath(), "Objects.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Objects.ini"));
 }
 
 void CAssistantConfig::LoadObjects()
@@ -1741,7 +2170,7 @@ void CAssistantConfig::LoadObjects()
 
 // --- Hotkeys.ini ------------------------------------------------------------------------
 
-void CAssistantConfig::SaveHotkeys()
+bool CAssistantConfig::SaveHotkeys()
 {
     // Was HotkeysForm::Save: records with SDL key codes.
     CIniFile ini;
@@ -1756,10 +2185,14 @@ void CAssistantConfig::SaveHotkeys()
         ini.SetInt(section, "modifiers", (int)entry.Modifiers);
         ini.Set(section, "name", entry.ScriptOrMacroName);
         ini.Set(section, "external_code", entry.ExternalCode);
+        if (entry.PassMode != HotkeyPassMode::Inherit)
+        {
+            ini.SetInt(section, "pass_mode", static_cast<int>(entry.PassMode));
+        }
     }
     ini.SetInt(INI_META, "count", index);
 
-    ini.Save(fs_path_join(GetProfilePath(), "Hotkeys.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Hotkeys.ini"));
 }
 
 bool CAssistantConfig::LoadHotkeys()
@@ -1785,6 +2218,12 @@ bool CAssistantConfig::LoadHotkeys()
         entry.RunningMode = ini.GetBool(section, "running_mode", false);
         entry.ScriptOrMacroName = ini.Get(section, "name");
         entry.ExternalCode = ini.Get(section, "external_code");
+        const int passMode = ini.GetInt(section, "pass_mode");
+        if (passMode == static_cast<int>(HotkeyPassMode::Pass) ||
+            passMode == static_cast<int>(HotkeyPassMode::Consume))
+        {
+            entry.PassMode = static_cast<HotkeyPassMode>(passMode);
+        }
         m_Hotkeys.push_back(entry);
     }
 
@@ -1793,7 +2232,7 @@ bool CAssistantConfig::LoadHotkeys()
 
 // --- Party.ini ----------------------------------------------------------------------------
 
-void CAssistantConfig::SaveParty()
+bool CAssistantConfig::SaveParty()
 {
     CIniFile ini;
     ini.SetBool(INI_META, "autoacceptall", m_PartyAutoAcceptAll);
@@ -1819,7 +2258,7 @@ void CAssistantConfig::SaveParty()
     }
     ini.SetInt(INI_META, "count", (int)(m_PartyAccept.size() + m_PartyDecline.size()));
 
-    ini.Save(fs_path_join(GetProfilePath(), "Party.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Party.ini"));
 }
 
 void CAssistantConfig::LoadParty()
@@ -1878,7 +2317,7 @@ void CAssistantConfig::LoadParty()
 
 // --- Friends.ini ---------------------------------------------------------------------------
 
-void CAssistantConfig::SaveFriends()
+bool CAssistantConfig::SaveFriends()
 {
     CIniFile ini;
     ini.SetBool(INI_META, "feel_party_members_as_friends", m_FeelPartyMembersAsFriends);
@@ -1893,7 +2332,7 @@ void CAssistantConfig::SaveFriends()
     }
     ini.SetInt(INI_META, "count", index);
 
-    ini.Save(fs_path_join(GetProfilePath(), "Friends.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Friends.ini"));
 }
 
 void CAssistantConfig::LoadFriends()
@@ -1923,7 +2362,7 @@ void CAssistantConfig::LoadFriends()
 
 // --- Enemies.ini ----------------------------------------------------------------------------
 
-void CAssistantConfig::SaveEnemies()
+bool CAssistantConfig::SaveEnemies()
 {
     CIniFile ini;
     int index = 0;
@@ -1936,7 +2375,7 @@ void CAssistantConfig::SaveEnemies()
     }
     ini.SetInt(INI_META, "count", index);
 
-    ini.Save(fs_path_join(GetProfilePath(), "Enemies.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Enemies.ini"));
 }
 
 void CAssistantConfig::LoadEnemies()
@@ -1962,7 +2401,7 @@ void CAssistantConfig::LoadEnemies()
 
 // --- Macros.ini -----------------------------------------------------------------------------
 
-void CAssistantConfig::SaveMacros()
+bool CAssistantConfig::SaveMacros()
 {
     CIniFile ini;
     int index = 0;
@@ -1979,7 +2418,7 @@ void CAssistantConfig::SaveMacros()
     }
     ini.SetInt(INI_META, "count", index);
 
-    ini.Save(fs_path_join(GetProfilePath(), "Macros.ini"));
+    return ini.Save(fs_path_join(GetProfilePath(), "Macros.ini"));
 }
 
 bool CAssistantConfig::LoadMacros()

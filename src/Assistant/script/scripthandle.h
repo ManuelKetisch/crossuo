@@ -10,6 +10,7 @@
 // shape, and what the macro converter emits).
 
 #include "../core/global.h"
+#include "externalruntime.h"
 
 #include <atomic>
 #include <mutex>
@@ -65,6 +66,7 @@ private:
 
     std::atomic<CScriptEngine *> m_Engine{ nullptr }; // Terminate reads it cross-thread
     std::atomic<int> m_TerminatePending{ 0 }; // survive a pre-engine terminate
+    ExternalScriptControl m_ExternalControl; // process-group teardown for .py/.cs
     std::thread m_Thread;
     std::atomic<int> m_Paused{ 0 };
     std::atomic<int> m_State{ SS_RUNNING };

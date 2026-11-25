@@ -1,50 +1,49 @@
-﻿// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2017 Hotride
 
 #include "CrossUO.h"
 #include "UseItemsList.h"
 #include "GameObjects/GameWorld.h"
+#include "Managers/GumpManager.h"
 #include "Globals.h"
 
 CUseItemActions g_UseItemActions;
 
 void CUseItemActions::Add(int serial)
 {
-    for (auto i = m_List.begin(); i != m_List.end(); ++i)
-    {
-        if (*i == serial)
-        {
-            return;
-        }
-    }
+    m_Queue.Add(static_cast<uint32_t>(serial));
+}
 
-    m_List.push_back(serial);
+void CUseItemActions::NoteActionSent()
+{
+    m_Queue.NoteActionSent(g_Ticks);
 }
 
 void CUseItemActions::Process()
 {
-    if (Timer <= g_Ticks)
+    if (g_World == nullptr)
     {
-        Timer = g_Ticks + 1000;
+        return;
+    }
 
-        if (m_List.empty())
-        {
-            return;
-        }
-
-        uint32_t serial = m_List.front();
-        m_List.pop_front();
-
-        if (g_World->FindWorldObject(serial) != nullptr)
-        {
-            if (serial < 0x40000000)
-            { //NPC
-                g_Game.PaperdollReq(serial);
+    const auto step = m_Queue.Step(
+        g_Ticks,
+        [](uint32_t serial) { return g_World->FindWorldObject(serial) != nullptr; },
+        [](uint32_t serial) {
+            if (serial < 0x40000000u)
+            {
+                return g_GumpManager.GetGump(serial, 0, GT_PAPERDOLL) != nullptr;
             }
-            else
-            { //item
-                g_Game.DoubleClick(serial);
-            }
-        }
+            return g_GumpManager.GetGump(serial, 0, GT_CONTAINER) != nullptr ||
+                   g_GumpManager.GetGump(serial, 0, GT_SPELLBOOK) != nullptr;
+        });
+
+    if (step.Action == xuo_container_restore::StepAction::SendPaperdoll)
+    {
+        g_Game.PaperdollReq(step.Serial);
+    }
+    else if (step.Action == xuo_container_restore::StepAction::SendDoubleClick)
+    {
+        g_Game.DoubleClick(step.Serial);
     }
 }

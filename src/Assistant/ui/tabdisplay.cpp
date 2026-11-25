@@ -22,6 +22,9 @@
 #include "../config/assistantconfig.h"
 #include "../core/assist.h"
 #include "../core/global.h"
+#include "../core/itemcounters.h"
+#include "../core/damagemeter.h"
+#include "Gumps/GumpToolbar.h"
 #include "../managers/displaymanager.h"
 
 namespace xuoassist {
@@ -32,6 +35,7 @@ namespace {
 char s_TitleData[2048] = { 0 };   // te_DisplayTitleData
 astr_t s_CompiledFrom;            // the data the manager last compiled
 bool s_TitleDirty = false;        // a redraw was requested (events / edits)
+bool s_SelectCounters = false;    // one-shot jump to the Counters sub-tab
 // the title data field is being edited: an external config change must not
 // yank the buffer out from under an active InputText (ImGui's active field
 // owns its text until deactivation and would resurrect the pre-edit content)
@@ -263,6 +267,7 @@ void draw_configuration_page()
 
     // te_DisplayTitleData ("Title data:")
     ImGui::TextUnformatted("Title data:");
+    ImGui::TextDisabled("Use ~#RRGGBB and ~#~ for colors on the in-game display.");
     if (ImGui::InputTextMultiline(
             "##title_data", s_TitleData, sizeof(s_TitleData), ImVec2(-1.0f, 120.0f)))
     {
@@ -305,7 +310,7 @@ void draw_items_editor_page()
     const int buttons = ListButtons("display_items", XALB_TARGET);
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##display_items_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##display_items_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     NameList("##display_items", items, &s_SelectedItem, &DisplayItemNameOf,
              &DisplayItemSetNameOf, false, -1.0f);
     ImGui::EndChild();
@@ -451,7 +456,7 @@ void draw_group_editor_page()
     const int buttons = ListButtons("display_groups", XALB_TARGET);
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##display_groups_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##display_groups_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     NameList("##display_groups", groups, &s_SelectedGroup, &DisplayGroupNameOf,
              &DisplayGroupSetNameOf, false, -1.0f);
     ImGui::EndChild();
@@ -559,6 +564,35 @@ void TabDisplay_Draw()
     }
     if (ImGui::BeginTabBar("##tw_display", ImGuiTabBarFlags_None))
     {
+        const ImGuiTabItemFlags countersFlags =
+            s_SelectCounters ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        s_SelectCounters = false;
+        if (ImGui::BeginTabItem("Counters", nullptr, countersFlags))
+        {
+            float height = ImGui::GetContentRegionAvail().y;
+            if (height < 1.0f)
+            {
+                height = 1.0f;
+            }
+            ImGui::BeginChild("##display_counters", ImVec2(0.0f, height), ImGuiChildFlags_None);
+            ItemCounters_DrawEditor();
+            EndSubTab();
+        }
+        if (BeginSubTab("Toolbar", "##display_toolbar"))
+        {
+            CGumpToolbar::DrawSettings();
+            EndSubTab();
+        }
+        if (BeginSubTab("Damage meter", "##display_damage_meter"))
+        {
+            DamageMeter_Draw();
+            EndSubTab();
+        }
+        if (BeginSubTab("Messages", "##display_message_rules"))
+        {
+            ItemCounters_DrawMessageRules();
+            EndSubTab();
+        }
         if (BeginSubTab("Configuration", "##display_config"))
         {
             draw_configuration_page();
@@ -591,6 +625,11 @@ bool TabDisplay_ConsumeTitleDirty()
 void TabDisplay_RequestTitleRedraw()
 {
     s_TitleDirty = true;
+}
+
+void TabDisplay_SelectCounters()
+{
+    s_SelectCounters = true;
 }
 
 } // namespace xuoassist

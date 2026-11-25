@@ -81,8 +81,10 @@ bool IconButton(
     const char *idSeed = "");
 
 // --- color helpers ----------------------------------------------------------
-// 15-bit UO color -> RGBA preview (approximation: 5-bit channels x8).
+// 16-bit UO hue index -> RGBA preview (resolved via hues.mul).
 ImU32 UOColorToRGBA(uint16_t color);
+// Same as UOColorToRGBA, lifted to stay legible on dark charcoal UI backgrounds.
+ImU32 UOColorToReadableTextRGBA(uint16_t color);
 // Renders an atlas icon at an explicit draw-list rectangle (map corpse
 // marker); atlas lazy-init like IconButton.
 void IconImage(XA_ICON icon, const ImVec2 &topLeft, const ImVec2 &size);

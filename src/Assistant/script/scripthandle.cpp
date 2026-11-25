@@ -99,6 +99,9 @@ CScriptHandle::~CScriptHandle()
 void CScriptHandle::SetPaused(bool value)
 {
     m_Paused = value ? 1 : 0;
+    int expected = value ? (int)SS_RUNNING : (int)SS_PAUSED;
+    const int desired = value ? (int)SS_PAUSED : (int)SS_RUNNING;
+    m_State.compare_exchange_strong(expected, desired);
     CScriptEngine *engine = m_Engine.load();
     if (engine != nullptr)
     {
@@ -114,6 +117,9 @@ void CScriptHandle::Terminate()
     // the wired external flag). The engine-level interrupt below stays the
     // fast path once the engine exists.
     m_TerminatePending = 1;
+    // Also signal any active external (.py/.cs) child process group immediately
+    // so scripts stuck outside an RPC call terminate promptly.
+    ExternalScript_Terminate(&m_ExternalControl);
     CScriptEngine *engine = m_Engine.load();
     if (engine != nullptr)
     {
@@ -182,18 +188,30 @@ void CScriptHandle::RunEngine()
     // the handle flag doubles as the engine's external terminate: the
     // interrupt handler and the pause/sleep paths poll TerminateRequested()
     engine.SetExternalTerminateFlag(&m_TerminatePending);
+    if (m_Paused.load() != 0)
+    {
+        engine.SetPausedFlag(true);
+    }
     // Forced stop: every queued call this thread makes polls the same flag
     // while it waits, so Stop aborts an in-flight call even from a script
     // that never returns to bytecode (a native-call loop).
     ScriptQueue_SetCancelHook(engine_cancelled, engine_abort, &engine);
-    if (!engine.Setup(m_Name))
+    if (!engine.Setup(m_Name, m_Path))
     {
+        ScriptQueue_SetCancelHook(nullptr, nullptr, nullptr);
         m_State = SS_FAILED;
         m_Engine = nullptr;
         return;
     }
 
-    if (!engine.Evaluate(m_Text))
+    if (ExternalScript_IsExternal(m_Path))
+    {
+        if (!ExternalScript_Run(engine, m_Path, m_Args, &m_ExternalControl))
+        {
+            m_State = SS_FAILED;
+        }
+    }
+    else if (!engine.Evaluate(m_Text))
     {
         m_State = SS_FAILED;
     }
@@ -475,6 +493,11 @@ void ScriptManager_Exec(const astr_t &scriptName, bool once, const vector<astr_t
         if (!ScriptList_ReadFile(script.Path, text))
         {
             continue;
+        }
+        if (ScriptList_DisplayName(script.Path) == scriptName)
+        {
+            ScriptManager_Get()->RunFile(script.Key, text, args);
+            return;
         }
         const vector<astr_t> functions = Script_AnalyzeFunctions(text);
         if (std::find(functions.begin(), functions.end(), scriptName) != functions.end())

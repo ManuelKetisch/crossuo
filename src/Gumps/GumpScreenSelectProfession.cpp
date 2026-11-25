@@ -29,18 +29,22 @@ enum
     ID_SPS_ARROW_BACK_PROFESSION = 4,
     ID_SPS_LABEL_BACK_PROFESSION = 5,
     ID_SPS_HTMLGUMP = 6,
+    ID_SPS_ERROR_OK = 7,
+    ID_SPS_CANCEL_SKILL_PICK = 8,
 
     ID_SPS_STATS_SPHERE = 10,
+    ID_SPS_STAT_MINUS = 13,
+    ID_SPS_STAT_PLUS = 16,
 
     ID_SPS_SKILLS_SPHERE = 20,
 
-    ID_SPS_SKILLS_FILED = 30,
+    ID_SPS_SKILL_FIELD = 30,
+    ID_SPS_SKILL_MINUS = 34,
+    ID_SPS_SKILL_PLUS = 38,
 
     ID_SPS_LABEL = 50,
 
     ID_SPS_SKILLS_LIST = 100,
-
-    ID_SPS_ERROR_OK = 110,
 
     //1.25.32 (1998) CharStat controls: disjoint id blocks per role (panel
     //controls vs popup ids - the popup row branch is bounded by the row
@@ -68,6 +72,46 @@ enum
     ID_SPS_1998_SKILL_POPUP_ROW = 375, //+0..+skillCount-1
     ID_SPS_1998_MSG_OK = 380,
 };
+
+static int StartingSkillSlots()
+{
+    return g_Config.ProtocolClientVersion >= CV_70160 ? 4 : 3;
+}
+
+static int StartingStatBudget()
+{
+    if (g_Config.ProtocolClientVersion >= CV_70160)
+    {
+        return 90;
+    }
+    return g_Config.ProtocolClientVersion >= CV_308Z ? 80 : 65;
+}
+
+static int StartingStatMaximum()
+{
+    return g_Config.ProtocolClientVersion >= CV_308Z ? 60 : 45;
+}
+
+static astr_t PointStatus(int points, const char *kind, bool prompting)
+{
+    const auto amount = str_from(points) + " " + kind + (points == 1 ? " point" : " points");
+    return prompting ? "Assign " + amount : amount + " left";
+}
+
+static void SetPointSliderValue(CGUISlider &slider, int value)
+{
+    slider.Value = value;
+    slider.CalculateOffset();
+    slider.UpdateText();
+}
+
+static void AddTextButton(CGump &gump, int serial, const astr_t &label, int x, int y, int width)
+{
+    gump.Add(new CGUIResizepic(0, 0x0BB8, x, y, width, 23));
+    auto *text = (CGUIText *)gump.Add(new CGUIText(1, x, y + 4));
+    text->CreateTextureA(1, label, width, TS_CENTER);
+    gump.Add(new CGUIHitBox(serial, x, y, width, 23, true));
+}
 
 CGumpScreenSelectProfession::CGumpScreenSelectProfession()
     : CGump(GT_NONE, 0, 0, 0)
@@ -98,6 +142,16 @@ CGumpScreenSelectProfession::~CGumpScreenSelectProfession()
 void CGumpScreenSelectProfession::UpdateContent()
 {
     Clear();
+    m_StatPointsStatus = nullptr;
+    m_SkillPointsStatus = nullptr;
+    for (auto &slider : m_StatsSliders)
+    {
+        slider = nullptr;
+    }
+    for (auto &slider : m_SkillsSliders)
+    {
+        slider = nullptr;
+    }
 
     if (g_ProfessionManager.Selected == nullptr)
     {
@@ -464,6 +518,83 @@ void CGumpScreenSelectProfession::PrepareContent()
     }
 }
 
+void CGumpScreenSelectProfession::AddSkillPicker(
+    const CProfession &profession, int x, int y, int width, int height)
+{
+    auto *list = (CGUIHTMLGump *)Add(
+        new CGUIHTMLGump(ID_SPS_HTMLGUMP, 0x0BB8, x, y, width, height, true, true));
+    const int slot = g_SelectProfessionScreen.GetSkillSelection() - 1;
+    const int slots = StartingSkillSlots();
+    auto *title = (CGUIText *)Add(new CGUIText(1, x, y - 17));
+    title->CreateTextureA(1, "Choose skill " + str_from(slot + 1));
+    int offset = 4;
+    for (uint32_t i = 0; i < g_SkillsManager.Count; ++i)
+    {
+        const int index = g_SkillsManager.GetSortedIndex(i);
+        CSkill *skill = g_SkillsManager.Get(index);
+        if (skill == nullptr || !profession.CanChooseStartingSkill(slot, index, slots))
+        {
+            continue;
+        }
+
+        const int serial = ID_SPS_SKILLS_LIST + (int)i;
+        auto *entry = new CGUITextEntry(serial, 1, 0x0035, 0x0035, 3, offset, 0, false, 9);
+        entry->m_Entry.SetTextA(skill->Name);
+        entry->m_Entry.PrepareToDrawA(9, 1);
+        entry->CheckOnSerial = true;
+        entry->ReadOnly = true;
+
+        const int rowHeight = entry->m_Entry.m_Texture.Height;
+        list->Add(new CGUIHitBox(serial, 3, offset, width - 12, rowHeight));
+        list->Add(entry);
+        offset += rowHeight;
+    }
+    list->CalculateDataSize();
+    AddTextButton(*this, ID_SPS_CANCEL_SKILL_PICK, "Cancel", x, y + height + 6, 70);
+}
+
+CGUISlider *CGumpScreenSelectProfession::AddPointSlider(
+    int serial, int x, int y, int width, int min, int max, int value, bool adjustable)
+{
+    auto *slider = (CGUISlider *)Add(new CGUISlider(
+        serial, 0x00D8, 0x00D8, 0x00D8, 0x00D5, true, false, x, y, width, min, max, value));
+    slider->DefaultTextOffset = adjustable ? 30 : 4;
+    slider->SetTextParameters(true, STP_RIGHT, 1, 1, false);
+    if (adjustable)
+    {
+        slider->ScrollStep = 1;
+        const bool skill = serial >= ID_SPS_SKILLS_SPHERE;
+        const int slot = serial - (skill ? ID_SPS_SKILLS_SPHERE : ID_SPS_STATS_SPHERE);
+        const int minus = (skill ? ID_SPS_SKILL_MINUS : ID_SPS_STAT_MINUS) + slot;
+        const int plus = (skill ? ID_SPS_SKILL_PLUS : ID_SPS_STAT_PLUS) + slot;
+        AddTextButton(*this, minus, "-", x - 23, y - 3, 21);
+        AddTextButton(*this, plus, "+", x + width + 1, y - 3, 21);
+    }
+    return slider;
+}
+
+void CGumpScreenSelectProfession::UpdateAllocationStatus(
+    const CProfession &profession, bool prompting)
+{
+    const int slots = StartingSkillSlots();
+    const int statPoints = profession.GetStatPointsLeft(StartingStatBudget());
+    const int skillPoints = profession.GetSkillPointsLeft(slots);
+    const int unnamed = profession.GetUnnamedSkillWithPoints(slots);
+    m_StatPointsStatus->CreateTextureA(
+        1, statPoints > 0 ? PointStatus(statPoints, "stat", prompting) : "All stat points assigned");
+
+    astr_t skillStatus;
+    if (skillPoints > 0)
+    {
+        skillStatus = PointStatus(skillPoints, "skill", prompting);
+    }
+    else
+    {
+        skillStatus = unnamed == -1 ? "All skill points assigned" : "Choose skill " + str_from(unnamed + 1);
+    }
+    m_SkillPointsStatus->CreateTextureA(1, skillStatus);
+}
+
 void CGumpScreenSelectProfession::UpdateContentOld()
 {
     CBaseProfession *obj = g_ProfessionManager.Selected;
@@ -473,14 +604,6 @@ void CGumpScreenSelectProfession::UpdateContentOld()
         g_GameWindow.ShowMessage("No items in profession manager!", "Profession error!");
         return;
     }
-
-    for (int i = 0; i < 3; i++)
-    {
-        m_StatsSliders[i] = nullptr;
-        m_SkillsSliders[i] = nullptr;
-    }
-
-    m_SkillsSliders[3] = nullptr;
 
     Add(new CGUIGumppicTiled(0x0E14, 0, 0, 640, 480));
     Add(new CGUIGumppic(0x157C, 0, 0));
@@ -492,51 +615,23 @@ void CGumpScreenSelectProfession::UpdateContentOld()
     Add(new CGUIGumppic(0x0589, 222, 44));
     Add(new CGUIButton(ID_SPS_ARROW_BACK_PROFESSION, 0x119C, 0x119D, 0x119E, 200, 356));
 
-    CGUIHTMLGump *htmlGump =
-        new CGUIHTMLGump(ID_SPS_HTMLGUMP, 0x0BB8, 120, 137, 221, 214, true, true);
-    Add(htmlGump);
-
-    if (g_SelectProfessionScreen.GetSkillSelection() == 0)
+    const bool pickingSkill =
+        obj->Type == PT_PROFESSION && g_SelectProfessionScreen.GetSkillSelection() != 0;
+    if (pickingSkill)
     {
-        //! Enable HTML-tag processing when creating the text texture
-        g_FontManager.SetUseHTML(true);
-
-        CGUIText *text = new CGUIText(0, 3, 3);
-        text->CreateTextureW(1, obj->Description, 30, 195);
-        htmlGump->Add(text);
-
-        //! Disable HTML-tag processing
-        g_FontManager.SetUseHTML(false);
+        AddSkillPicker(*(CProfession *)obj, 120, 137, 221, 202);
     }
     else
     {
-        int yPtr = 4; // 20;
-
-        for (uint32_t i = 0; i < g_SkillsManager.Count; i++)
-        {
-            CSkill *skill = g_SkillsManager.Get(g_SkillsManager.GetSortedIndex(i));
-
-            if (skill == nullptr)
-            {
-                continue;
-            }
-
-            CGUITextEntry *entry = new CGUITextEntry(
-                ID_SPS_SKILLS_LIST + (int)i, 1, 0x0035, 0x0035, 3, yPtr, 0, false, 9);
-            entry->m_Entry.SetTextA(skill->Name);
-            entry->m_Entry.CreateTextureA(9, skill->Name, 1, 0, TS_LEFT, 0);
-            entry->CheckOnSerial = true;
-            entry->ReadOnly = true;
-
-            htmlGump->Add(new CGUIHitBox(
-                ID_SPS_SKILLS_LIST + (int)i, 3, yPtr, 195, entry->m_Entry.m_Texture.Height));
-            htmlGump->Add(entry);
-
-            yPtr += entry->m_Entry.m_Texture.Height;
-        }
+        auto *htmlGump = (CGUIHTMLGump *)Add(
+            new CGUIHTMLGump(ID_SPS_HTMLGUMP, 0x0BB8, 120, 137, 221, 214, true, true));
+        g_FontManager.SetUseHTML(true);
+        auto *text = new CGUIText(0, 3, 3);
+        text->CreateTextureW(1, obj->Description, 30, 195);
+        htmlGump->Add(text);
+        g_FontManager.SetUseHTML(false);
+        htmlGump->CalculateDataSize();
     }
-
-    htmlGump->CalculateDataSize();
 
     if (obj->Type == PT_CATEGORY) //category
     {
@@ -568,6 +663,7 @@ void CGumpScreenSelectProfession::UpdateContentOld()
             ID_SPS_LABEL_BACK_PROFESSION, obj->Gump, obj->Gump, obj->Gump + 1, 231, 53));
 
         CProfession *profession = (CProfession *)obj;
+        const bool advanced = profession->DescriptionIndex == -1;
         int statVal[3] = { profession->Str, profession->Dex, profession->Int };
 
         const astr_t statName[3] = { "Strength", "Dexterity", "Intelligence" };
@@ -579,6 +675,14 @@ void CGumpScreenSelectProfession::UpdateContentOld()
             CGUIText *text = new CGUIText(1, 360, yPtr);
             text->CreateTextureA(1, statName[i]);
             Add(text);
+
+            if (advanced)
+            {
+                m_StatsSliders[i] = AddPointSlider(ID_SPS_STATS_SPHERE + i, 489, yPtr, 78,
+                    CProfession::MinStartingStat, StartingStatMaximum(), statVal[i], true);
+                yPtr += 30;
+                continue;
+            }
 
             m_StatsSliders[i] = (CGUISlider *)Add(new CGUISlider(
                 ID_SPS_STATS_SPHERE + (int)i,
@@ -600,11 +704,12 @@ void CGumpScreenSelectProfession::UpdateContentOld()
             yPtr += 30;
         }
 
-        if (profession->DescriptionIndex >= 0)
+        const int slots = StartingSkillSlots();
+        if (!advanced)
         {
             yPtr = 260;
 
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < slots; i++)
             {
                 auto skillID = (uint32_t)profession->GetSkillIndex((int)i);
                 if (skillID >= g_SkillsManager.Count)
@@ -630,14 +735,14 @@ void CGumpScreenSelectProfession::UpdateContentOld()
         {
             yPtr = 256;
 
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < slots; i++)
             {
-                Add(new CGUIResizepic(ID_SPS_SKILLS_FILED + (int)i, 0x0BB8, 350, yPtr, 105, 25));
+                Add(new CGUIResizepic(ID_SPS_SKILL_FIELD + (int)i, 0x0BB8, 350, yPtr, 105, 25));
 
                 int skillID = profession->GetSkillIndex((uint32_t)i);
 
                 CGUITextEntry *entry = (CGUITextEntry *)Add(new CGUITextEntry(
-                    ID_SPS_SKILLS_FILED + (int)i,
+                    ID_SPS_SKILL_FIELD + (int)i,
                     0x0386,
                     0,
                     0x0021,
@@ -653,7 +758,7 @@ void CGumpScreenSelectProfession::UpdateContentOld()
 
                 if (skillID >= (int)g_SkillsManager.Count || skill == nullptr)
                 {
-                    entry->m_Entry.SetTextA("Click here");
+                    entry->m_Entry.SetTextA("Choose a skill");
                 }
                 else
                 {
@@ -667,27 +772,22 @@ void CGumpScreenSelectProfession::UpdateContentOld()
             }
         }
 
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < slots; ++i)
         {
-            m_SkillsSliders[i] = (CGUISlider *)Add(new CGUISlider(
-                ID_SPS_SKILLS_SPHERE + (int)i,
-                0x00D8,
-                0x00D8,
-                0x00D8,
-                0x00D5,
-                true,
-                false,
-                496,
-                258 + ((int)i * 32),
-                95,
-                0,
-                50,
-                profession->GetSkillValue((int)i)));
-            m_SkillsSliders[i]->DefaultTextOffset = -10;
-            m_SkillsSliders[i]->SetTextParameters(true, STP_LEFT, 1, 1, false);
+            m_SkillsSliders[i] = AddPointSlider(ID_SPS_SKILLS_SPHERE + i, 489, 258 + i * 32, 78,
+                0, CProfession::MaxStartingSkillPoints, profession->GetSkillValue(i), advanced);
         }
 
-        Add(new CGUIButton(ID_SPS_ARROW_NEXT, 0x15A4, 0x15A5, 0x15A6, 610, 445));
+        if (!pickingSkill)
+        {
+            Add(new CGUIButton(ID_SPS_ARROW_NEXT, 0x15A4, 0x15A5, 0x15A6, 610, 445));
+        }
+        if (advanced)
+        {
+            m_StatPointsStatus = (CGUIText *)Add(new CGUIText(1, 351, 224));
+            m_SkillPointsStatus = (CGUIText *)Add(new CGUIText(1, 351, 259 + slots * 32));
+            UpdateAllocationStatus(*profession);
+        }
     }
 }
 
@@ -699,7 +799,15 @@ void CGumpScreenSelectProfession::UpdateContentNew()
     Add(new CGUIGumppic(0x157C, 0, 0));
     Add(new CGUIGumppic(0x15A0, 0, 4));
     Add(new CGUIButton(ID_SPS_QUIT, 0x1589, 0x158A, 0x158B, 555, 4));
-    Add(new CGUIButton(ID_SPS_ARROW_PREV, 0x15A1, 0x15A2, 0x15A3, 586, 445));
+    const bool advanced = obj->Type == PT_PROFESSION && obj->DescriptionIndex == -1;
+    if (advanced)
+    {
+        AddTextButton(*this, ID_SPS_ARROW_PREV, "Back", 438, 453, 76);
+    }
+    else
+    {
+        Add(new CGUIButton(ID_SPS_ARROW_PREV, 0x15A1, 0x15A2, 0x15A3, 586, 445));
+    }
     Add(new CGUIResizepic(0, 0x0A28, 100, 80, 470, 372));
     Add(new CGUIGumppic(0x058B, 213, 57));
     Add(new CGUIGumppic(0x0589, 290, 44));
@@ -707,6 +815,10 @@ void CGumpScreenSelectProfession::UpdateContentNew()
     auto str = g_ClilocManager.Cliloc(g_Language)
                    ->GetA(3000326, false, "Choose a Trade for Your Character");
     CGUIText *text = new CGUIText(0x0386, 120, 126);
+    if (advanced)
+    {
+        str = "Set your stats and skills";
+    }
     text->CreateTextureA(2, str, 432, TS_CENTER);
     Add(text);
 
@@ -768,133 +880,44 @@ void CGumpScreenSelectProfession::UpdateContentNew()
 
         int yPtr = 171;
 
-        //Stats
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 3; ++i)
         {
             text = (CGUIText *)Add(new CGUIText(1, 160, yPtr));
             text->CreateTextureA(1, statName[i]);
-
-            m_StatsSliders[i] = (CGUISlider *)Add(new CGUISlider(
-                ID_SPS_STATS_SPHERE + (int)i,
-                0x00D8,
-                0x00D8,
-                0x00D8,
-                0x00D5,
-                true,
-                false,
-                160,
-                yPtr + 20,
-                95,
-                10,
-                50,
-                statVal[i]));
-            m_StatsSliders[i]->SetTextParameters(true, STP_RIGHT, 1, 1, false);
-
+            m_StatsSliders[i] = AddPointSlider(ID_SPS_STATS_SPHERE + i, 183, yPtr + 20, 89,
+                CProfession::MinStartingStat, StartingStatMaximum(), statVal[i], true);
             yPtr += 80;
         }
 
-        yPtr = 171;
-
-        //Skills
-
+        m_StatPointsStatus = (CGUIText *)Add(new CGUIText(1, 160, 422));
+        const int slots = StartingSkillSlots();
+        m_SkillPointsStatus = (CGUIText *)Add(new CGUIText(1, 340, 422));
         if (g_SelectProfessionScreen.GetSkillSelection() != 0)
         {
-            CGUIHTMLGump *htmlGump = (CGUIHTMLGump *)Add(
-                new CGUIHTMLGump(ID_SPS_HTMLGUMP, 0x0BB8, 320, 168, 197, 215, true, true));
-
-            yPtr = 4;
-
-            for (uint32_t i = 0; i < g_SkillsManager.Count; i++)
-            {
-                CSkill *skill = g_SkillsManager.Get(g_SkillsManager.GetSortedIndex(i));
-                if (skill == nullptr)
-                {
-                    continue;
-                }
-
-                CGUITextEntry *entry = new CGUITextEntry(
-                    ID_SPS_SKILLS_LIST + (int)i, 1, 0x0035, 0x0035, 2, yPtr, 0, false, 9);
-                entry->m_Entry.SetTextA(skill->Name);
-                entry->m_Entry.PrepareToDrawA(9, 1);
-                entry->CheckOnSerial = true;
-                entry->ReadOnly = true;
-
-                htmlGump->Add(new CGUIHitBox(
-                    ID_SPS_SKILLS_LIST + (int)i, 2, yPtr, 190, entry->m_Entry.m_Texture.Height));
-                htmlGump->Add(entry);
-
-                yPtr += entry->m_Entry.m_Texture.Height;
-            }
-
-            htmlGump->CalculateDataSize();
+            UpdateAllocationStatus(*profession);
+            AddSkillPicker(*profession, 340, 174, 178, 205);
+            return;
         }
-        else
+
+        yPtr = slots == 4 ? 159 : 171;
+        const int rowHeight = slots == 4 ? 70 : 80;
+        for (int i = 0; i < slots; ++i)
         {
-            int skillsCount = 3;
-            int skillStep = 80;
+            Add(new CGUIResizepic(ID_SPS_SKILL_FIELD + i, 0x0BB8, 340, yPtr, 178, 25));
+            auto *entry = (CGUITextEntry *)Add(new CGUITextEntry(ID_SPS_SKILL_FIELD + i, 0x0386,
+                0, 0x0021, 346, yPtr + 5, 165, false, 9, TS_LEFT, UOFONT_FIXED));
+            const CSkill *skill = g_SkillsManager.Get(profession->GetSkillIndex(i));
+            entry->m_Entry.SetTextA(skill != nullptr ? skill->Name : "Choose a skill");
+            entry->CheckOnSerial = true;
+            entry->ReadOnly = true;
 
-            if (g_Config.ClientVersion >= CV_70160)
-            {
-                yPtr -= 12;
-                skillStep = 70;
-                skillsCount++;
-            }
-
-            for (int i = 0; i < skillsCount; i++)
-            {
-                Add(new CGUIResizepic(ID_SPS_SKILLS_FILED + (int)i, 0x0BB8, 340, yPtr, 175, 25));
-
-                int skillID = profession->GetSkillIndex((int)i);
-
-                CGUITextEntry *entry = (CGUITextEntry *)Add(new CGUITextEntry(
-                    ID_SPS_SKILLS_FILED + (int)i,
-                    0x0386,
-                    0,
-                    0x0021,
-                    346,
-                    yPtr + 5,
-                    90,
-                    false,
-                    9,
-                    TS_LEFT,
-                    UOFONT_FIXED));
-
-                CSkill *skill = g_SkillsManager.Get(skillID);
-
-                if (skillID >= (int)g_SkillsManager.Count || skill == nullptr)
-                {
-                    entry->m_Entry.SetTextA("Click here");
-                }
-                else
-                {
-                    entry->m_Entry.SetTextA(skill->Name);
-                }
-
-                entry->CheckOnSerial = true;
-                entry->ReadOnly = true;
-
-                m_SkillsSliders[i] = (CGUISlider *)Add(new CGUISlider(
-                    ID_SPS_SKILLS_SPHERE + (int)i,
-                    0x00D8,
-                    0x00D8,
-                    0x00D8,
-                    0x00D5,
-                    true,
-                    false,
-                    340,
-                    yPtr + 30,
-                    95,
-                    0,
-                    50,
-                    profession->GetSkillValue((int)i)));
-                m_SkillsSliders[i]->DefaultTextOffset = 60;
-                m_SkillsSliders[i]->SetTextParameters(true, STP_RIGHT, 1, 1, false);
-
-                yPtr += skillStep;
-            }
+            m_SkillsSliders[i] = AddPointSlider(ID_SPS_SKILLS_SPHERE + i, 363, yPtr + 30, 89,
+                0, CProfession::MaxStartingSkillPoints, profession->GetSkillValue(i), true);
+            yPtr += rowHeight;
         }
 
-        Add(new CGUIButton(ID_SPS_ARROW_NEXT, 0x15A4, 0x15A5, 0x15A6, 610, 445));
+        AddTextButton(*this, ID_SPS_ARROW_NEXT, "Continue", 522, 453, 96);
+        UpdateAllocationStatus(*profession);
     }
 }
 
@@ -1150,7 +1173,12 @@ void CGumpScreenSelectProfession::GUMP_BUTTON_EVENT_C
     }
     else if (serial == ID_SPS_ERROR_OK)
     {
-        UpdateContentNew();
+        WantUpdateContent = true;
+    }
+    else if (serial == ID_SPS_CANCEL_SKILL_PICK ||
+             (serial == ID_SPS_ARROW_PREV && g_SelectProfessionScreen.GetSkillSelection() != 0))
+    {
+        g_SelectProfessionScreen.SetSkillSelection(0);
     }
     else if (serial == ID_SPS_ARROW_PREV) //< button
     {
@@ -1173,44 +1201,30 @@ void CGumpScreenSelectProfession::GUMP_BUTTON_EVENT_C
     {
         if (obj->Type == PT_PROFESSION)
         {
-            bool passed = true;
-
-            if (profession->DescriptionIndex == -1) //Advanced
+            if (profession->DescriptionIndex == -1)
             {
-                int skillsCount = 3;
-
-                if (g_Config.ClientVersion >= CV_70160)
+                if (g_SelectProfessionScreen.GetSkillSelection() != 0)
                 {
-                    skillsCount++;
+                    return;
                 }
-
-                for (int i = 0; i < skillsCount; i++)
+                const int slots = StartingSkillSlots();
+                if (profession->GetStatPointsLeft(StartingStatBudget()) != 0 ||
+                    profession->GetSkillPointsLeft(slots) != 0)
                 {
-                    for (int j = 0; j < skillsCount; j++)
-                    {
-                        if (i != j)
-                        {
-                            if (profession->GetSkillIndex((int)i) == 0xFF ||
-                                profession->GetSkillIndex((int)i) ==
-                                    profession->GetSkillIndex((int)j))
-                            {
-                                passed = false;
-
-                                g_SelectProfessionScreen.CreateSmoothAction(
-                                    CSelectProfessionScreen::ID_SMOOTH_SPS_GO_SCREEN_GAME_CONNECT);
-
-                                break;
-                            }
-                        }
-                    }
+                    UpdateAllocationStatus(*profession, true);
+                    WantRedraw = true;
+                    return;
+                }
+                const int unnamed = profession->GetUnnamedSkillWithPoints(slots);
+                if (unnamed != -1)
+                {
+                    g_SelectProfessionScreen.SetSkillSelection(unnamed + 1);
+                    return;
                 }
             }
 
-            if (passed)
-            {
-                g_SelectProfessionScreen.CreateSmoothAction(
-                    CSelectProfessionScreen::ID_SMOOTH_SPS_GO_SCREEN_CREATE);
-            }
+            g_SelectProfessionScreen.CreateSmoothAction(
+                CSelectProfessionScreen::ID_SMOOTH_SPS_GO_SCREEN_CREATE);
         }
     }
     else if (
@@ -1254,37 +1268,42 @@ void CGumpScreenSelectProfession::GUMP_BUTTON_EVENT_C
             index++;
         }
     }
-    else if (obj->Type == PT_PROFESSION)
+    else if (obj->Type == PT_PROFESSION && profession->DescriptionIndex == -1)
     {
-        if (serial >= ID_SPS_SKILLS_LIST)
+        const int slots = StartingSkillSlots();
+        const int selection = g_SelectProfessionScreen.GetSkillSelection();
+        if (selection != 0 && serial >= ID_SPS_SKILLS_LIST &&
+            serial - ID_SPS_SKILLS_LIST < g_SkillsManager.Count)
         {
-            g_SelectProfessionScreen.SetSkillSelection(
-                g_SelectProfessionScreen.GetSkillSelection() - 1);
-            int index = serial - ID_SPS_SKILLS_LIST;
-            index = g_SkillsManager.GetSortedIndex(index);
-
-            profession->SetSkillIndex(g_SelectProfessionScreen.GetSkillSelection(), index);
-
-            g_SelectProfessionScreen.SetSkillSelection(0);
+            const int index = g_SkillsManager.GetSortedIndex(serial - ID_SPS_SKILLS_LIST);
+            if (g_SkillsManager.Get(index) != nullptr &&
+                profession->CanChooseStartingSkill(selection - 1, index, slots))
+            {
+                profession->SetSkillIndex(selection - 1, index);
+                g_SelectProfessionScreen.SetSkillSelection(0);
+            }
         }
-        else
+        else if (serial >= ID_SPS_SKILL_FIELD && (int)serial < ID_SPS_SKILL_FIELD + slots)
         {
-            int skillsCount = 3;
-
-            if (g_Config.ClientVersion >= CV_70160)
-            {
-                skillsCount++;
-            }
-
-            for (int i = 0; i < skillsCount; i++)
-            {
-                if (serial == ID_SPS_SKILLS_FILED + (int)i)
-                {
-                    g_SelectProfessionScreen.SetSkillSelection((int)i + 1);
-
-                    break;
-                }
-            }
+            g_SelectProfessionScreen.SetSkillSelection(serial - ID_SPS_SKILL_FIELD + 1);
+        }
+        else if (serial >= ID_SPS_STAT_MINUS && serial < ID_SPS_STAT_MINUS + 3)
+        {
+            StepStatPoints(serial - ID_SPS_STAT_MINUS, -1);
+        }
+        else if (serial >= ID_SPS_STAT_PLUS && serial < ID_SPS_STAT_PLUS + 3)
+        {
+            StepStatPoints(serial - ID_SPS_STAT_PLUS, 1);
+        }
+        else if (serial >= ID_SPS_SKILL_MINUS && (int)serial < ID_SPS_SKILL_MINUS + slots)
+        {
+            const int slot = serial - ID_SPS_SKILL_MINUS;
+            UpdateSkillPoints(slot, profession->GetSkillValue(slot) - 1);
+        }
+        else if (serial >= ID_SPS_SKILL_PLUS && (int)serial < ID_SPS_SKILL_PLUS + slots)
+        {
+            const int slot = serial - ID_SPS_SKILL_PLUS;
+            UpdateSkillPoints(slot, profession->GetSkillValue(slot) + 1);
         }
     }
 }
@@ -1476,37 +1495,31 @@ void CGumpScreenSelectProfession::GUMP_SLIDER_MOVE_EVENT_C
         return;
     }
 
-    int skillsCount = 3;
-
-    if (g_Config.ClientVersion >= CV_70160)
+    if (serial >= ID_SPS_STATS_SPHERE && serial < ID_SPS_STATS_SPHERE + 3)
     {
-        skillsCount++;
-    }
-
-    //Stats
-    if (serial >= ID_SPS_STATS_SPHERE && (int)serial < ID_SPS_STATS_SPHERE + skillsCount)
-    {
-        if (g_Config.ClientVersion >= CV_308Z)
+        const int slot = serial - ID_SPS_STATS_SPHERE;
+        if (const auto *slider = m_StatsSliders[slot])
         {
-            if (g_Config.ClientVersion >= CV_70160)
+            if (m_StatPointsStatus != nullptr)
             {
-                ShuffleStats(serial - ID_SPS_STATS_SPHERE, 90, 60);
+                UpdateStatPoints(slot, slider->Value);
             }
             else
             {
-                ShuffleStats(serial - ID_SPS_STATS_SPHERE, 80, 60);
+                ShuffleStats(slot, StartingStatBudget(), StartingStatMaximum());
             }
-        }
-        else
-        {
-            ShuffleStats(serial - ID_SPS_STATS_SPHERE, 65, 45);
         }
     }
 
     //Skills
-    if (serial >= ID_SPS_SKILLS_SPHERE && (int)serial < ID_SPS_SKILLS_SPHERE + skillsCount)
+    if (serial >= ID_SPS_SKILLS_SPHERE &&
+        (int)serial < ID_SPS_SKILLS_SPHERE + StartingSkillSlots())
     {
-        ShuffleSkills(serial - ID_SPS_SKILLS_SPHERE);
+        const int slot = serial - ID_SPS_SKILLS_SPHERE;
+        if (const auto *slider = m_SkillsSliders[slot])
+        {
+            UpdateSkillPoints(slot, slider->Value);
+        }
     }
 }
 
@@ -1592,115 +1605,38 @@ void CGumpScreenSelectProfession::ShuffleStats(int id, int maxSum, int maxVal)
     profession->Int = stats[2];
 }
 
-void CGumpScreenSelectProfession::ShuffleSkills(int id)
+void CGumpScreenSelectProfession::StepStatPoints(int slot, int direction)
 {
-    CProfession *profession = (CProfession *)g_ProfessionManager.Selected;
-    int skills[4] = {
-        m_SkillsSliders[0]->Value, m_SkillsSliders[1]->Value, m_SkillsSliders[2]->Value, 0
-    };
-
-    int used_skill = id;
-    int others_skills[3] = { 0 };
-
-    others_skills[0] = 0;
-
-    if (others_skills[0] == used_skill)
+    if (const auto *slider = m_StatsSliders[slot])
     {
-        others_skills[0]++;
+        UpdateStatPoints(slot, slider->Value + direction);
+    }
+}
+
+void CGumpScreenSelectProfession::UpdateStatPoints(int slot, int value)
+{
+    auto *profession = (CProfession *)g_ProfessionManager.Selected;
+    profession->AllocateStatPoints(slot, value, StartingStatBudget(), StartingStatMaximum());
+    const int stats[] = { profession->Str, profession->Dex, profession->Int };
+    SetPointSliderValue(*m_StatsSliders[slot], stats[slot]);
+    UpdateAllocationStatus(*profession);
+    WantRedraw = true;
+}
+
+void CGumpScreenSelectProfession::UpdateSkillPoints(int slot, int value)
+{
+    auto *slider = m_SkillsSliders[slot];
+    if (slider == nullptr)
+    {
+        return;
     }
 
-    others_skills[1] = others_skills[0] + 1;
-
-    if (others_skills[1] == used_skill)
+    auto *profession = (CProfession *)g_ProfessionManager.Selected;
+    profession->AllocateSkillPoints(slot, value, StartingSkillSlots());
+    SetPointSliderValue(*slider, profession->GetSkillValue(slot));
+    if (m_SkillPointsStatus != nullptr)
     {
-        others_skills[1]++;
+        UpdateAllocationStatus(*profession);
     }
-
-    others_skills[2] = others_skills[1] + 1;
-
-    if (others_skills[2] == used_skill)
-    {
-        others_skills[2]++;
-
-        if (others_skills[2] == 5)
-        {
-            others_skills[2] = 0;
-        }
-    }
-
-    int skillsCount = 3;
-    bool use4Skill = false;
-
-    if (g_Config.ClientVersion >= CV_70160)
-    {
-        use4Skill = true;
-        skillsCount++;
-        skills[3] = m_SkillsSliders[3]->Value;
-    }
-
-    skills[used_skill] = m_SkillsSliders[id]->Value;
-
-    int skills_sum = 100 - (skills[0] + skills[1] + skills[2] + skills[3]);
-
-    if (skills_sum > 0) //skill will decrease
-    {
-        while (skills_sum > 0)
-        {
-            if (skills[others_skills[0]] < 50)
-            {
-                skills_sum--;
-                skills[others_skills[0]]++;
-            }
-            else if (skills[others_skills[1]] < 50)
-            {
-                skills_sum--;
-                skills[others_skills[1]]++;
-            }
-            else if (use4Skill && skills[others_skills[2]] < 50)
-            {
-                skills_sum--;
-                skills[others_skills[2]]++;
-            }
-            else
-            {
-                break;
-            }
-        }
-    }
-    else if (skills_sum < 0) //skill will increase
-    {
-        while (skills_sum < 0)
-        {
-            if (skills[others_skills[0]] > 0)
-            {
-                skills_sum++;
-                skills[others_skills[0]]--;
-            }
-            else if (skills[others_skills[1]] > 0)
-            {
-                skills_sum++;
-                skills[others_skills[1]]--;
-            }
-            else if (use4Skill && skills[others_skills[2]] > 0)
-            {
-                skills_sum++;
-                skills[others_skills[2]]--;
-            }
-            else
-            {
-                break;
-            }
-        }
-    }
-
-    for (int i = 0; i < skillsCount; i++)
-    {
-        m_SkillsSliders[i]->Value = skills[i];
-        m_SkillsSliders[i]->CalculateOffset();
-        m_SkillsSliders[i]->UpdateText();
-    }
-
-    profession->SetSkillValue(0, skills[0]);
-    profession->SetSkillValue(1, skills[1]);
-    profession->SetSkillValue(2, skills[2]);
+    WantRedraw = true;
 }

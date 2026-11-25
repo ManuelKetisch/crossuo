@@ -65,6 +65,7 @@ void complete_node(QUEUE_NODE *node)
             owner.ResultText = node->Command.ResultText;
             owner.ResultList = node->Command.ResultList;
             owner.PointerA = node->Command.PointerA;
+            owner.SharedResult = node->Command.SharedResult;
             // the position getters report Y through IntA (the request slot);
             // no other executor mutates IntA, so copying it back carries the
             // result and leaves the request value intact for every other tag
@@ -235,6 +236,21 @@ bool ScriptQueue_Exec(XA_SCRIPT_COMMAND *command, uint32_t timeoutMs)
         return !cancelled;
     }
     return true;
+}
+
+bool ScriptQueue_ExecCleanup(XA_SCRIPT_COMMAND *command, uint32_t timeoutMs)
+{
+    ScriptCancelCheck savedCheck = s_CancelCheck;
+    ScriptAbortNotify savedAbort = s_CancelAbort;
+    void *savedOpaque = s_CancelOpaque;
+    s_CancelCheck = nullptr;
+    s_CancelAbort = nullptr;
+    s_CancelOpaque = nullptr;
+    const bool ok = ScriptQueue_Exec(command, timeoutMs);
+    s_CancelCheck = savedCheck;
+    s_CancelAbort = savedAbort;
+    s_CancelOpaque = savedOpaque;
+    return ok;
 }
 
 void ScriptQueue_Drain()

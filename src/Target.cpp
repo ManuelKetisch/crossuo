@@ -20,10 +20,35 @@
 #include <core/assistantevents.h> // xuoassist::g_AssistantEvents (the macro-recording notifications)
 #include <config/assistantconfig.h> // xuoassist::EnabledCommandExtendedTargetTile (the tile-hook world gate)
 #include <core/world.h> // ::g_World / ::g_Player (the client world singletons)
+#include <core/targetassist.h>
+#include <core/gameplayfilters.h>
 #include <macros/macroexecutor.h> // xuoassist::g_MacroExecutor (the PlayWaiting tap)
 #include <ctype.h> // tolower (the hook tile-name lowercase)
 #include <xuocore/text_parser.h> // ::TextFileParser (the client token parser)
 #endif
+
+namespace {
+
+void write_object_target(uint8_t *packet, uint32_t serial, const CGameObject *object)
+{
+    pack32(packet + 7, serial);
+    packet[1] = 0;
+    if (object != nullptr)
+    {
+        pack16(packet + 11, object->GetX());
+        pack16(packet + 13, object->GetY());
+        packet[15] = 0xFF;
+        packet[16] = object->GetZ();
+        pack16(packet + 17, object->Graphic);
+    }
+    else
+    {
+        pack32(packet + 11, 0);
+        pack32(packet + 15, 0);
+    }
+}
+
+} // namespace
 
 CTarget g_Target;
 
@@ -39,6 +64,7 @@ void CTarget::Reset()
     // Zero the state
     memset(m_Data, 0, sizeof(m_Data));
     memset(m_LastData, 0, sizeof(m_LastData));
+    m_LastTargetWasSelected = false;
 
     if (m_Multi != nullptr)
     {
@@ -53,6 +79,7 @@ void CTarget::Reset()
     MultiGraphic = 0;
 #if defined(XUO_ASSISTANT)
     m_HookTargeting = false;
+    xuoassist::g_Assistant.HandleScriptPromptTargetCancel();
 #endif
 }
 
@@ -78,6 +105,15 @@ void CTarget::SetLastTargetObject(int serial)
 {
     Type = 0;
     pack32(m_LastData + 7, serial);
+    m_LastTargetWasSelected = false;
+}
+
+void CTarget::RememberTargetObject(const CGameObject &object)
+{
+    memset(m_LastData, 0, sizeof(m_LastData));
+    m_LastData[0] = 0x6C;
+    write_object_target(m_LastData, object.Serial, &object);
+    m_LastTargetWasSelected = true;
 }
 
 bool CTarget::SetData(CDataReader &reader)
@@ -97,6 +133,11 @@ bool CTarget::SetData(CDataReader &reader)
         MultiGraphic = 0;
         ClientWantTarget = true;
         m_CurrentClientTarget.assign(reader.Start, reader.Start + reader.Size);
+
+        if (!FromAssist)
+        {
+            xuoassist::GameplayFilters_ReceiveCursor(CursorID, Type, CursorType);
+        }
 
         bool result = (CheckHook() && !FromAssist);
 
@@ -126,6 +167,24 @@ bool CTarget::SetData(CDataReader &reader)
     Targeting = (CursorType < 3);
     MultiGraphic = 0;
 
+#if defined(XUO_ASSISTANT)
+    if (Targeting && Type == 0 && !FromAssist &&
+        !(g_PartyHelperTimer > g_Ticks && g_PartyHelperTarget != 0))
+    {
+        switch (xuoassist::TargetAssist_TakeQueue())
+        {
+            case xuoassist::TargetAssistSelection::Self:
+                SendTargetObject(g_PlayerSerial);
+                break;
+            case xuoassist::TargetAssistSelection::Last:
+                xuoassist::TargetAssist_SendLast();
+                break;
+            default:
+                break;
+        }
+    }
+#endif
+
     return true;
 }
 
@@ -144,6 +203,11 @@ bool CTarget::SetMultiData(CDataReader &reader)
         m_HookTargeting = (CursorType < 3);
         ClientWantTarget = true;
         m_CurrentClientTarget.assign(reader.Start, reader.Start + reader.Size);
+
+        if (!FromAssist)
+        {
+            xuoassist::GameplayFilters_ReceiveCursor(CursorID, Type, CursorType);
+        }
 
         // the placement graphic (the same offset the client body reads
         // below) is captured before the consume decision
@@ -227,6 +291,8 @@ void CTarget::RequestCursor()
 void CTarget::CancelCursor()
 {
 #if defined(XUO_ASSISTANT)
+    xuoassist::g_Assistant.HandleScriptPromptTargetCancel();
+    xuoassist::GameplayFilters_EndCursor(CursorID);
     memset(m_Data, 0, sizeof(m_Data));
     m_Data[0] = 0x6C;
     m_Data[6] = 3;
@@ -281,25 +347,34 @@ void CTarget::SendTargetObject(int serial)
         return; // No active target cursor in the client - bail out
     }
 
-    // Write the serial of the targeted object, clear the rest
-    pack32(m_Data + 7, serial);
-    m_Data[1] = 0;
+#if defined(XUO_ASSISTANT)
+    if (!FromAssist && xuoassist::g_TargetHandler == nullptr &&
+        (!xuoassist::TargetAssist_AllowObject(CursorType, serial) ||
+         !xuoassist::GameplayFilters_AllowHealTarget(CursorID, serial)))
+    {
+        return;
+    }
+#endif
 
     CGameObject *obj = (g_World != nullptr ? g_World->FindWorldObject(serial) : nullptr);
+    write_object_target(m_Data, serial, obj);
 
-    if (obj != nullptr)
+#if defined(XUO_ASSISTANT)
+    if (xuoassist::g_TargetHandler == nullptr &&
+        xuoassist::g_Assistant.HandleScriptPromptTarget(m_Data))
     {
-        pack16(m_Data + 11, obj->GetX());
-        pack16(m_Data + 13, obj->GetY());
-        m_Data[15] = 0xFF;
-        m_Data[16] = obj->GetZ();
-        pack16(m_Data + 17, obj->Graphic);
+        Type = 0;
+        CursorType = 0;
+        CursorID = 0;
+        FromAssist = false;
+        m_HookTargeting = false;
+        memset(m_Data, 0, sizeof(m_Data));
+        Targeting = false;
+        MultiGraphic = 0;
+        g_MouseManager.CancelDoubleClick = true;
+        return;
     }
-    else
-    {
-        pack32(m_Data + 11, 0);
-        pack32(m_Data + 15, 0);
-    }
+#endif
 
     if (serial != g_PlayerSerial)
     {
@@ -307,6 +382,7 @@ void CTarget::SendTargetObject(int serial)
 
         // Copy for LastTarget
         memcpy(m_LastData, m_Data, sizeof(m_Data));
+        m_LastTargetWasSelected = false;
 
         if (obj != nullptr && obj->NPC && ((CGameCharacter *)obj)->MaxHits == 0)
         {
@@ -336,8 +412,26 @@ void CTarget::SendTargetTile(uint16_t tileID, short x, short y, char z)
     pack16(m_Data + 15, (short)z);
     pack16(m_Data + 17, tileID);
 
+#if defined(XUO_ASSISTANT)
+    if (xuoassist::g_TargetHandler == nullptr &&
+        xuoassist::g_Assistant.HandleScriptPromptTarget(m_Data))
+    {
+        Type = 0;
+        CursorType = 0;
+        CursorID = 0;
+        FromAssist = false;
+        m_HookTargeting = false;
+        memset(m_Data, 0, sizeof(m_Data));
+        Targeting = false;
+        MultiGraphic = 0;
+        g_MouseManager.CancelDoubleClick = true;
+        return;
+    }
+#endif
+
     // Copy for LastTarget
     memcpy(m_LastData, m_Data, sizeof(m_Data));
+    m_LastTargetWasSelected = false;
 
     SendTarget();
 }
@@ -354,7 +448,25 @@ void CTarget::SendCancelTarget()
     pack32(m_Data + 11, 0xFFFFFFFF);
     pack32(m_Data + 15, 0);
 
-    SendTarget();
+#if defined(XUO_ASSISTANT)
+    if (xuoassist::g_TargetHandler == nullptr &&
+        xuoassist::g_Assistant.HandleScriptPromptTargetCancel())
+    {
+        Type = 0;
+        CursorType = 0;
+        CursorID = 0;
+        FromAssist = false;
+        m_HookTargeting = false;
+        memset(m_Data, 0, sizeof(m_Data));
+        Targeting = false;
+        MultiGraphic = 0;
+        g_MouseManager.CancelDoubleClick = true;
+    }
+    else
+#endif
+    {
+        SendTarget();
+    }
 
     if (g_CustomHouseGump != nullptr)
     {
@@ -372,6 +484,36 @@ void CTarget::SendLastTarget()
     {
         return; // No active target cursor in the client - bail out
     }
+
+#if defined(XUO_ASSISTANT)
+    if (!FromAssist && xuoassist::g_TargetHandler == nullptr)
+    {
+        const uint32_t oldSerial = unpack32(m_LastData + 7);
+        const uint32_t serial = xuoassist::TargetAssist_LastObject(CursorType, oldSerial);
+        if (!xuoassist::TargetAssist_AllowLastRange(serial) ||
+            !xuoassist::TargetAssist_AllowObject(CursorType, serial) ||
+            !xuoassist::GameplayFilters_AllowHealTarget(CursorID, serial))
+        {
+            return;
+        }
+
+        if (m_LastTargetWasSelected)
+        {
+            // Replay a selected mobile with the current cursor header and live object data.
+            if (Type <= 1 && MultiGraphic == 0 && g_World != nullptr &&
+                g_World->FindWorldObject(serial) != nullptr)
+            {
+                SendTargetObject(serial);
+            }
+            return;
+        }
+        if (serial != oldSerial)
+        {
+            SendTargetObject(serial);
+            return;
+        }
+    }
+#endif
 
     // Restore the last-target packet
     memcpy(m_Data, m_LastData, sizeof(m_Data));
@@ -416,6 +558,15 @@ void CTarget::SendTarget()
             MultiGraphic = 0;
             m_HookTargeting = false;
             RestoreTarget();
+            consumed = true;
+        }
+        else if (xuoassist::g_Assistant.HandleScriptPromptTarget(m_Data))
+        {
+            Type = 0;
+            CursorType = 0;
+            CursorID = 0;
+            FromAssist = false;
+            m_HookTargeting = false;
             consumed = true;
         }
         else
@@ -468,6 +619,11 @@ void CTarget::SendTarget()
         }
         if (!consumed && !fromAssist)
         {
+            xuoassist::GameplayFilters_EndCursor(CursorID);
+            if (m_Data[1] == 0)
+            {
+                xuoassist::TargetAssist_Record(m_Data[6], unpack32(m_Data + 7));
+            }
             g_Game.Send(m_Data, sizeof(m_Data));
         }
 #else
@@ -959,6 +1115,12 @@ void CTarget::SendHookTargetObject(const uint32_t &serial)
         return;
     }
 
+    if (!xuoassist::GameplayFilters_AllowHealTarget(CursorID, serial))
+    {
+        SendHookCancelTarget();
+        return;
+    }
+    xuoassist::GameplayFilters_EndCursor(CursorID);
     CPacketTargetObject(0, CursorID, CursorType, serial).Send();
     m_HookTargeting = false;
     MultiGraphic = 0;
@@ -972,6 +1134,7 @@ void CTarget::SendHookTargetTile(const uint16_t tileID, const short &x, const sh
         return;
     }
 
+    xuoassist::GameplayFilters_EndCursor(CursorID);
     CPacketTargetTile(1, CursorID, CursorType, tileID, x, y, z).Send();
     m_HookTargeting = false;
     MultiGraphic = 0;
@@ -990,6 +1153,7 @@ void CTarget::SendHookCancelTarget()
         return;
     }
 
+    xuoassist::GameplayFilters_EndCursor(CursorID);
     CPacketTargetCancel(Type, CursorID, CursorType).Send();
     m_HookTargeting = false;
     MultiGraphic = 0;

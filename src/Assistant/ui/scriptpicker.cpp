@@ -142,10 +142,10 @@ void ScriptPicker_RequestLoad()
     s_WebRequestAt = g_Ticks;
     s_LoadPending = true;
 #else
-    static const char *const PATTERNS[] = { "*.js", "*.txt" };
+    static const char *const PATTERNS[] = { "*.js", "*.py", "*.cs", "*.txt" };
     const astr_t dir = ScriptPicker_DefaultDir();
-    const char *picked = tinyfd_openFileDialog("Load script", dir.c_str(), 2, PATTERNS,
-        "Script files", 1);
+    const char *picked = tinyfd_openFileDialog("Load script", dir.c_str(), 4, PATTERNS,
+        "Script files (*.js, *.py, *.cs, *.txt)", 1);
     if (picked == nullptr || picked[0] == 0)
     {
         // the user cancelled (headless runs never reach the picker)
@@ -205,10 +205,10 @@ bool ScriptPicker_SaveAs(const astr_t &suggestedPath, astr_t &outPath, bool &fai
     }
     return true;
 #else
-    static const char *const PATTERNS[] = { "*.js" };
+    static const char *const PATTERNS[] = { "*.js", "*.py", "*.cs" };
     const char *picked = tinyfd_saveFileDialog("Save script as",
-        suggestedPath.empty() ? ScriptPicker_DefaultDir().c_str() : suggestedPath.c_str(), 1,
-        PATTERNS, "Script files");
+        suggestedPath.empty() ? ScriptPicker_DefaultDir().c_str() : suggestedPath.c_str(), 3,
+        PATTERNS, "Script files (*.js, *.py, *.cs)");
     if (picked == nullptr || picked[0] == 0)
     {
         return false;

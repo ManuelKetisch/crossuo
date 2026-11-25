@@ -17,8 +17,12 @@
 #include "SDL_wrapper.h"
 
 #include "../config/assistantconfig.h"
+#include "../compat/razorhotkeys.h"
 #include "actions.h"
+#include "assist.h"
 #include "assistantevents.h"
+#include "dressagent.h"
+#include "textcommandmanager.h"
 #include "../macros/macroexecutor.h"
 #include "../script/scriptlist.h" // g_LoadedScripts (HT_SCRIPT resolves a loaded script)
 #include "../script/scripthandle.h" // ScriptManager_PlayFile/RunningFile (the Scripts-tab Play path)
@@ -488,6 +492,7 @@ bool CHotkeys::MatchAndUse(uint32_t key, uint8_t modifiers)
     // gates everything but HT_TOGGLE_HOTKEYS.
     const vector<CHotkeyEntry> &hotkeys = g_AssistantConfig.m_Hotkeys;
     bool matched = false;
+    bool passToGame = false;
     for (const CHotkeyEntry &entry : hotkeys)
     {
         if (entry.Key != key || entry.Modifiers != modifiers)
@@ -495,8 +500,14 @@ bool CHotkeys::MatchAndUse(uint32_t key, uint8_t modifiers)
             continue;
         }
 
-        matched = true;
         const uint32_t type = entry.Type;
+        if (entry.PassMode != HotkeyPassMode::Inherit && type != HT_TOGGLE_HOTKEYS &&
+            !g_AssistantConfig.OnOffHotkeys())
+        {
+            return false;
+        }
+        matched = true;
+        passToGame = entry.PassesToGame(g_AssistantConfig.PassHotkeys());
         const uint32_t action = entry.Action;
         if (type == HT_TOGGLE_HOTKEYS)
         {
@@ -560,8 +571,162 @@ bool CHotkeys::MatchAndUse(uint32_t key, uint8_t modifiers)
     {
         return false;
     }
-    // "Pass keys to client": a matched binding is consumed unless checked
-    return !g_AssistantConfig.PassHotkeys();
+    return !passToGame;
+}
+
+namespace {
+
+bool razor_action_entry(unsigned loc, CHotkeyEntry &entry)
+{
+    const auto *action = FindRazorHotkey(loc);
+    if (action == nullptr)
+    {
+        return false;
+    }
+    switch (action->Group)
+    {
+        case RazorHotkeyGroup::Targeting: entry.Type = HT_TARGETING; break;
+        case RazorHotkeyGroup::Attack: entry.Type = HT_ATTACK; break;
+        case RazorHotkeyGroup::BandageHealing: entry.Type = HT_BANDAGE_HEALING; break;
+        case RazorHotkeyGroup::UseObject: entry.Type = HT_USE_OBJECT; break;
+        case RazorHotkeyGroup::AllNames: entry.Type = HT_ALLNAMES; break;
+        case RazorHotkeyGroup::CastSpell: entry.Type = HT_CAST; break;
+        case RazorHotkeyGroup::UseSkill: entry.Type = HT_USE_SKILL; break;
+        case RazorHotkeyGroup::NewTargetSystem: entry.Type = HT_NEW_TARGETING_SYSTEM_SET; break;
+        case RazorHotkeyGroup::ToggleHotkeys: entry.Type = HT_TOGGLE_HOTKEYS; break;
+        case RazorHotkeyGroup::ToggleMap: entry.Type = HT_TOGGLE_MAP; break;
+        case RazorHotkeyGroup::StopMacro: entry.Type = HT_STOP_MACRO; break;
+        case RazorHotkeyGroup::InventoryAgent:
+            entry.Type = HT_INVENTORY_AGENT;
+            if (action->Action >= 2 && action->Action <= 5)
+            {
+                static const char *const AGENT_NAMES[] = { "Use Once", "Scavenger", "Organizer", "Restock" };
+                entry.Action = 2;
+                entry.ScriptOrMacroName = AGENT_NAMES[action->Action - 2];
+                return true;
+            }
+            break;
+        case RazorHotkeyGroup::ClientAction:
+        {
+            if (action->Action != 0)
+            {
+                return false;
+            }
+            const astr_t &prefix = g_AssistantConfig.CommandPrefix();
+            entry.Type = HT_EXTERNAL_CODE;
+            entry.Action = 0;
+            entry.ExternalCode = (prefix.empty() ? astr_t("_") : prefix) + "warmode";
+            return true;
+        }
+    }
+    entry.Action = action->Action;
+    return true;
+}
+
+} // namespace
+
+bool RazorHotkeys_BuildBinding(const RazorProfileHotkey &source, CHotkeyEntry &entry)
+{
+    CHotkeyEntry binding;
+    if (source.Modifiers > 7 || !razor_action_entry(source.Id, binding))
+    {
+        return false;
+    }
+    constexpr uint32_t MOUSE_KEYS[] = {
+        MOUSE_WHEEL_SCROLL_UP, MOUSE_WHEEL_SCROLL_DOWN, MOUSE_WHEEL_PRESS, MOUSE_X_UP, MOUSE_X_DOWN,
+    };
+    uint8_t modifiers = HM_NONE;
+    if (source.VirtualKey >= -5 && source.VirtualKey <= -1)
+    {
+        binding.Key = MOUSE_KEYS[-source.VirtualKey - 1];
+        modifiers = source.VirtualKey >= -3 ? HM_MOUSE_WHEEL : HM_MOUSE_X;
+    }
+    else
+    {
+        binding.Key = SDL_GetKeyFromName(RazorHotkeyKeyName(source.VirtualKey).c_str());
+        if (binding.Key == SDLK_UNKNOWN)
+        {
+            return false;
+        }
+        if (source.VirtualKey >= 0x60 && source.VirtualKey <= 0x6F)
+        {
+            modifiers = HM_KEYPAD;
+        }
+    }
+    if (source.Modifiers & 1) modifiers |= HM_ALT;
+    if (source.Modifiers & 2) modifiers |= HM_CTRL;
+    if (source.Modifiers & 4) modifiers |= HM_SHIFT;
+    binding.Modifiers = modifiers;
+    binding.PassMode = source.PassToGame ? HotkeyPassMode::Pass : HotkeyPassMode::Consume;
+    entry = std::move(binding);
+    return true;
+}
+
+bool RazorHotkeys_Execute(unsigned loc)
+{
+    const auto *action = FindRazorHotkey(loc);
+    if (g_World == nullptr || g_Player == nullptr || action == nullptr)
+    {
+        return false;
+    }
+    if (action->Group == RazorHotkeyGroup::StopMacro)
+    {
+        g_MacroExecutor.Stop();
+        return true;
+    }
+    if (action->Group == RazorHotkeyGroup::ToggleHotkeys)
+    {
+        const bool state = !g_AssistantConfig.OnOffHotkeys();
+        if (g_AssistantConfig.m_OnOffHotkeys != state)
+        {
+            g_AssistantConfig.m_OnOffHotkeys = state;
+            g_AssistantConfig.SaveMainOptions();
+        }
+        if (g_AssistantEvents != nullptr)
+        {
+            g_AssistantEvents->OnClientPrint(
+                state ? "Hotkeys now is enabled" : "Hotkeys now is disabled");
+        }
+        return true;
+    }
+    if (action->Group == RazorHotkeyGroup::ClientAction)
+    {
+        if (action->Action == 0)
+        {
+            g_TextCommandManager.DoCommand("warmode");
+            return true;
+        }
+        if (action->Action == 1)
+        {
+            g_DressAgent.Undress();
+            return true;
+        }
+        if (action->Action == 2)
+        {
+            g_DressAgent.Disarm();
+            return true;
+        }
+        if (action->Action >= 3 && action->Action <= 6)
+        {
+            const int layer = (action->Action == 3 || action->Action == 6) ? 2 : 1;
+            CGameItem *item = g_Player->FindLayer(layer);
+            if (item != nullptr && g_LayerSafe[layer])
+            {
+                g_MoveItemData.Reset();
+                g_MoveItemData.Container = g_Backpack;
+                g_Assistant.MoveItem(item);
+            }
+            return true;
+        }
+        return false;
+    }
+    CHotkeyEntry entry;
+    if (!razor_action_entry(loc, entry))
+    {
+        return false;
+    }
+    Actions_Execute(entry);
+    return true;
 }
 
 int CHotkeys::FindDuplicate(uint32_t key, uint8_t modifiers, int skipRow) const

@@ -6,6 +6,7 @@
 #include "../Sprite.h"
 #include "../Point.h"
 #include "../Managers/ColorManager.h"
+#include "../Managers/MouseManager.h"
 #include "../Renderer/RenderAPI.h"
 #include "../Utility/PerfMarker.h"
 #include "xuocore/enumlist.h"
@@ -64,7 +65,16 @@ void CGUIDrawObject::Draw(bool checktrans)
             Warning(Renderer, "ITEM gumpic graphic=%u tex=%u at=(%d,%d) size=(%ux%u)",
                      GetDrawGraphic(), spr->Texture->Texture, m_X, m_Y, spr->Width, spr->Height);
         }
-        spr->Texture->Draw(m_X, m_Y, checktrans);
+        if (Mirrored)
+        {
+            DrawQuadCmd quad{ spr->Texture->Texture, m_X, m_Y, spr->Texture->Width, spr->Texture->Height };
+            quad.mirrored = true;
+            RenderAdd_DrawQuad(g_renderCmdList, quad);
+        }
+        else
+        {
+            spr->Texture->Draw(m_X, m_Y, checktrans);
+        }
     }
     else
     {
@@ -81,6 +91,11 @@ bool CGUIDrawObject::Select()
     auto *spr = g_Game.ExecuteGump(Graphic);
     if (spr != nullptr)
     {
+        if (Mirrored)
+        {
+            const int localX = g_MouseManager.Position.X - m_X;
+            return spr->TestHit(spr->Width - 1 - localX, g_MouseManager.Position.Y - m_Y, !BoundingBoxCheck);
+        }
         return spr->Select(m_X, m_Y, !BoundingBoxCheck);
     }
     return false;

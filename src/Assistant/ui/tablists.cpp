@@ -14,9 +14,19 @@
 #include "widgets.h"
 #include "assistanteventsui.h"
 #include "../config/assistantconfig.h"
+#include "../config/configio.h"
 #include "../core/assist.h"
 #include "../core/assistantevents.h"
 #include "../core/global.h"
+#include "../core/targetassist_rules.h"
+
+#include <array>
+#include <cstdio>
+#include <memory>
+
+#if !defined(XUO_EMSC)
+#include <external/tinyfiledialogs.h>
+#endif
 
 namespace xuoassist {
 
@@ -35,9 +45,9 @@ static void IgnoreSetNameOf(CIgnoreListEntry &e, const char *n) { e.Name = n; }
 static const char *WorldObjectNameOf(const CWorldObjectEntry &e) { return e.Name.c_str(); }
 static void WorldObjectSetNameOf(CWorldObjectEntry &e, const char *n) { e.Name = n; }
 
-const ImVec4 HINT_COLOR = ImVec4(0.9f, 0.3f, 0.3f, 1.0f);
-const ImVec4 DRESS_BAG_SET = ImVec4(0.0f, 170.0f / 255.0f, 0.0f, 1.0f);     // rgb(0,170,0)
-const ImVec4 DRESS_BAG_UNSET = ImVec4(170.0f / 255.0f, 0.0f, 0.0f, 1.0f);   // rgb(170,0,0)
+const ImVec4 HINT_COLOR = ImVec4(1.0f, 0.45f, 0.42f, 1.0f);
+const ImVec4 DRESS_BAG_SET = ImVec4(0.35f, 0.85f, 0.45f, 1.0f);
+const ImVec4 DRESS_BAG_UNSET = ImVec4(0.95f, 0.42f, 0.40f, 1.0f);
 
 // case-insensitive name collision check
 bool name_in_use(const vector<CTypeEntry> &items, const char *name, int skip)
@@ -118,7 +128,7 @@ void draw_types_tab()
     }
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##types_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##types_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##types", items, &selected, &TypeNameOf, &TypeSetNameOf, false, -1.0f);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -242,7 +252,7 @@ void draw_objects_tab()
     }
 
     // the list pane left, the editor fields right
-    ImGui::BeginChild("##objects_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##objects_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##objects", items, &selected, &ObjectNameOf, &ObjectSetNameOf, false, -1.0f);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -386,7 +396,7 @@ void draw_find_tab()
     // content (Graphic/Color/Comment rows)
     const int listButtons = ListButtons("find_list");
 
-    ImGui::BeginChild("##find_lists_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##find_lists_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##find", lists, &selectedList, &FindNameOf, &FindSetNameOf, false, -1.0f);
     if (selectedList != lastSelectedList)
     {
@@ -591,7 +601,7 @@ void draw_ignore_tab()
 
     const int listButtons = ListButtons("ignore_list");
 
-    ImGui::BeginChild("##ignore_lists_pane", ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##ignore_lists_pane", ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     bool changed = NameList("##ignore", lists, &selectedList, &IgnoreNameOf, &IgnoreSetNameOf, false, -1.0f);
     if (selectedList != lastSelectedList)
     {
@@ -826,7 +836,7 @@ void draw_world_object_tab(
     snprintf(paneId, sizeof(paneId), "%s_pane", listId);
     char formId[48];
     snprintf(formId, sizeof(formId), "%s_form", listId);
-    ImGui::BeginChild(paneId, ImVec2(100.0f, 0.0f), ImGuiChildFlags_None);
+    ImGui::BeginChild(paneId, ImVec2(170.0f, 0.0f), ImGuiChildFlags_None);
     changed = NameList(listId, items, selected, &WorldObjectNameOf, &WorldObjectSetNameOf, checkColumn, -1.0f);
     ImGui::EndChild();
     ImGui::SameLine();
@@ -906,6 +916,499 @@ void draw_world_object_tab(
     ImGui::EndChild();
 }
 
+struct FriendGroupsState
+{
+    astr_t ProfileKey;
+    std::vector<FriendGroupRecord> Groups;
+    int SelectedGroup = -1;
+    std::array<char, FriendGroupMaxNameLength + 1> GroupName{};
+    std::array<char, FriendGroupMaxNameLength + 1> GuildName{};
+    int ExportFormat = 0; // 0 = JSON, 1 = INI
+    bool ApplyAfterImport = false;
+    std::array<char, 32768> ExchangeText{};
+    astr_t Status;
+};
+
+FriendGroupsState s_FriendGroups;
+
+int find_friend_group(const std::string &name)
+{
+    const std::string key = TargetRules_ToLower(TargetRules_Trim(name));
+    for (size_t i = 0; i < s_FriendGroups.Groups.size(); ++i)
+    {
+        if (TargetRules_ToLower(s_FriendGroups.Groups[i].Name) == key)
+        {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool save_friend_groups()
+{
+    g_AssistantConfig.EnsureDirectories();
+    const std::string text = FriendRules_ExportIni(s_FriendGroups.Groups);
+    return AtomicFileWrite(
+        fs_path_join(g_AssistantConfig.GetProfilePath(), "FriendGroups.ini"),
+        text.data(),
+        text.size());
+}
+
+void sync_friend_group_fields()
+{
+    if (s_FriendGroups.SelectedGroup >= 0 &&
+        s_FriendGroups.SelectedGroup < static_cast<int>(s_FriendGroups.Groups.size()))
+    {
+        std::snprintf(
+            s_FriendGroups.GroupName.data(),
+            s_FriendGroups.GroupName.size(),
+            "%s",
+            s_FriendGroups.Groups[s_FriendGroups.SelectedGroup].Name.c_str());
+    }
+    else
+    {
+        s_FriendGroups.GroupName[0] = '\0';
+    }
+}
+
+void load_friend_groups_for_profile()
+{
+    const fs_path path = g_AssistantConfig.GetProfilePath();
+    const astr_t key = fs_path_str(path);
+    if (key == s_FriendGroups.ProfileKey)
+    {
+        return;
+    }
+
+    s_FriendGroups.ProfileKey = key;
+    s_FriendGroups.Groups.clear();
+    s_FriendGroups.SelectedGroup = -1;
+    s_FriendGroups.GroupName[0] = '\0';
+    s_FriendGroups.GuildName[0] = '\0';
+    s_FriendGroups.Status.clear();
+
+    const fs_path filePath = fs_path_join(path, "FriendGroups.ini");
+    if (fs_path_is_file(filePath))
+    {
+        const std::unique_ptr<FILE, decltype(&fs_close)> file(fs_open(filePath, FS_READ), fs_close);
+        if (file && std::fseek(file.get(), 0, SEEK_END) == 0)
+        {
+            const long bytes = std::ftell(file.get());
+            if (bytes > 0 && bytes <= static_cast<long>(FriendGroupMaxImportBytes) &&
+                std::fseek(file.get(), 0, SEEK_SET) == 0)
+            {
+                std::string content(static_cast<size_t>(bytes), '\0');
+                if (std::fread(&content[0], 1, content.size(), file.get()) == content.size())
+                {
+                    const auto parsed = FriendRules_ParseImport(content, "Default");
+                    if (parsed.Ok)
+                    {
+                        s_FriendGroups.Groups = parsed.Groups;
+                    }
+                }
+            }
+        }
+    }
+    if (!s_FriendGroups.Groups.empty())
+    {
+        s_FriendGroups.SelectedGroup = 0;
+        sync_friend_group_fields();
+    }
+}
+
+void apply_friend_group_to_active(const FriendGroupRecord &group)
+{
+    g_AssistantConfig.m_Friends.clear();
+    for (const auto &player : group.Players)
+    {
+        CWorldObjectEntry entry;
+        entry.Serial = player.Serial;
+        entry.Name = player.Name;
+        entry.Enabled = player.Enabled;
+        g_AssistantConfig.m_Friends.push_back(std::move(entry));
+    }
+    g_AssistantConfig.m_FeelPartyMembersAsFriends = group.IncludeParty;
+    g_AssistantConfig.SaveFriends();
+}
+
+void capture_active_friends_into_group(FriendGroupRecord &group)
+{
+    group.Players.clear();
+    for (const auto &entry : g_AssistantConfig.m_Friends)
+    {
+        if (entry.Serial == 0)
+        {
+            continue;
+        }
+        FriendPlayerRecord rec;
+        rec.Serial = entry.Serial;
+        rec.Name = FriendRules_SanitizeName(entry.Name);
+        if (rec.Name.empty())
+        {
+            rec.Name = FriendRules_FormatSerial(entry.Serial);
+        }
+        rec.Enabled = entry.Enabled;
+        group.Players.push_back(std::move(rec));
+    }
+    group.IncludeParty = g_AssistantConfig.m_FeelPartyMembersAsFriends;
+}
+
+void import_friend_groups_from_text(const std::string &input)
+{
+    const std::string fallback =
+        (s_FriendGroups.SelectedGroup >= 0 &&
+            s_FriendGroups.SelectedGroup < static_cast<int>(s_FriendGroups.Groups.size())) ?
+        s_FriendGroups.Groups[s_FriendGroups.SelectedGroup].Name :
+        "Imported";
+    const auto parsed = FriendRules_ParseImport(input, fallback);
+    if (!parsed.Ok)
+    {
+        s_FriendGroups.Status = "Could not import friend list: " + parsed.Error;
+        return;
+    }
+
+    auto updated = s_FriendGroups.Groups;
+    size_t importedPlayers = 0;
+    size_t importedGroups = 0;
+    for (const auto &incoming : parsed.Groups)
+    {
+        int existingIdx = -1;
+        const std::string key = TargetRules_ToLower(incoming.Name);
+        for (size_t i = 0; i < updated.size(); ++i)
+        {
+            if (TargetRules_ToLower(updated[i].Name) == key)
+            {
+                existingIdx = static_cast<int>(i);
+                break;
+            }
+        }
+        if (existingIdx < 0)
+        {
+            if (updated.size() >= FriendGroupMaxGroups)
+            {
+                continue;
+            }
+            updated.push_back(incoming);
+            importedPlayers += incoming.Players.size();
+            ++importedGroups;
+        }
+        else
+        {
+            auto &target = updated[existingIdx];
+            target.IncludeParty = incoming.IncludeParty;
+            for (const auto &p : incoming.Players)
+            {
+                bool found = false;
+                for (auto &ep : target.Players)
+                {
+                    if (ep.Serial == p.Serial)
+                    {
+                        ep.Name = p.Name;
+                        ep.Enabled = p.Enabled;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found && target.Players.size() < FriendGroupMaxEntriesPerGroup)
+                {
+                    target.Players.push_back(p);
+                }
+                ++importedPlayers;
+            }
+            for (const auto &g : incoming.Guilds)
+            {
+                bool found = false;
+                const std::string gKey = TargetRules_ToLower(g.Name);
+                for (auto &eg : target.Guilds)
+                {
+                    if (TargetRules_ToLower(eg.Name) == gKey)
+                    {
+                        eg.Enabled = g.Enabled;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found && target.Guilds.size() < FriendGroupMaxEntriesPerGroup)
+                {
+                    target.Guilds.push_back(g);
+                }
+            }
+            ++importedGroups;
+        }
+    }
+
+    auto backup = s_FriendGroups.Groups;
+    s_FriendGroups.Groups = std::move(updated);
+    if (!save_friend_groups())
+    {
+        s_FriendGroups.Groups = std::move(backup);
+        s_FriendGroups.Status = "Could not save imported friend groups.";
+        return;
+    }
+
+    if (!parsed.Groups.empty())
+    {
+        const int idx = find_friend_group(parsed.Groups.front().Name);
+        if (idx >= 0)
+        {
+            s_FriendGroups.SelectedGroup = idx;
+            sync_friend_group_fields();
+            if (s_FriendGroups.ApplyAfterImport)
+            {
+                apply_friend_group_to_active(s_FriendGroups.Groups[idx]);
+            }
+        }
+    }
+
+    char msg[160];
+    if (parsed.SkippedEntries > 0)
+    {
+        std::snprintf(msg, sizeof(msg), "Imported %zu friends across %zu groups (%zu skipped).",
+            importedPlayers, importedGroups, parsed.SkippedEntries);
+    }
+    else
+    {
+        std::snprintf(msg, sizeof(msg), "Imported %zu friends across %zu groups.",
+            importedPlayers, importedGroups);
+    }
+    s_FriendGroups.Status = msg;
+}
+
+void draw_friend_groups_page()
+{
+    load_friend_groups_for_profile();
+
+    const char *currentGroup =
+        (s_FriendGroups.SelectedGroup >= 0 &&
+            s_FriendGroups.SelectedGroup < static_cast<int>(s_FriendGroups.Groups.size())) ?
+        s_FriendGroups.Groups[s_FriendGroups.SelectedGroup].Name.c_str() :
+        "No group selected";
+
+    if (ImGui::BeginCombo("Friend group", currentGroup))
+    {
+        for (size_t i = 0; i < s_FriendGroups.Groups.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            const bool isSel = (s_FriendGroups.SelectedGroup == static_cast<int>(i));
+            if (ImGui::Selectable(s_FriendGroups.Groups[i].Name.c_str(), isSel))
+            {
+                s_FriendGroups.SelectedGroup = static_cast<int>(i);
+                sync_friend_group_fields();
+                s_FriendGroups.Status.clear();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::InputText("Group name", s_FriendGroups.GroupName.data(), s_FriendGroups.GroupName.size());
+
+    if (ImGui::Button("Create from active list"))
+    {
+        const std::string name = FriendRules_SanitizeName(s_FriendGroups.GroupName.data());
+        if (name.empty())
+        {
+            s_FriendGroups.Status = "Enter a group name.";
+        }
+        else if (find_friend_group(name) >= 0)
+        {
+            s_FriendGroups.Status = "A friend group with that name already exists.";
+        }
+        else if (s_FriendGroups.Groups.size() >= FriendGroupMaxGroups)
+        {
+            s_FriendGroups.Status = "Remove a friend group before adding another.";
+        }
+        else
+        {
+            FriendGroupRecord rec;
+            rec.Name = name;
+            capture_active_friends_into_group(rec);
+            s_FriendGroups.Groups.push_back(std::move(rec));
+            if (save_friend_groups())
+            {
+                s_FriendGroups.SelectedGroup = static_cast<int>(s_FriendGroups.Groups.size()) - 1;
+                sync_friend_group_fields();
+                s_FriendGroups.Status = "Friend group created.";
+            }
+            else
+            {
+                s_FriendGroups.Groups.pop_back();
+                s_FriendGroups.Status = "Could not save friend groups.";
+            }
+        }
+    }
+
+    const bool hasGroup = s_FriendGroups.SelectedGroup >= 0 &&
+        s_FriendGroups.SelectedGroup < static_cast<int>(s_FriendGroups.Groups.size());
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!hasGroup);
+    if (ImGui::Button("Load into active list"))
+    {
+        apply_friend_group_to_active(s_FriendGroups.Groups[s_FriendGroups.SelectedGroup]);
+        s_FriendGroups.Status = "Loaded group into active friends list.";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Update from active list"))
+    {
+        auto &group = s_FriendGroups.Groups[s_FriendGroups.SelectedGroup];
+        auto backup = group;
+        capture_active_friends_into_group(group);
+        if (save_friend_groups())
+        {
+            s_FriendGroups.Status = "Saved active friends list into group.";
+        }
+        else
+        {
+            group = std::move(backup);
+            s_FriendGroups.Status = "Could not save friend groups.";
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete group"))
+    {
+        auto backup = s_FriendGroups.Groups;
+        s_FriendGroups.Groups.erase(s_FriendGroups.Groups.begin() + s_FriendGroups.SelectedGroup);
+        if (save_friend_groups())
+        {
+            s_FriendGroups.SelectedGroup = s_FriendGroups.Groups.empty() ? -1 : 0;
+            sync_friend_group_fields();
+            s_FriendGroups.Status = "Friend group removed.";
+        }
+        else
+        {
+            s_FriendGroups.Groups = std::move(backup);
+            s_FriendGroups.Status = "Could not save friend groups.";
+        }
+    }
+    ImGui::EndDisabled();
+
+    if (hasGroup)
+    {
+        auto &group = s_FriendGroups.Groups[s_FriendGroups.SelectedGroup];
+        ImGui::TextDisabled("%zu players, %zu guilds in this group.",
+            group.Players.size(), group.Guilds.size());
+        bool includeParty = group.IncludeParty;
+        if (ImGui::Checkbox("Include party members in this group", &includeParty))
+        {
+            group.IncludeParty = includeParty;
+            save_friend_groups();
+        }
+    }
+
+    ImGui::SeparatorText("Import and export");
+    ImGui::Combo("Export format", &s_FriendGroups.ExportFormat, "Razor Enhanced JSON\0Text (INI)\0");
+    ImGui::Checkbox("Apply first imported group to active friends list", &s_FriendGroups.ApplyAfterImport);
+
+    auto build_export = [&](bool allGroups) -> std::string {
+        std::vector<FriendGroupRecord> payload;
+        if (allGroups && !s_FriendGroups.Groups.empty())
+        {
+            payload = s_FriendGroups.Groups;
+        }
+        else if (hasGroup)
+        {
+            payload.push_back(s_FriendGroups.Groups[s_FriendGroups.SelectedGroup]);
+        }
+        else
+        {
+            FriendGroupRecord active;
+            active.Name = "Friends";
+            capture_active_friends_into_group(active);
+            payload.push_back(std::move(active));
+        }
+        return s_FriendGroups.ExportFormat == 0 ?
+            FriendRules_ExportJson(payload) :
+            FriendRules_ExportIni(payload);
+    };
+
+    if (ImGui::Button("Prepare export text"))
+    {
+        const std::string exported = build_export(true);
+        std::snprintf(s_FriendGroups.ExchangeText.data(), s_FriendGroups.ExchangeText.size(), "%s", exported.c_str());
+        s_FriendGroups.Status = "Export text ready below.";
+    }
+#if !defined(XUO_EMSC)
+    ImGui::SameLine();
+    if (ImGui::Button("Export to file..."))
+    {
+        const bool isJson = (s_FriendGroups.ExportFormat == 0);
+        const char *patterns[] = { isJson ? "*.json" : "*.ini" };
+        const char *defaultName = isJson ? "friends.json" : "friends.ini";
+        const char *picked = tinyfd_saveFileDialog(
+            "Export friend groups", defaultName, 1, patterns,
+            isJson ? "Friend group JSON" : "Friend group INI");
+        if (picked != nullptr)
+        {
+            const std::string exported = build_export(true);
+            if (AtomicFileWrite(fs_path_from(picked), exported.data(), exported.size()))
+            {
+                std::snprintf(s_FriendGroups.ExchangeText.data(), s_FriendGroups.ExchangeText.size(), "%s", exported.c_str());
+                s_FriendGroups.Status = "Friend groups exported.";
+            }
+            else
+            {
+                s_FriendGroups.Status = "Could not write the export file.";
+            }
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Import from file..."))
+    {
+        static const char *PATTERNS[] = { "*.json", "*.ini", "*.txt", "*.FRIENDS_PLAYERS", "*.FRIENDS_LISTS" };
+        const char *picked = tinyfd_openFileDialog(
+            "Import friend list", "", IM_ARRAYSIZE(PATTERNS), PATTERNS, "Friend list file", 0);
+        if (picked != nullptr)
+        {
+            const fs_path filePath = fs_path_from(picked);
+            const std::unique_ptr<FILE, decltype(&fs_close)> file(fs_open(filePath, FS_READ), fs_close);
+            if (!file || std::fseek(file.get(), 0, SEEK_END) != 0)
+            {
+                s_FriendGroups.Status = "Could not open the selected file.";
+            }
+            else
+            {
+                const long bytes = std::ftell(file.get());
+                if (bytes < 0 || bytes > static_cast<long>(FriendGroupMaxImportBytes) ||
+                    std::fseek(file.get(), 0, SEEK_SET) != 0)
+                {
+                    s_FriendGroups.Status = "Choose a readable file of up to 256 KiB.";
+                }
+                else
+                {
+                    std::string content(static_cast<size_t>(bytes), '\0');
+                    if (content.empty() || std::fread(&content[0], 1, content.size(), file.get()) == content.size())
+                    {
+                        import_friend_groups_from_text(content);
+                    }
+                    else
+                    {
+                        s_FriendGroups.Status = "Could not read the selected file.";
+                    }
+                }
+            }
+        }
+    }
+#endif
+    ImGui::SameLine();
+    if (ImGui::Button("Import from text"))
+    {
+        import_friend_groups_from_text(s_FriendGroups.ExchangeText.data());
+    }
+
+    ImGui::TextDisabled("Accepts Razor Enhanced JSON, CrossUO INI, or plain serial/name lines.");
+    ImGui::InputTextMultiline(
+        "##friend_exchange_text",
+        s_FriendGroups.ExchangeText.data(),
+        s_FriendGroups.ExchangeText.size(),
+        ImVec2(-1.0f, 120.0f));
+
+    if (!s_FriendGroups.Status.empty())
+    {
+        ImGui::TextWrapped("%s", s_FriendGroups.Status.c_str());
+    }
+}
+
 void draw_friends_tab()
 {
     static int selected = -1;
@@ -916,18 +1419,31 @@ void draw_friends_tab()
     static bool &ftPending = s_FtPending[4];
     static uint32_t ftGeneration = 0;
 
-    bool changed = false;
-    draw_world_object_tab(
-        "##friends", g_AssistantConfig.m_Friends, true, &selected, &lastSelected,
-        name, sizeof(name), serial, sizeof(serial), hint, changed,
-        XA_FROM_TARGET_FRIEND, ftPending, ftGeneration);
-    if (changed)
+    if (ImGui::BeginTabBar("##friends_subtabs", ImGuiTabBarFlags_None))
     {
-        g_AssistantConfig.SaveFriends();
-    }
-    if (ImGui::Checkbox("Party members as friends", &g_AssistantConfig.m_FeelPartyMembersAsFriends))
-    {
-        g_AssistantConfig.SaveFriends(); // the attribute rides Friends.ini
+        if (ImGui::BeginTabItem("Active friends"))
+        {
+            if (ImGui::Checkbox("Party members as friends", &g_AssistantConfig.m_FeelPartyMembersAsFriends))
+            {
+                g_AssistantConfig.SaveFriends(); // the attribute rides Friends.ini
+            }
+            bool changed = false;
+            draw_world_object_tab(
+                "##friends", g_AssistantConfig.m_Friends, true, &selected, &lastSelected,
+                name, sizeof(name), serial, sizeof(serial), hint, changed,
+                XA_FROM_TARGET_FRIEND, ftPending, ftGeneration);
+            if (changed)
+            {
+                g_AssistantConfig.SaveFriends();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Groups & Import/Export"))
+        {
+            draw_friend_groups_page();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
 }
 

@@ -3,6 +3,7 @@
 
 #include "ScreenshotBuilder.h"
 #include "GameWindow.h"
+#include <algorithm>
 #include <cstdint>
 #include <xuocore/uodata.h>
 #include <time.h>
@@ -22,15 +23,14 @@ CScreenshotBuilder g_ScreenshotBuilder;
 
 void CScreenshotBuilder::GetScenePixels(int x, int y, int width, int height)
 {
-    m_Pixels.resize(width * height);
+    m_Pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height));
     m_Width = width;
     m_Height = height;
 
-    m_WaitingForGPUData = true;
     const auto windowSize = g_GameWindow.GetSize();
     auto window_width = uint32_t(windowSize.Width);
     auto window_height = uint32_t(windowSize.Height);
-    RenderAdd_GetFrameBufferPixels(
+    m_WaitingForGPUData = RenderAdd_GetFrameBufferPixels(
         g_renderCmdList,
         GetFrameBufferPixelsCmd{ x,
                                  y,
@@ -59,22 +59,30 @@ void CScreenshotBuilder::SaveScreen()
 
 void CScreenshotBuilder::WritePixelsToDisk()
 {
-    auto path = ExeFilePath("screenshots");
-    fs_path_create(path);
+    const auto directory = m_Directory;
+    fs_path_create(directory);
 
     auto t = time(nullptr);
     auto now = *localtime(&t);
     char buf[100]{};
     sprintf_s(
         buf,
-        "%d%d%d_%d%d%d",
+        "%04d%02d%02d_%02d%02d%02d",
         now.tm_year + 1900,
-        now.tm_mon,
+        now.tm_mon + 1,
         now.tm_mday,
         now.tm_hour,
         now.tm_min,
         now.tm_sec);
-    astr_t filename = buf;
+    const astr_t filename = buf;
+    static const char *const extensions[] = { ".bmp", ".png", ".tga", ".jpg" };
+    const char *extension = extensions[m_Format];
+    auto path = fs_path_join(directory, filename + extension);
+    unsigned suffix = 0;
+    while (fs_path_exists(path))
+    {
+        path = fs_path_join(directory, filename + "-" + std::to_string(++suffix) + extension);
+    }
 
     int result = 0;
     auto *data = (void *)&m_Pixels[0];
@@ -84,29 +92,25 @@ void CScreenshotBuilder::WritePixelsToDisk()
     }
 
     stbi_flip_vertically_on_write(true);
-    switch (g_ConfigManager.ScreenshotFormat)
+    switch (m_Format)
     {
         case SF_PNG:
         {
-            path = fs_path_join(path, filename + ".png");
             result = stbi_write_png(fs_path_ascii(path), m_Width, m_Height, 4, data, m_Width * 4);
             break;
         }
         case SF_TGA:
         {
-            path = fs_path_join(path, filename + ".tga");
             result = stbi_write_tga(fs_path_ascii(path), m_Width, m_Height, 4, data);
             break;
         }
         case SF_JPG:
         {
-            path = fs_path_join(path, filename + ".jpg");
             result = stbi_write_jpg(fs_path_ascii(path), m_Width, m_Height, 4, data, 100);
             break;
         }
         default:
         {
-            path = fs_path_join(path, filename + ".bmp");
             result = stbi_write_bmp(fs_path_ascii(path), m_Width, m_Height, 4, data);
             break;
         }
@@ -125,16 +129,68 @@ void CScreenshotBuilder::WritePixelsToDisk()
 
 void CScreenshotBuilder::SaveScreen(int x, int y, int width, int height)
 {
-    assert(width > 0 && height > 0);
+    Request(x, y, width, height, ExeFilePath("screenshots"), g_ConfigManager.ScreenshotFormat);
+}
 
-    if (m_WaitingForGPUData)
+bool CScreenshotBuilder::Capture(const fs_path &directory, uint8_t format, bool gameViewOnly)
+{
+    const auto window = g_GameWindow.GetSize();
+    if (!gameViewOnly)
     {
-        g_Game.CreateTextMessageF(3, 0, "A screenshot command is already in progress.");
-        return;
+        return Request(0, 0, window.Width, window.Height, directory, format);
     }
 
-    GetScenePixels(x, y, width, height);
+    const int x = std::max(0, g_ConfigManager.GameWindowX);
+    const int y = std::max(0, g_ConfigManager.GameWindowY);
+    const int width = std::min<int>(g_ConfigManager.GameWindowWidth, window.Width - x);
+    const int height = std::min<int>(g_ConfigManager.GameWindowHeight, window.Height - y);
+    return Request(x, y, width, height, directory, format);
+}
 
+bool CScreenshotBuilder::Request(
+    int x, int y, int width, int height, const fs_path &directory, uint8_t format)
+{
+    if (width <= 0 || height <= 0 || fs_path_empty(directory))
+    {
+        return false;
+    }
+
+    if (m_Requested || m_WaitingForGPUData)
+    {
+        g_Game.CreateTextMessageF(3, 0, "A screenshot command is already in progress.");
+        return false;
+    }
+
+    m_Directory = directory;
+    m_Format = format <= SF_JPG ? format : SF_PNG;
+    m_RequestX = x;
+    m_RequestY = y;
+    m_RequestWidth = width;
+    m_RequestHeight = height;
+    m_Requested = true;
+    return true;
+}
+
+void CScreenshotBuilder::CaptureFrame()
+{
+    if (!m_Requested)
+    {
+        return;
+    }
+    m_Requested = false;
+    const auto window = g_GameWindow.GetSize();
+    const int x = std::max(0, m_RequestX);
+    const int y = std::max(0, m_RequestY);
+    const int width = std::min(window.Width - x, m_RequestWidth - (x - m_RequestX));
+    const int height = std::min(window.Height - y, m_RequestHeight - (y - m_RequestY));
+    if (width > 0 && height > 0)
+    {
+        GetScenePixels(x, y, width, height);
+    }
+    if (!m_WaitingForGPUData)
+    {
+        g_Game.CreateTextMessageF(3, 0, "Could not read screenshot pixels.");
+    }
 }
 
 void CScreenshotBuilder::GPUDataReady()

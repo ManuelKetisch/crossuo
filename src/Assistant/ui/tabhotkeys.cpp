@@ -248,6 +248,7 @@ void draw_ship_control()
             {
                 ImGui::SameLine();
             }
+            ImGui::PushID(row * 3 + col);
             if (speech_button(moves[row][col].Label, 60.0f))
             {
                 if (strcmp(moves[row][col].Speech, "Stop") == 0)
@@ -264,6 +265,7 @@ void draw_ship_control()
                     ship_send(text.c_str());
                 }
             }
+            ImGui::PopID();
         }
     }
     ImGui::End();

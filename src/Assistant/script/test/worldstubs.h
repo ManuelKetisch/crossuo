@@ -43,24 +43,31 @@ public:
     uint8_t GetFlags() const { return m_Flags; }
 
     bool IsCorpse() const { return Graphic == 0x2006; }
-    bool IsHuman() const { return false; }
+    bool IsHuman() const
+    {
+        return (Graphic >= 0x0190 && Graphic <= 0x0193) ||
+            (Graphic >= 0x025D && Graphic <= 0x0260) ||
+            (Graphic >= 0x029A && Graphic <= 0x029B) ||
+            (Graphic >= 0x02B6 && Graphic <= 0x02B7);
+    }
     bool IsPlayer() const { return false; }
-    bool IsParalyzed() const { return false; }
-    bool IsPoisoned() const { return false; }
+    bool IsParalyzed() const { return (m_Flags & 0x01) != 0; }
+    bool IsPoisoned() const { return (m_Flags & 0x04) != 0; }
     bool IsFlying() const { return false; }
-    bool YellowHits() const { return false; }
-    bool IgnoreCharacters() const { return false; }
+    bool YellowHits() const { return (m_Flags & 0x08) != 0; }
+    bool IgnoreCharacters() const { return (m_Flags & 0x10) != 0; }
     bool Locked() const { return false; }
-    bool InWarMode() const { return false; }
-    bool Hidden() const { return false; }
+    bool InWarMode() const { return (m_Flags & 0x40) != 0; }
+    bool Hidden() const { return (m_Flags & 0x80) != 0; }
 
-    virtual CGameItem *FindLayer(int) const { return nullptr; }
+    virtual CGameItem *FindLayer(int layer) const;
 };
 
 class CGameItem : public CGameObject
 {
 public:
     uint8_t Layer = 0;
+    bool Opened = false;
 };
 
 class CGameCharacter : public CGameObject
@@ -78,8 +85,11 @@ public:
     uint8_t Notoriety = 0;
     bool CanChangeName = false;
     bool ProfileReceived = false;
+    bool m_Dead = false;
     astr_t Profile;
     astr_t Title;
+
+    bool IsDead() const { return m_Dead || (MaxHits != 0 && Hits == 0); }
 };
 
 class CPlayer : public CGameCharacter
@@ -159,18 +169,6 @@ public:
 };
 
 extern CGame g_Game;
-
-// the stub Find always misses, so the found path (the CGame::UseSkill send,
-// inert here) is unreachable and the not-found print (inside the real Use)
-// never fires through this stand-in either
-inline void CSkillsManager::Use(const astr_t &name)
-{
-    const int index = Find(name);
-    if (index != -1)
-    {
-        g_Game.UseSkill(index);
-    }
-}
 
 namespace xuoassist {
 

@@ -19,6 +19,14 @@ const Spell &GetSpell(int offset)
     return s_Spells[offset];
 }
 
+const Spell *GetSpellById(uint16_t id)
+{
+    const auto match = std::find_if(s_Spells.begin(), s_Spells.end(), [id](const Spell &spell) {
+        return spell.Id == id;
+    });
+    return match == s_Spells.end() ? nullptr : &*match;
+}
+
 const SpellBook &GetSpellbook(SPELLBOOK_TYPE type)
 {
     assert(type >= ST_FIRST && type < ST_COUNT);
@@ -39,14 +47,29 @@ const Spell *GetSpellByOffsetAndType(int offset, SPELLBOOK_TYPE spellType)
     return spell;
 }
 
-const Spell *GetSpellByGraphicAndType(uint16_t graphic, SPELLBOOK_TYPE spellType)
+const Spell *FindSpellByGraphicAndType(uint16_t graphic, SPELLBOOK_TYPE spellType)
 {
-    const auto book = GetSpellbook(spellType);
+    if (spellType < ST_FIRST || spellType >= ST_COUNT ||
+        static_cast<size_t>(spellType) >= s_SpellBooks.size())
+    {
+        return nullptr;
+    }
+    const auto &book = s_SpellBooks[spellType];
     for (int s = 0; s < book.SpellCount; s++)
     {
         const auto *const spell = book.Spells[s];
-        if (spell->SpellIconGraphic == graphic)
+        if (spell != nullptr && spell->SpellIconGraphic == graphic)
             return spell;
+    }
+    return nullptr;
+}
+
+const Spell *GetSpellByGraphicAndType(uint16_t graphic, SPELLBOOK_TYPE spellType)
+{
+    const auto *spell = FindSpellByGraphicAndType(graphic, spellType);
+    if (spell != nullptr)
+    {
+        return spell;
     }
     assert(false && "invalid spell");
     return nullptr;

@@ -33,6 +33,8 @@ public:
     bool Terminated = false;
     bool InterruptLogged = false; // one interrupt line per engine instance
     astr_t Name = "";
+    astr_t ScriptPath = "";
+    astr_t ScriptDir = "";
 
     CScriptEngine();
     ~CScriptEngine();
@@ -46,7 +48,7 @@ public:
     // Registers the runtime API (Player/Client/TextWindow/SelectedTile
     // objects, the sentinel globals, ScriptName). Called by the ctor; kept
     // separate for clarity of the failure path.
-    bool Setup(const astr_t &scriptName);
+    bool Setup(const astr_t &scriptName, const astr_t &scriptPath = "");
 
     // The CScriptHandle::RunEngine flow: evaluate the whole file (defines the
     // functions), then call `functionName` with the astr_t args (original behavior:

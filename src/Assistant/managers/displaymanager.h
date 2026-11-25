@@ -36,7 +36,18 @@ enum DISPLAY_ITEM_TYPE
     DIT_GOLD,
     DIT_X,
     DIT_Y,
-    DIT_Z
+    DIT_Z,
+    DIT_ITEM_COUNTER,
+    DIT_FOLLOWERS,
+    DIT_FOLLOWERS_MAX,
+    DIT_DAMAGE,
+    DIT_FIRE_RESIST,
+    DIT_COLD_RESIST,
+    DIT_POISON_RESIST,
+    DIT_ENERGY_RESIST,
+    DIT_LUCK,
+    DIT_TITHING,
+    DIT_STEALTH_STEPS
 };
 
 // The display item model (DISPLAY_ITEM_TYPE + DisplayInfo) lives here rather
@@ -73,12 +84,34 @@ struct DISPLAY_KEY_ITEM
     DISPLAY_KEY_IDENTIFIER Identifier;
 };
 
+enum class DisplayTitleKind
+{
+    Text,
+    Character,
+    SmallStatus,
+    MediumStatus,
+    LargeStatus,
+    ItemCounter,
+};
+
+struct DisplayTitlePart
+{
+    astr_t Text;
+    uint32_t Color = 0;
+    DisplayTitleKind Kind = DisplayTitleKind::Text;
+    uint16_t IconGraphic = 0;
+    uint16_t IconHue = 0;
+    bool Low = false;
+    bool Highlighted = false;
+};
+
 class CDisplayManager
 {
 private:
     vector<DisplayInfo> m_InfoCommands;
     vector<DisplayInfo> m_Commands;
     astr_t m_TitleText;
+    vector<DisplayTitlePart> m_TitleParts;
 
     static const DISPLAY_KEY_ITEM m_KeysList[DKI_COUNT];
 
@@ -104,6 +137,7 @@ public:
 
     // The last composed caption (Redraw output)
     const astr_t &GetTitleText() const { return m_TitleText; }
+    const vector<DisplayTitlePart> &GetTitleParts() const { return m_TitleParts; }
 
     void RecompileData(const astr_t &text);
 };

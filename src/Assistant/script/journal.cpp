@@ -185,4 +185,169 @@ bool ScriptJournal_RemoveAt(int index)
     return true;
 }
 
+namespace {
+
+bool matches_any_ci(const astr_t &haystackLower, const astr_t &patternLower)
+{
+    if (patternLower.empty())
+    {
+        return false;
+    }
+    size_t start = 0;
+    while (start <= patternLower.size())
+    {
+        const size_t bar = patternLower.find('|', start);
+        const astr_t part = patternLower.substr(
+            start, bar == astr_t::npos ? astr_t::npos : bar - start);
+        if (!part.empty() && haystackLower.find(part) != astr_t::npos)
+        {
+            return true;
+        }
+        if (bar == astr_t::npos)
+        {
+            break;
+        }
+        start = bar + 1;
+    }
+    return false;
+}
+
+astr_t format_journal_line(
+    const CJournalMessage &msg, bool addName, JournalNameResolver resolveName)
+{
+    if (!addName || resolveName == nullptr || msg.Serial == 0 || msg.Serial == 0xFFFFFFFF)
+    {
+        return msg.Text;
+    }
+    const astr_t speaker = resolveName(msg.Serial);
+    if (speaker.empty())
+    {
+        return msg.Text;
+    }
+    const astr_t prefix = speaker + ": ";
+    if (str_lower(msg.Text).compare(0, prefix.size(), str_lower(prefix)) == 0)
+    {
+        return msg.Text;
+    }
+    return prefix + msg.Text;
+}
+
+} // namespace
+
+bool ScriptJournal_Search(const astr_t &text)
+{
+    if (text.empty() || s_Messages.empty())
+    {
+        return false;
+    }
+    const astr_t needle = str_lower(text);
+    for (int i = (int)s_Messages.size() - 1; i >= 0; i--)
+    {
+        if (matches_any_ci(str_lower(s_Messages[i].Text), needle))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ScriptJournal_SearchByName(
+    const astr_t &text, const astr_t &name, JournalNameResolver resolveName)
+{
+    if (text.empty() || name.empty() || s_Messages.empty())
+    {
+        return false;
+    }
+    const astr_t needle = str_lower(text);
+    const astr_t nameLower = str_lower(name);
+    const astr_t prefix = nameLower + ":";
+
+    for (int i = (int)s_Messages.size() - 1; i >= 0; i--)
+    {
+        const CJournalMessage &msg = s_Messages[i];
+        const astr_t textLower = str_lower(msg.Text);
+
+        // Match 1: "Speaker: body" prefix embedded in the journal line
+        if (textLower.compare(0, prefix.size(), prefix) == 0)
+        {
+            const astr_t body = textLower.substr(prefix.size());
+            if (matches_any_ci(body, needle))
+            {
+                return true;
+            }
+        }
+
+        // Match 2: speaker name resolved from world object serial
+        if (resolveName != nullptr && msg.Serial != 0 && msg.Serial != 0xFFFFFFFF)
+        {
+            const astr_t speakerLower = str_lower(resolveName(msg.Serial));
+            if (speakerLower == nameLower && matches_any_ci(textLower, needle))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+vector<astr_t> ScriptJournal_GetTextBySerial(
+    uint32_t serial, bool addName, JournalNameResolver resolveName)
+{
+    vector<astr_t> out;
+    for (const CJournalMessage &msg : s_Messages)
+    {
+        if (msg.Serial == serial)
+        {
+            out.push_back(format_journal_line(msg, addName, resolveName));
+        }
+    }
+    return out;
+}
+
+astr_t ScriptJournal_GetLineText(
+    const astr_t &text, bool addName, JournalNameResolver resolveName)
+{
+    if (text.empty())
+    {
+        return astr_t();
+    }
+    const astr_t needle = str_lower(text);
+    for (int i = (int)s_Messages.size() - 1; i >= 0; i--)
+    {
+        if (matches_any_ci(str_lower(s_Messages[i].Text), needle))
+        {
+            return format_journal_line(s_Messages[i], addName, resolveName);
+        }
+    }
+    return astr_t();
+}
+
+vector<astr_t> ScriptJournal_GetTextByColor(
+    uint16_t color, bool addName, JournalNameResolver resolveName)
+{
+    vector<astr_t> out;
+    for (const CJournalMessage &msg : s_Messages)
+    {
+        if (msg.Color == color)
+        {
+            out.push_back(format_journal_line(msg, addName, resolveName));
+        }
+    }
+    return out;
+}
+
+vector<astr_t> ScriptJournal_GetTextByType(
+    uint8_t typeFlags, bool addName, JournalNameResolver resolveName)
+{
+    vector<astr_t> out;
+    for (const CJournalMessage &msg : s_Messages)
+    {
+        if (typeFlags == 0 || (msg.Flags & typeFlags) != 0)
+        {
+            out.push_back(format_journal_line(msg, addName, resolveName));
+        }
+    }
+    return out;
+}
+
 } // namespace xuoassist

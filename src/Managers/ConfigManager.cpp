@@ -458,7 +458,7 @@ void CConfigManager::DefaultPage6()
 {
     EnablePathfind = true;
     HoldTabForCombat = true;
-    DoubleClickLoot = false;
+    DoubleClickLoot = true;
     OffsetInterfaceWindows = true;
     AutoArrange = true;
     AlwaysRun = false;

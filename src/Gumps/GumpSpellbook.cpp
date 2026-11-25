@@ -232,8 +232,11 @@ void CGumpSpellbook::PrepareContent()
             const int spellIndex = serial - ID_GSB_SPELL_SERIAL;
             assert(spellIndex < book.SpellCount);
             const auto *const spell = book.Spells[spellIndex];
+            // Use the globally unique spell ID rather than the book-local
+            // 0x100 + index widget serial so icons from different spellbooks
+            // (e.g. Magery + Chivalry) never collide in CGumpManager::AddGump.
             g_GumpManager.AddGump(new CGumpSpell(
-                serial,
+                spell->Id,
                 spell->Type,
                 spell->SpellIconGraphic,
                 g_MouseManager.Position.X - 20,

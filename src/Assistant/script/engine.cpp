@@ -10,6 +10,7 @@
 #include "engine.h"
 #include "apiscript.h"
 #include "commandqueue.h"
+#include "scriptlist.h"
 
 #include "../core/assist.h"
 
@@ -121,13 +122,15 @@ CScriptEngine::~CScriptEngine()
     }
 }
 
-bool CScriptEngine::Setup(const astr_t &scriptName)
+bool CScriptEngine::Setup(const astr_t &scriptName, const astr_t &scriptPath)
 {
     if (m_Context == nullptr)
     {
         return false;
     }
     Name = scriptName;
+    ScriptPath = scriptPath;
+    ScriptDir = scriptPath.empty() ? astr_t(".") : ScriptList_DirName(scriptPath);
     // the context opaque is the engine instance: every host native and the
     // pause/terminate sleep loops read it back (a null opaque made Wait's
     // terminate check a no-op, so a terminated script slept out its delays)

@@ -23,6 +23,7 @@
 #include "../managers/guildmanager.h"
 #include "../core/world.h"
 #include "Party.h" // ::g_Party (shared party data)
+#include "Managers/Waypoints.h"
 #include "widgets.h"
 
 #include <math.h>
@@ -317,6 +318,44 @@ void MapWindow_Draw(bool *open)
             IM_COL32(0, 0, 0, 255));
     }
 
+    const ImVec2 canvasCenter(canvasTopLeft.x + halfW, canvasTopLeft.y + halfH);
+    const auto project = [&](int worldX, int worldY) {
+        const float dx = float(worldX - s_CenterX);
+        const float dy = float(worldY - s_CenterY);
+        return view.Rotated
+            ? ImVec2(canvasCenter.x + (dx - dy) / scale, canvasCenter.y + (dx + dy) / scale)
+            : ImVec2(canvasCenter.x + dx / scale, canvasCenter.y + dy / scale);
+    };
+
+    if (g_MapSettings.ShowServerWaypoints)
+    {
+        const ImVec2 canvasBottomRight(canvasTopLeft.x + width, canvasTopLeft.y + height);
+        const ImU32 color = IM_COL32(255, 210, 95, 255);
+        dl->PushClipRect(canvasTopLeft, canvasBottomRight, true);
+        for (const CWaypoint &waypoint : g_Waypoints.List())
+        {
+            if (waypoint.MapIndex != map)
+            {
+                continue;
+            }
+            const ImVec2 pos = project(waypoint.X, waypoint.Y);
+            if (pos.x < canvasTopLeft.x || pos.x >= canvasBottomRight.x ||
+                pos.y < canvasTopLeft.y || pos.y >= canvasBottomRight.y)
+            {
+                continue;
+            }
+
+            dl->AddCircleFilled(pos, 5.0f, IM_COL32(30, 27, 18, 255), 12);
+            dl->AddCircleFilled(pos, 3.0f, color, 12);
+            const auto label = waypoint.Name.empty() ? astr_t("Waypoint") : str_from(waypoint.Name);
+            const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+            const ImVec2 textPos(pos.x - textSize.x / 2, pos.y - 6.0f - textSize.y);
+            dl->AddText(ImVec2(textPos.x + 1.0f, textPos.y + 1.0f), IM_COL32_BLACK, label.c_str());
+            dl->AddText(textPos, color, label.c_str());
+        }
+        dl->PopClipRect();
+    }
+
     // --- overlays -----------------------------------------------------------
     s_Overlays.clear();
     MAP_DRAW_STYLE table[6];
@@ -438,20 +477,9 @@ void MapWindow_Draw(bool *open)
         // --- overlay pass -------------------------------------------------
         for (const XA_MAP_DRAW_OBJECT &item : s_Overlays)
         {
-            float x;
-            float y;
-            if (view.Rotated)
-            {
-                const float dx = float(item.X - s_CenterX);
-                const float dy = float(item.Y - s_CenterY);
-                x = canvasTopLeft.x + halfW + (dx - dy) / scale;
-                y = canvasTopLeft.y + halfH + (dx + dy) / scale;
-            }
-            else
-            {
-                x = canvasTopLeft.x + halfW + (item.X - s_CenterX) / scale;
-                y = canvasTopLeft.y + halfH + (item.Y - s_CenterY) / scale;
-            }
+            const ImVec2 pos = project(item.X, item.Y);
+            const float x = pos.x;
+            const float y = pos.y;
 
             if (item.Type == OMCT_CORPSE)
             {
@@ -616,6 +644,10 @@ void MapWindow_Draw(bool *open)
         if (ImGui::MenuItem("Show coordinates", nullptr, g_MapSettings.DisplayCoordinates != 0))
         {
             MapWindow_OnAction(OMA_DISPLAY_COORDINATES, 0);
+        }
+        if (ImGui::MenuItem("Show server waypoints", nullptr, &g_MapSettings.ShowServerWaypoints))
+        {
+            g_MapSettings.Save();
         }
         if (ImGui::MenuItem("Show altitude map", nullptr, g_MapSettings.AltitudeOnly != 0))
         {

@@ -15,6 +15,10 @@
 #include "../Multi.h"
 #include "../Managers/AnimationManager.h"
 #include "../Managers/GumpManager.h"
+#if defined(XUO_ASSISTANT)
+#include <core/gameplayfilters.h>
+#include "../Managers/FontsManager.h"
+#endif
 #include "../Managers/ConfigManager.h"
 #include "../Managers/MapManager.h"
 #include "../Managers/CustomHousesManager.h"
@@ -126,40 +130,44 @@ void CGameItem::OnGraphicChange(int direction)
     }
 }
 
+namespace {
+
+struct MagicFieldAppearance
+{
+    uint16_t Color;
+    const wchar_t *Name;
+};
+
+MagicFieldAppearance MagicField(uint16_t graphic)
+{
+    if (IN_RANGE(graphic, 0x398C, 0x399F))
+    {
+        return { 0x0020, L"Fire Field" };
+    }
+    if (IN_RANGE(graphic, 0x3967, 0x397A))
+    {
+        return { 0x0058, L"Paralyze Field" };
+    }
+    if (IN_RANGE(graphic, 0x3946, 0x3964))
+    {
+        return { 0x0070, L"Energy Field" };
+    }
+    if (IN_RANGE(graphic, 0x3914, 0x3929))
+    {
+        return { 0x0044, L"Poison Field" };
+    }
+    if (graphic == 0x0080 || graphic == 0x0082)
+    {
+        return { 0x038A, L"Wall of Stone" };
+    }
+    return {};
+}
+
+} // namespace
+
 void CGameItem::CalculateFieldColor()
 {
-    FieldColor = 0;
-
-    if (!g_ConfigManager.GetChangeFieldsGraphic())
-    {
-        return;
-    }
-
-    //fire field
-    if (IN_RANGE(Graphic, 0x398C, 0x399F))
-    {
-        FieldColor = 0x0020;
-        //paralyze field
-    }
-    else if (IN_RANGE(Graphic, 0x3967, 0x397A))
-    {
-        FieldColor = 0x0058;
-        //energy field
-    }
-    else if (IN_RANGE(Graphic, 0x3946, 0x3964))
-    {
-        FieldColor = 0x0070;
-        //poison field
-    }
-    else if (IN_RANGE(Graphic, 0x3914, 0x3929))
-    {
-        FieldColor = 0x0044;
-        //wall of stone
-    }
-    else if (Graphic == 0x0080)
-    {
-        FieldColor = 0x038A;
-    }
+    FieldColor = g_ConfigManager.GetChangeFieldsGraphic() ? MagicField(Graphic).Color : 0;
 }
 
 void CGameItem::Draw(int x, int y)
@@ -293,6 +301,20 @@ void CGameItem::Draw(int x, int y)
             g_NewTargetSystem.TopY = y - size.Height - 8;
             g_NewTargetSystem.BottomY = y + 7;
         }
+
+#if defined(XUO_ASSISTANT)
+        if (FieldColor != 0 && g_SelectedObject.Object == this &&
+            xuoassist::GameplayFilters_ShowFieldLabels())
+        {
+            const auto field = MagicField(Graphic);
+            if (field.Name != nullptr)
+            {
+                constexpr int labelWidth = 110;
+                g_FontManager.DrawW(0, field.Name, 0x03B2, x - labelWidth / 2, y - 36,
+                                    30, labelWidth, TS_CENTER, UOFONT_BLACK_BORDER);
+            }
+        }
+#endif
 
         DrawEffects(x, y);
     }

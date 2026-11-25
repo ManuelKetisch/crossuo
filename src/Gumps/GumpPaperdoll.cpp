@@ -4,6 +4,7 @@
 #include "GumpPaperdoll.h"
 #include <cstdint>
 #include <xuocore/uodata.h>
+#include "../PaperdollSlots_rules.h"
 #include "../Managers/ItemDrawOrder.h"
 #include "../Config.h"
 #include "../CrossUO.h"
@@ -210,6 +211,22 @@ void CGumpPaperdoll::InitToolTip()
 
     if (!Minimized)
     {
+        if (id >= ID_GP_ITEMS)
+        {
+            const int layer = static_cast<int>(id - ID_GP_ITEMS);
+            CGameCharacter *obj =
+                g_World != nullptr ? g_World->FindWorldCharacter(Serial) : nullptr;
+            if (obj == nullptr || obj->FindLayer(layer) == nullptr)
+            {
+                const wchar_t *slotTip = PaperdollEmptySlotTooltip(layer);
+                if (slotTip != nullptr && slotTip[0] != L'\0')
+                {
+                    g_ToolTip.Set(slotTip);
+                }
+            }
+            return;
+        }
+
         switch (id)
         {
             case ID_GP_BUTTON_HELP:
@@ -359,6 +376,21 @@ void CGumpPaperdoll::DelayedClick(CRenderObject *obj)
     }
 }
 
+static int GetPaperdollDropLayer(CGameCharacter *character, int droppedOnLayer)
+{
+    const auto *tile = g_ObjectInHand.TiledataPtr;
+    auto *primary = character->FindLayer(OL_1_HAND);
+    const bool primaryIsWeapon =
+        primary != nullptr && primary->GetStaticData() != nullptr && primary->IsWeapon();
+    return ResolvePaperdollDropLayer(
+        tile->Layer,
+        IsWeapon(tile->Flags),
+        character == g_Player,
+        droppedOnLayer,
+        primaryIsWeapon,
+        [character](int layer) { return character->FindLayer(layer) != nullptr; });
+}
+
 void CGumpPaperdoll::PrepareContent()
 {
     CGameCharacter *obj = g_World->FindWorldCharacter(Serial);
@@ -430,6 +462,42 @@ void CGumpPaperdoll::PrepareContent()
     {
         WantRedraw = true;
     }
+}
+
+static int PaperdollBodyCenterX(uint16_t graphic)
+{
+    constexpr int bodyArtX = 8;
+    const auto *sprite = g_Game.ExecuteGump(graphic);
+    if (sprite == nullptr || sprite->m_HitMap.empty())
+    {
+        return 99;
+    }
+
+    // Gump textures have transparent canvas on the right. Find the body itself.
+    int left = sprite->Width;
+    int right = -1;
+    for (int y = 0; y < sprite->Height; ++y)
+    {
+        const int row = y * sprite->Width;
+        for (int x = 0; x < left; ++x)
+        {
+            if (sprite->m_HitMap[row + x])
+            {
+                left = x;
+                break;
+            }
+        }
+        for (int x = sprite->Width - 1; x > right; --x)
+        {
+            if (sprite->m_HitMap[row + x])
+            {
+                right = x;
+                break;
+            }
+        }
+    }
+
+    return right >= left ? bodyArtX + (left + right + 1) / 2 : 99;
 }
 
 void CGumpPaperdoll::UpdateContent()
@@ -504,7 +572,119 @@ void CGumpPaperdoll::UpdateContent()
         bodyGumppic->Color = color;
     }
 
+    const auto bodyGraphic = bodyGumppic->Graphic;
     const int gumpOffset = (obj->Gender == GENDER_FEMALE ? FEMALE_GUMP_OFFSET : MALE_GUMP_OFFSET);
+
+    const bool useSlots =
+        g_Config.ClientVersion > CV_200 ? g_ConfigManager.GetPaperdollSlots() : false;
+    const bool scaleImages = g_ConfigManager.GetScaleImagesInPaperdollSlots();
+    const auto addEquipmentSlot = [this, scaleImages](
+                                      int slotX,
+                                      int slotY,
+                                      int slotLayer,
+                                      CGameItem *slotEquipment) {
+        const uint32_t slotSerial = ID_GP_ITEMS + static_cast<uint32_t>(slotLayer);
+        auto *backgroundSlot = (CGUIGumppicTiled *)m_DataBox->Add(
+            new CGUIGumppicTiled(0x243A, slotX, slotY, 19, 20));
+        auto *scopeSlot = (CGUIGumppic *)m_DataBox->Add(new CGUIGumppic(0x2344, slotX, slotY));
+        backgroundSlot->Serial = slotSerial;
+        scopeSlot->Serial = slotSerial;
+
+        if (slotEquipment == nullptr)
+        {
+            backgroundSlot->MoveOnDrag = true;
+            scopeSlot->MoveOnDrag = true;
+            return;
+        }
+
+        CIndexObjectStatic &sio = g_Index.m_Static[slotEquipment->Graphic];
+        auto *spr = (CSprite *)sio.UserData;
+        if (spr == nullptr)
+        {
+            spr = g_Game.ExecuteStaticArt(slotEquipment->Graphic);
+        }
+
+        if (spr == nullptr)
+        {
+            return;
+        }
+
+        int tileOffsetX = (13 - spr->ImageWidth) / 2;
+        int tileOffsetY = (14 - spr->ImageHeight) / 2;
+        int tileX = slotX + 3;
+        int tileY = slotY + 3;
+        if (scaleImages && (tileOffsetX < 0 || tileOffsetY < 0))
+        {
+            short imageWidth = 0;
+            short imageHeight = 0;
+            std::vector<uint16_t> pixels = g_UOFileReader.GetArtPixels(
+                slotEquipment->Graphic, sio, true, imageWidth, imageHeight);
+
+            int wantImageWidth = spr->ImageWidth;
+            int wantImageHeight = spr->ImageHeight;
+            if (pixels.empty() || (wantImageWidth == 0) || (wantImageHeight == 0))
+            {
+                return;
+            }
+
+            std::vector<uint16_t> wantPixels(wantImageWidth * wantImageHeight, 0);
+            int imageOffsetX = spr->ImageOffsetX;
+            int imageOffsetY = spr->ImageOffsetY;
+            for (int y = 0; y < wantImageHeight; y++)
+            {
+                int srcPos = (y + imageOffsetY) * imageWidth + imageOffsetX;
+                int destPos = y * wantImageWidth;
+                for (int x = 0; x < wantImageWidth; x++)
+                {
+                    wantPixels[destPos + x] = pixels[srcPos + x];
+                }
+            }
+
+            spr = new CSprite();
+            spr->LoadSprite16(wantImageWidth, wantImageHeight, wantPixels.data());
+            if (wantImageWidth < 14)
+            {
+                tileX += 7 - (wantImageWidth / 2);
+            }
+            else
+            {
+                tileX -= 2;
+                if (wantImageWidth > 18)
+                {
+                    wantImageWidth = 18;
+                }
+            }
+
+            if (wantImageHeight < 14)
+            {
+                tileY += 7 - (wantImageHeight / 2);
+            }
+            else
+            {
+                tileY -= 2;
+                if (wantImageHeight > 18)
+                {
+                    wantImageHeight = 18;
+                }
+            }
+
+            auto *ext = new CGUIExternalTexture(
+                spr, true, tileX, tileY, wantImageWidth, wantImageHeight);
+            m_DataBox->Add(ext);
+            ext->DrawOnly = true;
+            ext->Color = slotEquipment->Color & 0x3FFF;
+        }
+        else
+        {
+            tileX -= spr->ImageOffsetX - tileOffsetX;
+            tileY -= spr->ImageOffsetY - tileOffsetY;
+            auto *pic = new CGUITilepic(
+                slotEquipment->Graphic, slotEquipment->Color & 0x3FFF, tileX, tileY);
+            pic->PartialHue = slotEquipment->IsPartialHue();
+            m_DataBox->Add(pic);
+            pic->Serial = slotSerial;
+        }
+    };
 
     //Draw equipment & backpack
     CGameItem *equipment = nullptr;
@@ -512,9 +692,9 @@ void CGumpPaperdoll::UpdateContent()
     g_ColorizerShader.Enable();
     //if (obj->IsHuman())
     {
-        bool useSlots = g_Config.ClientVersion > CV_200 ? g_ConfigManager.GetPaperdollSlots() : false;
-        static const int maxPaperdollSlots = 6;
-        CGameItem *slotObjects[maxPaperdollSlots] = { 0 };
+        auto *offHand = obj->GetOffHandWeapon();
+        const bool dualWield = offHand != nullptr;
+        const int bodyCenterX = dualWield ? PaperdollBodyCenterX(bodyGraphic) : 0;
         // draw order is graphic-driven (see ItemDrawOrder.h), not the plain
         // layer order: later entries paint on top of earlier ones
         int layerOrder[ItemDrawOrder::LAYER_SLOTS];
@@ -539,45 +719,6 @@ void CGumpPaperdoll::UpdateContent()
             equipment = obj->FindLayer(layer);
             if (equipment != nullptr)
             {
-                if (useSlots)
-                {
-                    switch (layer)
-                    {
-                        case OL_HELMET:
-                        {
-                            slotObjects[0] = equipment;
-                            break;
-                        }
-                        case OL_EARRINGS:
-                        {
-                            slotObjects[1] = equipment;
-                            break;
-                        }
-                        case OL_NECKLACE:
-                        {
-                            slotObjects[2] = equipment;
-                            break;
-                        }
-                        case OL_RING:
-                        {
-                            slotObjects[3] = equipment;
-                            break;
-                        }
-                        case OL_BRACELET:
-                        {
-                            slotObjects[4] = equipment;
-                            break;
-                        }
-                        case OL_TUNIC:
-                        {
-                            slotObjects[5] = equipment;
-                            break;
-                        }
-                        default:
-                            break;
-                    }
-                }
-
                 uint16_t id = equipment->AnimID;
                 const auto *const conv = uo_get_equipconv(bodyIter, id);
                 if (conv != nullptr)
@@ -593,7 +734,11 @@ void CGumpPaperdoll::UpdateContent()
                         cOfs = MALE_GUMP_OFFSET;
                     }
 
-                    bodyGumppic = (CGUIGumppic *)m_DataBox->Add(new CGUIGumppic(id + cOfs, 8, 19));
+                    const bool mirror = equipment == offHand;
+                    const auto *sprite = mirror ? g_Game.ExecuteGump(id + cOfs) : nullptr;
+                    const int drawX = sprite != nullptr ? 2 * bodyCenterX - 8 - sprite->Width : 8;
+                    bodyGumppic = (CGUIGumppic *)m_DataBox->Add(new CGUIGumppic(id + cOfs, drawX, 19));
+                    bodyGumppic->Mirrored = mirror;
                     bodyGumppic->Color = equipment->Color & 0x3FFF;
                     bodyGumppic->PartialHue = equipment->IsPartialHue();
                     bodyGumppic->Serial = ID_GP_ITEMS + layer;
@@ -631,113 +776,17 @@ void CGumpPaperdoll::UpdateContent()
 
         if (useSlots)
         {
-            int yPtr = 75;
-            bool scaleImages = g_ConfigManager.GetScaleImagesInPaperdollSlots();
-            for (int i = 0; i < maxPaperdollSlots; i++)
+            for (const auto &slot : kPaperdollLeftEquipSlots)
             {
-                CGUIGumppicTiled *backgroundSlot = (CGUIGumppicTiled *)m_DataBox->Add(
-                    new CGUIGumppicTiled(0x243A, 1, yPtr, 19, 20));
-                CGUIGumppic *scopeSlot =
-                    (CGUIGumppic *)m_DataBox->Add(new CGUIGumppic(0x2344, 1, yPtr));
-
-                CGameItem *slotEquipment = slotObjects[i];
-                if (slotEquipment != nullptr)
-                {
-                    uint32_t slotSerial = ID_GP_ITEMS + slotEquipment->Layer;
-                    CIndexObjectStatic &sio = g_Index.m_Static[slotEquipment->Graphic];
-                    auto *spr = (CSprite *)sio.UserData;
-                    if (spr == nullptr)
-                    {
-                        spr = g_Game.ExecuteStaticArt(slotEquipment->Graphic);
-                    }
-
-                    if (spr == nullptr)
-                    {
-                        yPtr += 21;
-                        continue;
-                    }
-
-                    int tileOffsetX = (13 - spr->ImageWidth) / 2;
-                    int tileOffsetY = (14 - spr->ImageHeight) / 2;
-                    int tileX = 4;
-                    int tileY = 3 + yPtr;
-                    if (scaleImages && (tileOffsetX < 0 || tileOffsetY < 0))
-                    {
-                        short imageWidth = 0;
-                        short imageHeight = 0;
-                        std::vector<uint16_t> pixels = g_UOFileReader.GetArtPixels(
-                            slotEquipment->Graphic, sio, true, imageWidth, imageHeight);
-
-                        int wantImageWidth = spr->ImageWidth;
-                        int wantImageHeight = spr->ImageHeight;
-                        if (pixels.empty() || (wantImageWidth == 0) || (wantImageHeight == 0))
-                        {
-                            yPtr += 21;
-                            continue;
-                        }
-
-                        std::vector<uint16_t> wantPixels(wantImageWidth * wantImageHeight, 0);
-                        int imageOffsetX = spr->ImageOffsetX;
-                        int imageOffsetY = spr->ImageOffsetY;
-                        for (int y = 0; y < wantImageHeight; y++)
-                        {
-                            int srcPos = (y + imageOffsetY) * imageWidth + imageOffsetX;
-                            int destPos = y * wantImageWidth;
-                            for (int x = 0; x < wantImageWidth; x++)
-                            {
-                                wantPixels[destPos + x] = pixels[srcPos + x];
-                            }
-                        }
-
-                        spr = new CSprite();
-                        spr->LoadSprite16(wantImageWidth, wantImageHeight, wantPixels.data());
-                        if (wantImageWidth < 14)
-                        {
-                            tileX += 7 - (wantImageWidth / 2);
-                        }
-                        else
-                        {
-                            tileX -= 2;
-                            if (wantImageWidth > 18)
-                            {
-                                wantImageWidth = 18;
-                            }
-                        }
-
-                        if (wantImageHeight < 14)
-                        {
-                            tileY += 7 - (wantImageHeight / 2);
-                        }
-                        else
-                        {
-                            tileY -= 2;
-                            if (wantImageHeight > 18)
-                            {
-                                wantImageHeight = 18;
-                            }
-                        }
-
-                        auto *ext = new CGUIExternalTexture(
-                            spr, true, tileX, tileY, wantImageWidth, wantImageHeight);
-                        m_DataBox->Add(ext);
-                        ext->DrawOnly = true;
-                        ext->Color = slotEquipment->Color & 0x3FFF;
-                    }
-                    else
-                    {
-                        tileX -= spr->ImageOffsetX - tileOffsetX;
-                        tileY -= spr->ImageOffsetY - tileOffsetY;
-                        CGUITilepic *pic = new CGUITilepic(
-                            slotEquipment->Graphic, slotEquipment->Color & 0x3FFF, tileX, tileY);
-                        pic->PartialHue = slotEquipment->IsPartialHue();
-                        m_DataBox->Add(pic);
-                        pic->Serial = slotSerial;
-                    }
-                    backgroundSlot->Serial = slotSerial;
-                    scopeSlot->Serial = slotSerial;
-                }
-                yPtr += 21;
+                addEquipmentSlot(slot.X, slot.Y, slot.Layer, obj->FindLayer(slot.Layer));
             }
+        }
+
+        if (dualWield)
+        {
+            const int handStartY = useSlots ? 159 : 201;
+            addEquipmentSlot(1, handStartY, OL_1_HAND, obj->FindLayer(OL_1_HAND));
+            addEquipmentSlot(1, handStartY + 21, OL_2_HAND, offHand);
         }
     }
 
@@ -781,6 +830,69 @@ void CGumpPaperdoll::UpdateContent()
         bodyGumppic->MoveOnDrag = true;
     }
     m_DataBox->Add(new CGUIShader(&g_ColorizerShader, false));
+
+    bool hasDockJewelry = false;
+    for (const auto &slot : kPaperdollJewelryDockSlots)
+    {
+        if (obj->FindLayer(slot.Layer) != nullptr)
+        {
+            hasDockJewelry = true;
+            break;
+        }
+    }
+
+    if (useSlots || hasDockJewelry)
+    {
+        m_DataBox->Add(new CGUIColoredPolygone(
+            0,
+            0,
+            kPaperdollJewelryDockX,
+            kPaperdollJewelryDockY,
+            kPaperdollJewelryDockWidth,
+            kPaperdollJewelryDockHeight,
+            0xFF212428));
+        m_DataBox->Add(new CGUIColoredPolygone(
+            0,
+            0,
+            kPaperdollJewelryDockX + 1,
+            kPaperdollJewelryDockY + 1,
+            kPaperdollJewelryDockWidth - 2,
+            kPaperdollJewelryDockHeight - 2,
+            0xFF565E66));
+        m_DataBox->Add(new CGUIColoredPolygone(
+            0,
+            0,
+            kPaperdollJewelryDockX + 2,
+            kPaperdollJewelryDockY + 2,
+            kPaperdollJewelryDockWidth - 4,
+            kPaperdollJewelryDockHeight - 4,
+            0xFF303438));
+        m_DataBox->Add(new CGUIColoredPolygone(
+            0,
+            0,
+            kPaperdollJewelryDividerX,
+            kPaperdollJewelryDockY + 4,
+            1,
+            kPaperdollJewelryDockHeight - 8,
+            0xFF565E66));
+
+        auto *earringsLabel = (CGUIText *)m_DataBox->Add(
+            new CGUIText(0x03B2, 34, kPaperdollJewelryLabelY));
+        earringsLabel->CreateTextureA(9, "Earrings", 54, TS_CENTER);
+        earringsLabel->DrawOnly = true;
+
+        auto *ringsLabel = (CGUIText *)m_DataBox->Add(
+            new CGUIText(0x03B2, 95, kPaperdollJewelryLabelY));
+        ringsLabel->CreateTextureA(9, "Rings", 125, TS_CENTER);
+        ringsLabel->DrawOnly = true;
+
+        m_DataBox->Add(new CGUIShader(&g_ColorizerShader, true));
+        for (const auto &slot : kPaperdollJewelryDockSlots)
+        {
+            addEquipmentSlot(slot.X, slot.Y, slot.Layer, obj->FindLayer(slot.Layer));
+        }
+        m_DataBox->Add(new CGUIShader(&g_ColorizerShader, false));
+    }
 }
 
 void CGumpPaperdoll::UpdateDescription(const astr_t &text)
@@ -996,17 +1108,19 @@ void CGumpPaperdoll::OnLeftMouseButtonUp()
             }
             else if (IsWearable(g_ObjectInHand.TiledataPtr->Flags)) // Wearable
             {
-                CGameItem *equipment = container->FindLayer(g_ObjectInHand.TiledataPtr->Layer);
+                const int droppedOnLayer =
+                    serial >= ID_GP_ITEMS ? static_cast<int>(serial - ID_GP_ITEMS) : -1;
+                const int targetLayer = GetPaperdollDropLayer(container, droppedOnLayer);
 
-                if (equipment == nullptr) // Nothing on this layer
+                if (targetLayer != OL_NONE)
                 {
                     if (Serial != g_PlayerSerial)
                     {
-                        g_Game.EquipItem(container->Serial);
+                        g_Game.EquipItem(container->Serial, static_cast<uint8_t>(targetLayer));
                     }
                     else
                     {
-                        g_Game.EquipItem();
+                        g_Game.EquipItem(0, static_cast<uint8_t>(targetLayer));
                     }
 
                     g_MouseManager.LeftDropPosition = g_MouseManager.Position;

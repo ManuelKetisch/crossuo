@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: 2020 Danny Angelo Carminati Grein
 
 #include "GameWorld.h"
+#if defined(XUO_ASSISTANT)
+#include <managers/trademanager.h>
+#endif
 #include "Constants.h"
 #include "ObjectOnCursor.h"
 #include "GamePlayer.h"
@@ -27,6 +30,7 @@
 #if defined(XUO_ASSISTANT)
 #include <config/assistantconfig.h> // xuoassist::g_AssistantConfig (corpse auto-open)
 #include <core/global.h> // xuoassist::g_LastCorpseObject (the last-corpse tracking)
+#include <core/itemcounters.h>
 #endif
 
 CGameWorld *g_World = nullptr;
@@ -484,6 +488,16 @@ void CGameWorld::RemoveFromContainer(CGameObject *obj)
 
         CGameObject *container = FindWorldObject(containerSerial);
 
+#if defined(XUO_ASSISTANT)
+        if (!obj->NPC && containerSerial >= 0x40000000)
+        {
+            const bool isContainer =
+                obj->GetStaticData() != nullptr && obj->IsContainer() && !obj->IsCorpse();
+            xuoassist::ItemCounters_OnContainerChanged(
+                containerSerial, obj->Serial, obj->Graphic, obj->Color, isContainer, true);
+        }
+#endif
+
         if (container != nullptr)
         {
             container->Reject(obj);
@@ -540,6 +554,12 @@ void CGameWorld::ClearContainer(CGameObject *obj)
     {
         obj->Clear();
     }
+#if defined(XUO_ASSISTANT)
+    if (obj != nullptr && !obj->NPC)
+    {
+        xuoassist::ItemCounters_OnContainerChanged(obj->Serial, 0, 0, 0, false, true);
+    }
+#endif
 }
 
 void CGameWorld::PutContainer(CGameObject *obj, uint32_t containerSerial)
@@ -689,7 +709,8 @@ void CGameWorld::MoveToTop(CGameObject *obj)
 }
 
 CGameObject *CGameWorld::SearchWorldObject(
-    int serialStart, int scanDistance, SCAN_TYPE_OBJECT scanType, SCAN_MODE_OBJECT scanMode)
+    int serialStart, int scanDistance, SCAN_TYPE_OBJECT scanType, SCAN_MODE_OBJECT scanMode,
+    bool (*accept)(const CGameObject *))
 {
     CGameObject *result = nullptr;
 
@@ -777,7 +798,7 @@ CGameObject *CGameWorld::SearchWorldObject(
                         }
                     }
 
-                    if (condition)
+                    if (condition && (accept == nullptr || accept(obj)))
                     {
                         if (scanMode == SMO_NEAREST)
                         {
@@ -1209,6 +1230,16 @@ void CGameWorld::UpdateItemInContainer(CGameObject *obj, CGameObject *container,
             g_GumpManager.UpdateContent(0, top->Serial, GT_TRADE);
         }
     }
+
+#if defined(XUO_ASSISTANT)
+    if (!obj->NPC && !container->NPC)
+    {
+        const bool isContainer =
+            obj->GetStaticData() != nullptr && obj->IsContainer() && !obj->IsCorpse();
+        xuoassist::ItemCounters_OnContainerChanged(
+            containerSerial, obj->Serial, obj->Graphic, obj->Color, isContainer, false);
+    }
+#endif
 }
 
 void CGameWorld::UpdateContainedItem(
@@ -1271,6 +1302,12 @@ void CGameWorld::UpdateContainedItem(
     obj->Count = count;
     UpdateItemInContainer(obj, container, x, y);
     MoveToTop(obj);
+#if defined(XUO_ASSISTANT)
+    if (!obj->NPC)
+    {
+        xuoassist::g_TradeManager.ObserveFirstOffer(containerSerial, obj->Graphic);
+    }
+#endif
 
     Info(
         Client,

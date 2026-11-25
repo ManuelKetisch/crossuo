@@ -457,12 +457,14 @@ extern bool g_ShopReceived;
 extern uint32_t g_LastTMapX;
 extern uint32_t g_LastTMapY;
 
-static const bool g_LayerSafe[30] = { false, // 0
-                                      true,  true, true,  true,  true,  true,  true,  true,
-                                      true,  true, false, true,  true,  true,  false, false,
-                                      true,  true, true,  true,
-                                      false, // 0x15
-                                      true,  true, true,  false, false, false, false, false };
+static const bool g_LayerSafe[OL_EXTENDED_COUNT] = {
+    false, // 0
+    true,  true,  true,  true,  true,  true,  true,  true,  true,  true,  false, true,
+    true,  true,  false, false, true,  true,  true,  true,
+    false, // 0x15
+    true,  true,  true,  false, false, false, false, false,
+    true,  true,  true,  true,  true,  true // 0x1E..0x23 (Ring2..Ring6, Earrings2)
+};
 
 // MAX_ABILITIES_COUNT, MAX_STATIC_DATA_INDEX_COUNT and MAX_GUMP_DATA_INDEX_COUNT
 // come from Globals.h / xuocore/enumlist.h.
@@ -471,13 +473,14 @@ const int MAX_INVOKE_VIRTURE_COUNT = 3;
 
 const astr_t g_InvokeVirtureName[MAX_INVOKE_VIRTURE_COUNT] = { "Honor", "Sacrifice", "Valor" };
 
-const astr_t g_LayerName[30] = {
+const astr_t g_LayerName[OL_EXTENDED_COUNT] = {
     "None", // 0
     "RightHand", "LeftHand", "Shoes", "Pants", "Shirt",      "Helmet",   "Gloves", "Ring",
     "Talisman",  "Necklace", "Hair",  "Waist", "InnerTorso", "Bracelet", "Face",   "Beard",
     "MidTorso",  "Earrings", "Arms",  "Cloak",
     "Backpack", // 0x15
-    "Robe",      "Eggs",     "Legs",  "Mount", "Buy",        "Resale",   "Sell",   "Bank"
+    "Robe",      "Eggs",     "Legs",  "Mount", "Buy",        "Resale",   "Sell",   "Bank",
+    "Ring2",     "Ring3",    "Ring4", "Ring5", "Ring6",      "Earrings2"
 };
 
 } // namespace xuoassist

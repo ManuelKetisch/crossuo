@@ -106,7 +106,7 @@ void CConnectionScreen::OnKeyDown(const KeyEvent &ev)
         {
             if (m_Type == CST_CHARACTER_LIST)
             {
-                CreateSmoothAction(ID_SMOOTH_CS_SEND_DELETE);
+                CreateSmoothAction(m_ConnectionFailed ? ID_SMOOTH_CS_GO_SCREEN_CHARACTER : ID_SMOOTH_CS_SEND_DELETE);
             }
             else if (m_Type == CST_SELECT_PROFESSOIN)
             {

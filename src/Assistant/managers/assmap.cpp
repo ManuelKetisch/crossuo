@@ -94,6 +94,7 @@ void CMapSettings::Copy(const CMapSettings &settings)
     DisplayCoordinates = settings.DisplayCoordinates;
     ShowOnLogin = settings.ShowOnLogin;
     ShowLastCorpse = settings.ShowLastCorpse;
+    ShowServerWaypoints = settings.ShowServerWaypoints;
     MarkDeadMobiles = settings.MarkDeadMobiles;
     RotateMap = settings.RotateMap;
 

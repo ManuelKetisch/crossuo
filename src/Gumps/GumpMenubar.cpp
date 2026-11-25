@@ -107,7 +107,7 @@ void CGumpMenubar::RebuildLayout()
           smallWidth,
           ID_GMB_HELP,
           g_ClilocManager.Cliloc(g_Language)->GetW(3000134, false, "Help") },
-        { 0x098D, largeWidth, ID_GMB_WORLD_MAP, L"World Map" },
+        { 0x098D, largeWidth, ID_GMB_WORLD_MAP, L"Atlas" },
     };
     if (hasUOStore)
     {

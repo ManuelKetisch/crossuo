@@ -35,8 +35,10 @@ char s_HotkeyText[96] = { 0 };  // the capture field label
 char s_ExternalCode[2048] = { 0 }; // the "External code" editor (plain text)
 char s_DataText[512] = { 0 };   // Data column scratch (one row per frame)
 
-constexpr float FORM_WIDTH = 851.0f;  // the original default form size
-constexpr float FORM_HEIGHT = 639.0f;
+constexpr float FORM_WIDTH = 980.0f;
+constexpr float FORM_HEIGHT = 660.0f;
+constexpr float FORM_MIN_WIDTH = 860.0f;
+constexpr float FORM_MIN_HEIGHT = 520.0f;
 
 void refresh_hotkey_text()
 {
@@ -66,7 +68,8 @@ void select_row(int row)
 
     s_SelectedType = entry.Type;
     s_SelectedAction = (int)entry.Action;
-    if (entry.Type == HT_PLAY_MACRO || entry.Type == HT_SCRIPT)
+    if (entry.Type == HT_PLAY_MACRO || entry.Type == HT_SCRIPT ||
+        (entry.Type == HT_INVENTORY_AGENT && !entry.ScriptOrMacroName.empty()))
     {
         // match the stored value against the action list (a script entry
         // stores the script's path; older profiles stored the function name,
@@ -109,13 +112,17 @@ void commit_action_selection()
         return;
     }
     CHotkeyEntry &entry = g_AssistantConfig.m_Hotkeys[s_SelectedRow];
-    if (entry.Type == HT_PLAY_MACRO || entry.Type == HT_SCRIPT)
+    if (entry.Type == HT_PLAY_MACRO || entry.Type == HT_SCRIPT || entry.Type == HT_INVENTORY_AGENT)
     {
         char name[512] = { 0 };
         Actions_ActionValue(entry.Type, s_SelectedAction, name, sizeof(name));
-        if (name[0] != '\0')
+        if (name[0] != '\0' || entry.Type == HT_INVENTORY_AGENT)
         {
             entry.ScriptOrMacroName = name;
+        }
+        if (entry.Type == HT_INVENTORY_AGENT && s_SelectedAction >= 0)
+        {
+            entry.Action = (uint32_t)s_SelectedAction;
         }
     }
     else
@@ -145,12 +152,14 @@ void HotkeysForm_Draw(bool *open)
     }
 
     ImGui::SetNextWindowSize(ImVec2(FORM_WIDTH, FORM_HEIGHT), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(FORM_MIN_WIDTH, FORM_MIN_HEIGHT), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Hotkeys", &s_FormOpen))
     {
         ImGui::End();
         if (open != nullptr)
         {
-            *open = false;
+            *open = s_FormOpen;
         }
         return;
     }
@@ -196,9 +205,14 @@ void HotkeysForm_Draw(bool *open)
     ImGui::Separator();
 
     // the bindings table (tw_Hotkeys: "Hotkey" | "Data", col0 checkbox)
+    // Reserve space at the bottom so Add / Delete / Copy buttons stay visible.
+    const float actionRowHeight = ImGui::GetFrameHeightWithSpacing() + 4.0f;
+    const float tableHeight = ImGui::GetContentRegionAvail().y - actionRowHeight;
     static ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
                                    ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-    if (ImGui::BeginTable("##hotkeys_table", 3, flags, ImGui::GetContentRegionAvail()))
+    if (ImGui::BeginTable(
+            "##hotkeys_table", 3, flags,
+            ImVec2(0.0f, tableHeight > 80.0f ? tableHeight : 80.0f)))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 30.0f);
@@ -300,8 +314,9 @@ void HotkeysForm_Draw(bool *open)
     if (g_Hotkeys.IsCapturing())
     {
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(183, 183, 255, 255));
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(20, 20, 20, 255));
         ImGui::Button("press a key / mouse button (click here to cancel)", ImVec2(-1.0f, 0.0f));
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(2);
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
         {
             g_Hotkeys.CancelCapture();
@@ -371,10 +386,22 @@ void HotkeysForm_Draw(bool *open)
     if (s_SelectedRow >= 0 && s_SelectedRow < (int)g_AssistantConfig.m_Hotkeys.size())
     {
         CHotkeyEntry &entry = g_AssistantConfig.m_Hotkeys[s_SelectedRow];
+        const char *passModes[] = { "Use profile setting", "Pass to game", "Consume key" };
+        int passMode = static_cast<int>(entry.PassMode);
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::Combo("Key input", &passMode, passModes, IM_ARRAYSIZE(passModes)))
+        {
+            const auto oldMode = entry.PassMode;
+            entry.PassMode = static_cast<HotkeyPassMode>(passMode);
+            if (!g_AssistantConfig.SaveHotkeys())
+            {
+                entry.PassMode = oldMode;
+            }
+        }
         const bool scriptKind =
             (entry.Type == HT_SCRIPT || entry.Type == HT_EXTERNAL_CODE);
         if (ImGui::Checkbox(
-                scriptKind ? "Run one script" : "Do not auto iterrupt\nplayed macro",
+                scriptKind ? "Run one script" : "Do not auto interrupt\nplayed macro",
                 &entry.RunningMode))
         {
             g_AssistantConfig.SaveHotkeys();

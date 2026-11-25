@@ -85,7 +85,9 @@ enum Reagent
 
 void InitSpells();
 const Spell &GetSpell(int offset);
+const Spell *GetSpellById(uint16_t id);
 const SpellBook &GetSpellbook(SPELLBOOK_TYPE type);
 const SpellBook &GetSpellbook(int type);
 const Spell *GetSpellByOffsetAndType(int offset, SPELLBOOK_TYPE spellType);
+const Spell *FindSpellByGraphicAndType(uint16_t graphic, SPELLBOOK_TYPE spellType);
 const Spell *GetSpellByGraphicAndType(uint16_t graphic, SPELLBOOK_TYPE spellType);

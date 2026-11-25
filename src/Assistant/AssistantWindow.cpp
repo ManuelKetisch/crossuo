@@ -4,6 +4,7 @@
 #define LOGGER_MODULE Assistant
 
 #include "AssistantWindow.h"
+#include "AssistantWindow_rules.h"
 
 #if defined(XUO_ASSISTANT)
 
@@ -23,12 +24,15 @@
 #include "ui/widgets.h"     // Icons_Init/Icons_Shutdown (icon atlas lifecycle)
 #include "../AssetViewer/AssetViewer.h" // AssetViewer_Draw (the viewer shares this frame)
 #include "core/global.h"    // g_Connected (xuoassist)
+#include "core/itemcounters.h" // the gameplay HUD
+#include "config/assistantconfig.h" // g_AssistantConfig (UI scale)
 #include "core/hotkeys.h"   // the hotkey engine
 #include "macros/macroexecutor.h" // g_MacroExecutor.Reset (disconnect reset)
 #include "script/scripthandle.h" // ScriptManager (stop self-test)
 #include "core/world.h"          // g_World/g_Player (stop self-test gate)
 #include "Globals.h"        // g_GameState, g_Ticks
 #include "../GameWindow.h" // g_GameWindow
+#include "../Managers/MouseManager.h"
 #include "../Config.h"      // g_Config.AssistantEnabled (the Assistant= crossuo.cfg key)
 
 // X11 (pulled in by SDL_syswm.h on Linux) defines `Status` as a macro, which
@@ -63,39 +67,17 @@ static bool assistant_enabled()
     return g_Config.AssistantEnabled;
 }
 
-// true when the mouse is over one of the assistant's popped-out platform
-// windows (the desktop cursor rules there, both for the OS cursor policy and
-// for the game-cursor overlay)
-static bool mouse_over_assistant_popout()
+static xuoassist::AssistantOverlayInputState current_overlay_input_state()
 {
     const ImGuiIO &io = ImGui::GetIO();
-    const ImGuiViewport *mainViewport = ImGui::GetMainViewport();
-    const ImVector<ImGuiViewport *> &viewports = ImGui::GetPlatformIO().Viewports;
-    for (int i = 0; i < viewports.Size; i++)
-    {
-        const ImGuiViewport *vp = viewports[i];
-        if (vp == mainViewport)
-            continue; // the game window: the UO cursor rules there
-        if (io.MousePos.x >= vp->Pos.x && io.MousePos.y >= vp->Pos.y &&
-            io.MousePos.x < vp->Pos.x + vp->Size.x && io.MousePos.y < vp->Pos.y + vp->Size.y)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-// True when the viewer's own windows are under the mouse: the asset viewer
-// runs as a top-level ImGui window that outlives the assistant shell, and its
-// cursor/input must not depend on the shell being visible.
-static bool mouse_over_asset_viewer()
-{
-    // With shell windows hidden, the only windows that can capture the mouse
-    // are the viewer's, so WantCaptureMouse answers "over one of them". While
-    // the shell is up it is the same relation the assistant cursor policy
-    // uses for its own windows.
-    return AssetViewer_IsWindowOpen() && ImGui::GetIO().WantCaptureMouse &&
-           !mouse_over_assistant_popout();
+    xuoassist::AssistantOverlayInputState state;
+    state.ShellVisible = s_visible;
+    state.HudVisible = xuoassist::ItemCounters_IsHUDVisible();
+    state.AssetViewerOpen = AssetViewer_IsWindowOpen();
+    state.WantCaptureMouse = io.WantCaptureMouse;
+    state.WantCaptureKeyboard = io.WantCaptureKeyboard;
+    state.WantTextInput = io.WantTextInput;
+    return state;
 }
 
 static bool event_belongs_to_game(const SDL_Event &ev)
@@ -306,10 +288,13 @@ bool AssistantWindow_Show(bool show)
         // disarm a pending capture field: with the shell hidden nothing would
         // commit it, and the engine would keep eating keys into the buffer
         xuoassist::g_Hotkeys.CancelCapture();
-        // hand the cursor back to the client policy (the game window baseline is
-        // a hidden OS cursor); the backend no longer re-hides it for us since
-        // init() set ImGuiConfigFlags_NoMouseCursorChange
-        SDL_HideCursor();
+        // hand the cursor back to the client policy when no other ImGui surface
+        // (such as the HUD or Asset Viewer) remains active; the backend no
+        // longer re-hides it for us since init() set NoMouseCursorChange
+        if (!xuoassist::ItemCounters_IsHUDVisible() && !AssetViewer_IsWindowOpen())
+        {
+            SDL_HideCursor();
+        }
     }
     return true;
 }
@@ -403,71 +388,40 @@ bool AssistantWindow_ProcessEvent(const SDL_Event &ev)
     if (!event_belongs_to_game(ev))
         return true; // assistant pop-out platform window
 
-    const ImGuiIO &io = ImGui::GetIO();
+    // Shared-window motion still positions the game cursor. A release belongs
+    // to the game if it received that button's press before entering the overlay.
+    if (ev.type == SDL_EVENT_MOUSE_MOTION ||
+        (ev.type == SDL_EVENT_MOUSE_BUTTON_UP && g_MouseManager.IsButtonPressed(ev.button.button)))
+    {
+        return false;
+    }
+
+    const xuoassist::AssistantOverlayInputState overlayState = current_overlay_input_state();
 
     // The capture field of the hotkeys form ("listening"): it must see the
     // next raw key/wheel/mouse event even when the game would. Gated on
     // !WantTextInput so a busy text field always wins.
-    if (xuoassist::Hotkeys_IsCapturing() && !io.WantTextInput &&
+    if (xuoassist::Hotkeys_IsCapturing() && !overlayState.WantTextInput &&
         xuoassist::Hotkeys_ProcessCapture(ev))
     {
         return true;
     }
 
-    // Hidden: keep ImGui fed but let the game play normally - EXCEPT the
-    // hotkey engine, which keeps working while the assistant is hidden
-    // (Pass-keys and the On/Off switch govern it, see core/hotkeys.cpp). The
-    // asset viewer's own window outlives the shell: its area keeps the events
-    // ImGui captured (exactly as when the shell is up) and consumes none of
-    // the game hotkeys.
-    if (!s_visible)
-    {
-        if (mouse_over_asset_viewer())
-        {
-            // ImGui keeps what it captured over the viewer (clicks, wheel,
-            // keys typed into it); everything else reaches the hotkey engine
-            switch (ev.type)
-            {
-                case SDL_EVENT_MOUSE_MOTION:
-                    return io.WantCaptureMouse;
-                case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                case SDL_EVENT_MOUSE_BUTTON_UP:
-                case SDL_EVENT_MOUSE_WHEEL:
-                    return io.WantCaptureMouse;
-                case SDL_EVENT_KEY_DOWN:
-                case SDL_EVENT_KEY_UP:
-                case SDL_EVENT_TEXT_INPUT:
-                case SDL_EVENT_TEXT_EDITING:
-                    return io.WantCaptureKeyboard || io.WantTextInput;
-                default:
-                    return false;
-            }
-        }
-        return xuoassist::Hotkeys_ProcessGameEvent(ev);
-    }
-
     switch (ev.type)
     {
-        case SDL_EVENT_MOUSE_MOTION:
-            return io.WantCaptureMouse;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP:
-            // the engine only consumes middle/X buttons with a matching
-            // binding (the plain buttons always pass)
-            if (io.WantCaptureMouse)
-                return true;
-            return xuoassist::Hotkeys_ProcessGameEvent(ev);
         case SDL_EVENT_MOUSE_WHEEL:
-            if (io.WantCaptureMouse)
+            if (xuoassist::AssistantOverlay_ShouldCaptureMouse(overlayState))
                 return true;
             return xuoassist::Hotkeys_ProcessGameEvent(ev);
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
         case SDL_EVENT_TEXT_INPUT:
         case SDL_EVENT_TEXT_EDITING:
-            // ImGui text fields always win: typing in the assistant never
-            // fires a binding
-            if (io.WantCaptureKeyboard || io.WantTextInput)
+            // Active ImGui text fields always win; otherwise only windows with
+            // keyboard controls (shell / Asset Viewer) capture keyboard events.
+            if (xuoassist::AssistantOverlay_ShouldCaptureKeyboard(overlayState))
                 return true;
             return xuoassist::Hotkeys_ProcessGameEvent(ev);
         default:
@@ -503,8 +457,11 @@ void AssistantWindow_DrawOverlay()
     // the popped-out platform windows. Bailing out here left them frozen on
     // screen: the assistant could not be closed via its X button.
     ui_newframe(s_ctx);
+    ImGui::GetStyle().FontScaleMain =
+        xuoassist::AssistantOverlay_ClampUiScale(xuoassist::g_AssistantConfig.UiScale()) / 100.0f;
     if (shellInit)
     {
+        xuoassist::ItemCounters_DrawHUD();
         xuoassist::AssistantUI_Draw(&s_visible, s_sessionStartTicks);
     }
     // the asset viewer submits its window into this same ImGui frame, after
@@ -525,16 +482,9 @@ void AssistantWindow_DrawOverlay()
     // init() set ImGuiConfigFlags_NoMouseCursorChange so the SDL2 backend
     // never fights this; while the pipeline is not running the assistant
     // leaves the cursor alone entirely: the client owns it.
-    if (s_visible || AssetViewer_IsWindowOpen())
+    if (xuoassist::AssistantOverlay_ShouldShowSystemCursor(current_overlay_input_state()))
     {
-        if (ImGui::GetIO().WantCaptureMouse)
-        {
-            SDL_ShowCursor();
-        }
-        else
-        {
-            SDL_HideCursor();
-        }
+        SDL_ShowCursor();
     }
     else
     {

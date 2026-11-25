@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <xuocore/enumlist.h>
+
+struct PaperdollSlotSpec
+{
+    int X = 0;
+    int Y = 0;
+    int Layer = OL_NONE;
+    const wchar_t *EmptyTooltip = L"";
+};
+
+constexpr std::array<int, 6> kPaperdollRingLayers = {
+    OL_RING,
+    OL_RING_2,
+    OL_RING_3,
+    OL_RING_4,
+    OL_RING_5,
+    OL_RING_6,
+};
+
+constexpr std::array<int, 2> kPaperdollEarringLayers = {
+    OL_EARRINGS,
+    OL_EARRINGS_2,
+};
+
+// Integrated jewelry dock geometry centered beneath the 262px paperdoll frame.
+constexpr int kPaperdollJewelryDockX = 25;
+constexpr int kPaperdollJewelryDockY = 322;
+constexpr int kPaperdollJewelryDockWidth = 212;
+constexpr int kPaperdollJewelryDockHeight = 42;
+constexpr int kPaperdollJewelrySlotY = 338;
+constexpr int kPaperdollJewelryDividerX = 88;
+constexpr int kPaperdollJewelryLabelY = 325;
+
+constexpr std::array<PaperdollSlotSpec, 4> kPaperdollLeftEquipSlots = { {
+    { 1, 75, OL_HELMET, L"Helmet slot" },
+    { 1, 96, OL_NECKLACE, L"Necklace slot" },
+    { 1, 117, OL_BRACELET, L"Bracelet slot" },
+    { 1, 138, OL_TUNIC, L"Tunic slot" },
+} };
+
+constexpr std::array<PaperdollSlotSpec, 8> kPaperdollJewelryDockSlots = { {
+    { 41, kPaperdollJewelrySlotY, OL_EARRINGS, L"Left earring slot" },
+    { 62, kPaperdollJewelrySlotY, OL_EARRINGS_2, L"Right earring slot" },
+    { 95, kPaperdollJewelrySlotY, OL_RING, L"Ring slot 1" },
+    { 116, kPaperdollJewelrySlotY, OL_RING_2, L"Ring slot 2" },
+    { 137, kPaperdollJewelrySlotY, OL_RING_3, L"Ring slot 3" },
+    { 158, kPaperdollJewelrySlotY, OL_RING_4, L"Ring slot 4" },
+    { 179, kPaperdollJewelrySlotY, OL_RING_5, L"Ring slot 5" },
+    { 200, kPaperdollJewelrySlotY, OL_RING_6, L"Ring slot 6" },
+} };
+
+inline bool IsRingLayer(int layer)
+{
+    for (int candidate : kPaperdollRingLayers)
+    {
+        if (layer == candidate)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool IsEarringsLayer(int layer)
+{
+    for (int candidate : kPaperdollEarringLayers)
+    {
+        if (layer == candidate)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool IsExtendedJewelryLayer(int layer)
+{
+    return layer >= OL_RING_2 && layer <= OL_EARRINGS_2;
+}
+
+inline bool IsPaperdollEquipmentLayer(int layer)
+{
+    return (layer > OL_NONE && layer < OL_MOUNT) || IsExtendedJewelryLayer(layer);
+}
+
+inline int CanonicalJewelryLayer(int layer)
+{
+    if (IsRingLayer(layer))
+    {
+        return OL_RING;
+    }
+    if (IsEarringsLayer(layer))
+    {
+        return OL_EARRINGS;
+    }
+    return layer;
+}
+
+inline const wchar_t *PaperdollEmptySlotTooltip(int layer)
+{
+    for (const auto &slot : kPaperdollLeftEquipSlots)
+    {
+        if (slot.Layer == layer)
+        {
+            return slot.EmptyTooltip;
+        }
+    }
+    for (const auto &slot : kPaperdollJewelryDockSlots)
+    {
+        if (slot.Layer == layer)
+        {
+            return slot.EmptyTooltip;
+        }
+    }
+    if (layer == OL_1_HAND)
+    {
+        return L"Main hand slot";
+    }
+    if (layer == OL_2_HAND)
+    {
+        return L"Off hand slot";
+    }
+    return L"";
+}
+
+// Resolve which equipment layer a dragged wearable item should equip into when
+// dropped on a character's paperdoll. Returns OL_NONE if no matching slot is free.
+template <typename LayerOccupiedFn>
+inline int ResolvePaperdollDropLayer(
+    int itemTileLayer,
+    bool isWeapon,
+    bool isPlayer,
+    int droppedOnLayer,
+    bool primaryIsWeapon,
+    LayerOccupiedFn isOccupied)
+{
+    if (itemTileLayer == OL_NONE)
+    {
+        return OL_NONE;
+    }
+
+    if (IsRingLayer(itemTileLayer))
+    {
+        if (!isPlayer)
+        {
+            return !isOccupied(OL_RING) ? OL_RING : OL_NONE;
+        }
+        if (IsRingLayer(droppedOnLayer) && !isOccupied(droppedOnLayer))
+        {
+            return droppedOnLayer;
+        }
+        for (int layer : kPaperdollRingLayers)
+        {
+            if (!isOccupied(layer))
+            {
+                return layer;
+            }
+        }
+        return OL_NONE;
+    }
+
+    if (IsEarringsLayer(itemTileLayer))
+    {
+        if (!isPlayer)
+        {
+            return !isOccupied(OL_EARRINGS) ? OL_EARRINGS : OL_NONE;
+        }
+        if (IsEarringsLayer(droppedOnLayer) && !isOccupied(droppedOnLayer))
+        {
+            return droppedOnLayer;
+        }
+        for (int layer : kPaperdollEarringLayers)
+        {
+            if (!isOccupied(layer))
+            {
+                return layer;
+            }
+        }
+        return OL_NONE;
+    }
+
+    if (isPlayer && itemTileLayer == OL_1_HAND && isWeapon &&
+        isOccupied(OL_1_HAND) && primaryIsWeapon && !isOccupied(OL_2_HAND))
+    {
+        return OL_2_HAND;
+    }
+
+    return !isOccupied(itemTileLayer) ? itemTileLayer : OL_NONE;
+}

@@ -28,6 +28,7 @@ class CLoadedScriptList
 {
 public:
     const vector<CLoadedScript> &Scripts() const { return m_Scripts; }
+    vector<astr_t> ScriptsForSave() const;
 
     bool Contains(const astr_t &key) const;
     const CLoadedScript *Find(const astr_t &key) const;

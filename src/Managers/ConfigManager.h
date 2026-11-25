@@ -92,7 +92,7 @@ public:
 
     bool EnablePathfind = false;
     bool HoldTabForCombat = false;
-    bool DoubleClickLoot = false;
+    bool DoubleClickLoot = true;
     bool OffsetInterfaceWindows = false;
     bool AutoArrange = false;
     bool AlwaysRun = false;

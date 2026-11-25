@@ -15,8 +15,11 @@
 
 #include <atomic>
 #include <cctype> // tolower (the str_lower stub below)
+#include <map>
 
 #include "../../core/global.h"
+#include "../../core/inventoryagent.h"
+#include "../../core/bandageheal.h"
 #include "../../core/world.h" // the worldstubs.h stand-ins (disconnected)
 #include "../../core/assist.h"
 #include "../../core/assistantevents.h" // g_AssistantEvents stand-in
@@ -131,6 +134,60 @@ namespace xuoassist {
 
 extern GumpData *g_HarnessGump;
 
+struct HarnessHookState
+{
+    uint32_t LastDoubleClickSerial = 0;
+    uint32_t LastStatusSerial = 0;
+    uint32_t LastMoveItemSerial = 0;
+    int LastMoveCount = 0;
+    uint32_t LastMoveContainer = 0;
+    uint16_t LastMoveX = 0;
+    uint16_t LastMoveY = 0;
+    char LastMoveZ = 0;
+    uint32_t LastTargetSentSerial = 0;
+    int LastTargetTileX = 0;
+    int LastTargetTileY = 0;
+    int LastTargetTileZ = 0;
+    uint16_t LastTargetTileGraphic = 0;
+    int TargetCancelledCount = 0;
+    int LastGumpChoiceButton = -1;
+    uint32_t LastGumpChoiceId = 0;
+    int LastGumpChoiceCheckCount = 0;
+    int LastGumpChoiceEntryCount = 0;
+    int LastWalkDir = -1;
+    bool LastWalkRun = false;
+    int WalkCallCount = 0;
+    int WalkToX = 0;
+    int WalkToY = 0;
+    int WalkToZ = 0;
+    int WalkToDistance = 0;
+    int WalkToCallCount = 0;
+    int StopAutoWalkCount = 0;
+    bool WalkToSucceeds = true;
+    bool WalkToAutoArrive = false;
+    int LastSkillIndex = -1;
+    astr_t LastSkillName;
+    astr_t LastPrintText;
+    uint16_t LastPrintColor = 0;
+    std::map<uint32_t, astr_t> OplProperties;
+    bool InventoryRunning = false;
+    astr_t LastInventoryPreset;
+    int LastInventoryMode = -1;
+    astr_t LastAutoLootOnce;
+    int ScavengerCacheCleared = 0;
+    bool BandageRunning = false;
+    int LastTargetSelectedItem = 0;
+    int LastTargetSelectedTarget = 0;
+    vector<GumpData *> HarnessGumps;
+
+    void Reset()
+    {
+        *this = HarnessHookState();
+    }
+};
+
+HarnessHookState g_HarnessHooks;
+
 // --- harness hooks -----------------------------------------------------------
 // The executor deep-copies the manager record for GetGump; the harness points
 // the fake manager at this one.
@@ -139,8 +196,13 @@ GumpData *g_HarnessGump = nullptr;
 
 uint32_t CAssistant::TextToSerial(astr_t text)
 {
-    // For the tests: plain hex text
-    return (uint32_t)strtoul(text.c_str(), nullptr, 16);
+    const astr_t lowered = str_lower(text);
+    if (lowered == "self") return g_PlayerSerial;
+    if (lowered == "backpack") return g_Backpack;
+    if (lowered == "lasttarget") return g_LastTargetObject;
+    if (lowered == "lastattack") return g_LastAttackObject;
+    if (lowered == "ground") return 0xFFFFFFFF;
+    return (uint32_t)strtoul(text.c_str(), nullptr, 0);
 }
 astr_t CAssistant::SerialToText(const uint32_t &value)
 {
@@ -156,19 +218,41 @@ astr_t CAssistant::GraphicToText(const uint16_t &value)
 }
 uint16_t CAssistant::TextToGraphic(astr_t text)
 {
-    return (uint16_t)strtoul(text.c_str(), nullptr, 16);
+    return (uint16_t)strtoul(text.c_str(), nullptr, 0);
 }
-void CAssistant::ClientPrint(const astr_t &, const uint16_t &) const {}
+void CAssistant::ClientPrint(const astr_t &text, const uint16_t &color) const
+{
+    g_HarnessHooks.LastPrintText = text;
+    g_HarnessHooks.LastPrintColor = color;
+}
 void CAssistant::ClientCharPrint(const uint32_t &, const astr_t &, const uint16_t &) const {}
-void CAssistant::DoubleClick(const uint32_t &) const {}
+void CAssistant::DoubleClick(const uint32_t &serial) const
+{
+    g_HarnessHooks.LastDoubleClickSerial = serial;
+}
 void CAssistant::MoveEquip(const uint32_t &, const int &, const uint32_t &) const {}
 void CAssistant::GetFriendsStatus() const {}
 void CAssistant::GetEnemiesStatus() const {}
 void CAssistant::HandleSetPVPCaller(uint8_t *) const {}
 CGameObject *CAssistant::FindFriend(const uint16_t &, const astr_t &) const { return nullptr; }
 CGameObject *CAssistant::FindEnemy(const uint16_t &, const astr_t &) const { return nullptr; }
-int CAssistant::TextToLayer(astr_t) { return 0; }
-void CAssistant::RequestTarget(const astr_t &) const {}
+int CAssistant::TextToLayer(astr_t text)
+{
+    const astr_t lowered = str_lower(text);
+    for (int i = 0; i < OL_EXTENDED_COUNT; i++)
+    {
+        if (lowered == str_lower(g_LayerName[i]))
+        {
+            return i;
+        }
+    }
+    return atoi(text.c_str());
+}
+void CAssistant::RequestTarget(const astr_t &) const
+{
+    g_Target.FromAssist = true;
+    g_Target.Targeting = true;
+}
 int CAssistant::CountType(const vector<astr_t> &, const vector<astr_t> &, const astr_t &,
     const astr_t &, bool) const
 {
@@ -222,16 +306,59 @@ uint32_t CAssistant::RawStringToUInt(const astr_t &value)
 CGumpManager::CGumpManager() {}
 CGumpManager::~CGumpManager() {}
 CGumpManager g_GumpManager;
-GumpData *CGumpManager::GetGump(const uint32_t &) { return g_HarnessGump; }
-GumpData *CGumpManager::GetGump(const uint32_t &, const uint32_t &) { return g_HarnessGump; }
-GumpData *CGumpManager::GetLastGump() { return g_HarnessGump; }
+GumpData *CGumpManager::GetGump(const uint32_t &index)
+{
+    if (!g_HarnessHooks.HarnessGumps.empty())
+    {
+        return index < (uint32_t)g_HarnessHooks.HarnessGumps.size()
+            ? g_HarnessHooks.HarnessGumps[index]
+            : nullptr;
+    }
+    return g_HarnessGump;
+}
+GumpData *CGumpManager::GetGump(const uint32_t &serial, const uint32_t &id)
+{
+    for (GumpData *g : g_HarnessHooks.HarnessGumps)
+    {
+        if (g != nullptr && g->Serial == serial && g->ID == id)
+        {
+            return g;
+        }
+    }
+    return g_HarnessGump;
+}
+GumpData *CGumpManager::GetLastGump()
+{
+    if (!g_HarnessHooks.HarnessGumps.empty())
+    {
+        return g_HarnessHooks.HarnessGumps.back();
+    }
+    return g_HarnessGump;
+}
 int CGumpManager::GetGumpCount()
 {
+    if (!g_HarnessHooks.HarnessGumps.empty())
+    {
+        return (int)g_HarnessHooks.HarnessGumps.size();
+    }
     return g_HarnessGump != nullptr ? 1 : 0;
 }
 void CGumpManager::AddHook(CGumpHook *) {}
 void CGumpManager::ClearHooks() {}
-bool CGumpManager::SendGumpChoice(GumpData *, CGumpHook &) { return false; }
+bool CGumpManager::SendGumpChoice(GumpData *gump, CGumpHook &hook)
+{
+    if (gump == nullptr || gump->Replayed)
+    {
+        return false;
+    }
+    gump->Replayed = true;
+    gump->ReplyID = (uint32_t)hook.Index;
+    g_HarnessHooks.LastGumpChoiceButton = hook.Index;
+    g_HarnessHooks.LastGumpChoiceId = gump->ID;
+    g_HarnessHooks.LastGumpChoiceCheckCount = (int)hook.m_Checks.size();
+    g_HarnessHooks.LastGumpChoiceEntryCount = (int)hook.m_Entries.size();
+    return true;
+}
 void CGumpManager::InfoGump(const astr_t &) {}
 
 CMenuManager::CMenuManager() {}
@@ -269,7 +396,11 @@ void CContextMenuManager::RemoveHook() {}
 // the client manager (global namespace, per Managers/ObjectPropertiesManager.h)
 CObjectPropertiesManager g_ObjectPropertiesManager;
 CObjectPropertiesManager::~CObjectPropertiesManager() = default;
-astr_t CObjectPropertiesManager::GetData(const uint32_t &) { return {}; }
+astr_t CObjectPropertiesManager::GetData(const uint32_t &serial)
+{
+    const auto it = xuoassist::g_HarnessHooks.OplProperties.find(serial);
+    return it != xuoassist::g_HarnessHooks.OplProperties.end() ? it->second : astr_t();
+}
 
 namespace xuoassist {
 
@@ -360,9 +491,90 @@ void vfs_unmap_file(unsigned char *, unsigned long) {}
 void xuoassist::CDisplayManager::RecompileData(const astr_t &) {}
 
 // world stand-in out-of-line bodies (global namespace)
-CGameObject *CGameWorld::FindWorldObject(uint32_t) { return nullptr; }
-CGameItem *CGameWorld::FindWorldItem(uint32_t) { return nullptr; }
-CGameCharacter *CGameWorld::FindWorldCharacter(uint32_t) { return nullptr; }
+CBaseQueue::~CBaseQueue() {}
+void CBaseQueue::Clear() { m_Items = nullptr; }
+CBaseQueueItem *CBaseQueue::Add(CBaseQueueItem *item)
+{
+    if (item == nullptr) return nullptr;
+    item->m_Prev = nullptr;
+    item->m_Next = nullptr;
+    if (m_Items == nullptr)
+    {
+        m_Items = item;
+    }
+    else
+    {
+        CBaseQueueItem *cur = m_Items;
+        while (cur->m_Next != nullptr) cur = cur->m_Next;
+        cur->m_Next = item;
+        item->m_Prev = cur;
+    }
+    return item;
+}
+void CBaseQueue::MoveToFront(CBaseQueueItem *) {}
+CBaseQueueItem::~CBaseQueueItem() {}
+
+CGameItem *CGameObject::FindLayer(int layer) const
+{
+    for (CBaseQueueItem *child = m_Items; child != nullptr; child = child->m_Next)
+    {
+        auto *item = static_cast<CGameItem *>(child);
+        if (!item->NPC && item->Layer == layer)
+        {
+            return item;
+        }
+    }
+    return nullptr;
+}
+
+static CGameObject *find_object_recursive(CBaseQueueItem *head, uint32_t serial)
+{
+    for (CBaseQueueItem *cur = head; cur != nullptr; cur = cur->m_Next)
+    {
+        auto *obj = static_cast<CGameObject *>(cur);
+        if (obj->Serial == serial)
+        {
+            return obj;
+        }
+        if (obj->m_Items != nullptr)
+        {
+            CGameObject *nested = find_object_recursive(obj->m_Items, serial);
+            if (nested != nullptr)
+            {
+                return nested;
+            }
+        }
+    }
+    return nullptr;
+}
+
+CGameObject *CGameWorld::FindWorldObject(uint32_t serial)
+{
+    if (serial == 0)
+    {
+        return nullptr;
+    }
+    if (g_Player != nullptr && g_Player->Serial == serial)
+    {
+        return g_Player;
+    }
+    CGameObject *found = find_object_recursive(m_Items, serial);
+    if (found == nullptr && g_Player != nullptr && g_Player->m_Items != nullptr)
+    {
+        found = find_object_recursive(g_Player->m_Items, serial);
+    }
+    return found;
+}
+CGameItem *CGameWorld::FindWorldItem(uint32_t serial)
+{
+    CGameObject *obj = FindWorldObject(serial);
+    return (obj != nullptr && !obj->NPC) ? static_cast<CGameItem *>(obj) : nullptr;
+}
+CGameCharacter *CGameWorld::FindWorldCharacter(uint32_t serial)
+{
+    CGameObject *obj = FindWorldObject(serial);
+    return (obj != nullptr && obj->NPC) ? static_cast<CGameCharacter *>(obj) : nullptr;
+}
 // CPlayer::FindBandage is defined inline in worldstubs.h
 
 // worldutil.h bodies (worldutil.cpp is not linked here)
@@ -390,10 +602,21 @@ int Actions_NewTargetSystemSerial() { return 0; }
 void CAssistant::ClientPrintDebugLevel1(const astr_t &, const uint16_t &) const {}
 void CAssistant::DumpObjectInfo(CGameObject *) const {}
 void CAssistant::DumpTileInfo(const uint16_t &, const short &, const short &, const char &) const {}
-void CAssistant::GetStatus(const uint32_t &) const {}
+void CAssistant::GetStatus(const uint32_t &serial) const
+{
+    g_HarnessHooks.LastStatusSerial = serial;
+}
 void CAssistant::Click(const uint32_t &) const {}
 void CAssistant::Attack(const uint32_t &) const {}
-void CAssistant::MoveItem(const CGameItem *) const {}
+void CAssistant::MoveItem(const CGameItem *item) const
+{
+    g_HarnessHooks.LastMoveItemSerial = item != nullptr ? item->Serial : 0;
+    g_HarnessHooks.LastMoveCount = g_MoveItemData.Count;
+    g_HarnessHooks.LastMoveContainer = g_MoveItemData.Container;
+    g_HarnessHooks.LastMoveX = g_MoveItemData.X;
+    g_HarnessHooks.LastMoveY = g_MoveItemData.Y;
+    g_HarnessHooks.LastMoveZ = g_MoveItemData.Z;
+}
 void CAssistant::Track(const bool &, short, short) const {}
 void CAssistant::HandleTargetInfo(uint8_t *) const {}
 void CAssistant::HandleTargetInfoTile(uint8_t *) const {}
@@ -452,10 +675,16 @@ XA_STUB_MEMBER(_ZN14CPacketManager10SetWeatherEhhh, unsigned char, unsigned char
 XA_STUB_MEMBER(_ZN18CPacketHelpRequestC1Ev, void *)
 XA_STUB_MEMBER(_ZN13CPacketResendC1Ev, void *)
 XA_STUB_MEMBER(_ZN18CPacketEmoteActionC1EPKc, const char *)
-XA_STUB_MEMBER(_ZN14CSkillsManager3UseERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE,
-    const void *)
-XA_STUB_MEMBER(_ZN9xuoassist12CMenuManager8InfoMenuERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE,
-    const void *)
+void CSkillsManager::Use(const astr_t &name)
+{
+    xuoassist::g_HarnessHooks.LastSkillName = name;
+    const int index = Find(name);
+    if (index != -1)
+    {
+        g_Game.UseSkill(index);
+    }
+}
+void xuoassist::CMenuManager::InfoMenu(const astr_t &) {}
 #undef XA_STUB_MEMBER
 
 namespace xuoassist {
@@ -466,18 +695,74 @@ WEATHER_DATA g_Weather{};
 uint16_t g_MorphGraphic = 0;
 uint16_t g_OriginalGraphic = 0;
 uint32_t g_Backpack = 0;
+uint32_t g_LastCorpseObject = 0;
+uint32_t g_LastContainerObject = 0;
+uint32_t g_LastUseObject = 0;
 MOVITEM_DATA g_MoveItemData{};
-// the ignore-list text command's reset (registered, never executed here)
-void IgnoreReset() {}
+static void reset_ignore_recursive(CBaseQueueItem *head)
+{
+    for (CBaseQueueItem *cur = head; cur != nullptr; cur = cur->m_Next)
+    {
+        auto *obj = static_cast<CGameObject *>(cur);
+        obj->Ignored = false;
+        if (obj->m_Items != nullptr)
+        {
+            reset_ignore_recursive(obj->m_Items);
+        }
+    }
+}
+void IgnoreReset()
+{
+    if (g_World != nullptr)
+    {
+        reset_ignore_recursive(g_World->m_Items);
+    }
+    if (g_Player != nullptr)
+    {
+        g_Player->Ignored = false;
+        reset_ignore_recursive(g_Player->m_Items);
+    }
+}
 } // namespace xuoassist
 
 CPathFinder::CPathFinder() {}
 CPathFinder::~CPathFinder() = default;
 CPathFinder g_PathFinder;
 bool CPathFinder::CanWalk(uint8_t &, int &, int &, char &) { return false; }
-bool CPathFinder::Walk(bool, uint8_t) { return false; }
-bool CPathFinder::WalkTo(int, int, int, int) { return false; }
-void CPathFinder::StopAutoWalk() {}
+bool CPathFinder::Walk(bool run, uint8_t direction)
+{
+    xuoassist::g_HarnessHooks.LastWalkRun = run;
+    xuoassist::g_HarnessHooks.LastWalkDir = direction;
+    xuoassist::g_HarnessHooks.WalkCallCount++;
+    return true;
+}
+bool CPathFinder::WalkTo(int x, int y, int z, int distance)
+{
+    xuoassist::g_HarnessHooks.WalkToX = x;
+    xuoassist::g_HarnessHooks.WalkToY = y;
+    xuoassist::g_HarnessHooks.WalkToZ = z;
+    xuoassist::g_HarnessHooks.WalkToDistance = distance;
+    xuoassist::g_HarnessHooks.WalkToCallCount++;
+    if (!xuoassist::g_HarnessHooks.WalkToSucceeds)
+    {
+        AutoWalking = false;
+        return false;
+    }
+    AutoWalking = true;
+    if (xuoassist::g_HarnessHooks.WalkToAutoArrive && g_Player != nullptr)
+    {
+        g_Player->m_X = x;
+        g_Player->m_Y = y;
+        g_Player->m_Z = (char)z;
+        AutoWalking = false;
+    }
+    return true;
+}
+void CPathFinder::StopAutoWalk()
+{
+    AutoWalking = false;
+    xuoassist::g_HarnessHooks.StopAutoWalkCount++;
+}
 
 CScreenshotBuilder g_ScreenshotBuilder;
 CScreenshotBuilder::CScreenshotBuilder() {}
@@ -494,7 +779,11 @@ CPacketInvokeVirtueRequest::CPacketInvokeVirtueRequest(uint8_t) : CPacket(0) {}
 // exercised in the harness, only linked
 CPacketRequestPopupMenu::CPacketRequestPopupMenu(uint32_t) : CPacket(0) {}
 CPacketDoubleClickRequest::CPacketDoubleClickRequest(uint32_t) : CPacket(0) {}
-CPacketTargetSelectedObject::CPacketTargetSelectedObject(int, int) : CPacket(0) {}
+CPacketTargetSelectedObject::CPacketTargetSelectedObject(int item, int target) : CPacket(0)
+{
+    xuoassist::g_HarnessHooks.LastTargetSelectedItem = item;
+    xuoassist::g_HarnessHooks.LastTargetSelectedTarget = target;
+}
 CPacketUseCombatAbility::CPacketUseCombatAbility(uint8_t) : CPacket(0) {}
 CPacketTargetUseSkill::CPacketTargetUseSkill(uint16_t, uint32_t) : CPacket(0) {}
 void CPacket::Send() {}
@@ -521,20 +810,44 @@ const astr_t CGumpCombatBook::m_AbilityName[MAX_ABILITIES_COUNT]{
 // the target cursor (Target.h): the apiscript hook/cancel calls stub
 CTarget g_Target;
 CTarget::CTarget() {}
-void CTarget::RequestCursor() {}
-void CTarget::CancelCursor() {}
+void CTarget::RequestCursor() { Targeting = true; }
+void CTarget::CancelCursor() { Targeting = false; }
 bool CTarget::CheckHook() { return false; }
 void CTarget::ClearHooks() {}
 void CTarget::SetObjectsHook(const std::vector<astr_t> &) {}
 void CTarget::SetTileHook(const astr_t &, const int &, const int &, const int &, const bool &) {}
 void CTarget::RestoreTarget() {}
-void CTarget::SendTargetObject(int) {}
-void CTarget::SendTargetTile(uint16_t, short, short, char) {}
-void CTarget::SendCancelTarget() {}
+void CTarget::SendTargetObject(int serial)
+{
+    xuoassist::g_HarnessHooks.LastTargetSentSerial = (uint32_t)serial;
+    Targeting = false;
+}
+void CTarget::SendTargetTile(uint16_t tile, short x, short y, char z)
+{
+    xuoassist::g_HarnessHooks.LastTargetTileGraphic = tile;
+    xuoassist::g_HarnessHooks.LastTargetTileX = x;
+    xuoassist::g_HarnessHooks.LastTargetTileY = y;
+    xuoassist::g_HarnessHooks.LastTargetTileZ = z;
+    Targeting = false;
+}
+void CTarget::SendCancelTarget()
+{
+    xuoassist::g_HarnessHooks.TargetCancelledCount++;
+    Targeting = false;
+}
 void CTarget::SendLastTarget() {}
 void CTarget::SendTarget() {}
-void CTarget::SendHookTargetObject(const uint32_t &) {}
-void CTarget::SendHookTargetTile(const uint16_t, const short &, const short &, short) {}
+void CTarget::SendHookTargetObject(const uint32_t &serial)
+{
+    xuoassist::g_HarnessHooks.LastTargetSentSerial = serial;
+}
+void CTarget::SendHookTargetTile(const uint16_t tile, const short &x, const short &y, short z)
+{
+    xuoassist::g_HarnessHooks.LastTargetTileGraphic = tile;
+    xuoassist::g_HarnessHooks.LastTargetTileX = x;
+    xuoassist::g_HarnessHooks.LastTargetTileY = y;
+    xuoassist::g_HarnessHooks.LastTargetTileZ = z;
+}
 void CTarget::SendHookTargetLastTile() {}
 void CTarget::SendHookCancelTarget() {}
 bool CTarget::SetData(CDataReader &) { return false; }
@@ -611,4 +924,55 @@ astr_t xuoassist::GraphicToText(const uint16_t &value)
 namespace xuoassist {
 // ScriptManager_* free functions come from the real scripthandle.cpp now
 // (linked for the run/terminate lifecycle suite)
+} // namespace xuoassist
+
+namespace xuoassist {
+// Stateful agent stubs for the standalone script harness.
+bool InventoryAgent_Run(const astr_t &name)
+{
+    g_HarnessHooks.InventoryRunning = true;
+    g_HarnessHooks.LastInventoryPreset = name;
+    return true;
+}
+bool InventoryAgent_RunIndexed(InventoryAgentMode mode, int index)
+{
+    g_HarnessHooks.InventoryRunning = true;
+    g_HarnessHooks.LastInventoryMode = (int)mode;
+    g_HarnessHooks.LastInventoryPreset = "indexed:" + std::to_string(index);
+    return true;
+}
+bool InventoryAgent_Busy()
+{
+    return g_HarnessHooks.InventoryRunning;
+}
+void InventoryAgent_Stop()
+{
+    g_HarnessHooks.InventoryRunning = false;
+}
+bool InventoryAgent_AutoLootOnce(const astr_t &alias)
+{
+    g_HarnessHooks.LastAutoLootOnce = alias;
+    return true;
+}
+void InventoryAgent_ClearScavengerCache()
+{
+    g_HarnessHooks.ScavengerCacheCleared++;
+}
+bool BandageHeal_Start()
+{
+    g_HarnessHooks.BandageRunning = true;
+    return true;
+}
+void BandageHeal_Stop()
+{
+    g_HarnessHooks.BandageRunning = false;
+}
+bool BandageHeal_Running()
+{
+    return g_HarnessHooks.BandageRunning;
+}
+const char *BandageHeal_Status()
+{
+    return g_HarnessHooks.BandageRunning ? "Watching health." : "Stopped.";
+}
 } // namespace xuoassist

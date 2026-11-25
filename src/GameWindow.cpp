@@ -613,12 +613,8 @@ bool WebIsTouchDevice()
 
 // ---------------------------------------------------------------------------
 // touch gestures (SDL finger events). SDL's own touch->mouse synthesis stays
-// ENABLED: it drives the cursor position and the left button from the
-// PRIMARY finger through the real event path, so g_MouseManager (which reads
-// SDL_GetMouseState) stays consistent - taps, drags and left-holds work
-// unchanged. Raw SDL_PushEvent'ed mouse events would NOT update SDL's
-// internal state, which is why the cursor and ProcessWalking broke when the
-// gesture layer tried to own everything itself.
+// ENABLED: taps and drags use the motion and button events from the primary
+// finger. SDL still owns its internal button state and touch-to-mouse mapping.
 // The gesture layer below only adds what SDL cannot do:
 //   press + hold (stationary, ~650ms)        -> RIGHT press-hold (movement,
 //                                               like desktop right-drag)
@@ -717,14 +713,12 @@ static float TouchDist(const WebTouchFinger *a, const WebTouchFinger *b)
     return std::sqrt(dx * dx + dy * dy);
 }
 
-// the gesture layer owns the cursor position for right clicks: g_MouseManager
-// mirrors SDL's mouse state (primary finger only), so write the position
-// directly instead of calling Update()
+// A two-finger tap uses the gesture position instead of the primary pointer.
 static void TouchRightClick(int x, int y)
 {
     TOUCH_LOG("right click at %d,%d", x, y);
-    g_MouseManager.Position = CPoint2Di(x, y);
-    g_MouseManager.Capture();
+    g_MouseManager.UpdateFromEvent(float(x), float(y));
+    g_MouseManager.Capture(float(x), float(y));
     g_MouseManager.RightButtonPressed = true;
     g_MouseManager.CancelDoubleClick = true;
     g_GameWindow.OnRightMouseButtonDown();
@@ -1658,6 +1652,20 @@ bool CGameWindow::OnWindowProc(SDL_Event &ev)
         }
         break;
 
+        case SDL_EVENT_WINDOW_MOUSE_ENTER:
+        {
+            g_MouseManager.SyncWindowPosition();
+        }
+        break;
+
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+        {
+            g_MouseManager.CancelCapture();
+            g_PressedObject.ClearAll();
+            g_MovingFromMouse = false;
+        }
+        break;
+
         case SDL_EVENT_WINDOW_HIDDEN:
         {
             OnDeactivate(); // Sound + FPS
@@ -1698,7 +1706,7 @@ bool CGameWindow::OnWindowProc(SDL_Event &ev)
 
         case SDL_EVENT_MOUSE_MOTION:
         {
-            g_MouseManager.Update();
+            g_MouseManager.UpdateFromEvent(ev.motion.x, ev.motion.y);
             if (g_MouseManager.Dragging)
             {
                 OnDragging();
@@ -1708,7 +1716,7 @@ bool CGameWindow::OnWindowProc(SDL_Event &ev)
 
         case SDL_EVENT_MOUSE_WHEEL:
         {
-            g_MouseManager.Update();
+            g_MouseManager.UpdateFromEvent(ev.wheel.mouse_x, ev.wheel.mouse_y);
 
             const bool isUp = ev.wheel.y < 0;
             OnMidMouseButtonScroll(isUp);
@@ -1729,15 +1737,20 @@ bool CGameWindow::OnWindowProc(SDL_Event &ev)
         case SDL_EVENT_MOUSE_BUTTON_UP:
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         {
-            g_MouseManager.Update();
             const bool isDown = ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-            auto &mouse = ev.button;
+            const auto &mouse = ev.button;
+            g_MouseManager.UpdateFromEvent(mouse.x, mouse.y);
+            if (!isDown && !g_MouseManager.IsButtonPressed(mouse.button))
+            {
+                break;
+            }
+
             switch (mouse.button)
             {
                 case SDL_BUTTON_LEFT:
                     if (isDown)
                     {
-                        g_MouseManager.Capture();
+                        g_MouseManager.Capture(mouse.x, mouse.y);
                         g_MouseManager.LeftButtonPressed = true;
                         g_MouseManager.LeftDropPosition = g_MouseManager.Position;
                         g_MouseManager.CancelDoubleClick = false;
@@ -1784,7 +1797,7 @@ bool CGameWindow::OnWindowProc(SDL_Event &ev)
                 case SDL_BUTTON_MIDDLE:
                     if (isDown)
                     {
-                        g_MouseManager.Capture();
+                        g_MouseManager.Capture(mouse.x, mouse.y);
                         g_MouseManager.MidButtonPressed = true;
                         g_MouseManager.CancelDoubleClick = false;
                         uint32_t ticks = SDL_GetTicks();
@@ -1823,7 +1836,7 @@ bool CGameWindow::OnWindowProc(SDL_Event &ev)
                 case SDL_BUTTON_RIGHT:
                     if (isDown)
                     {
-                        g_MouseManager.Capture();
+                        g_MouseManager.Capture(mouse.x, mouse.y);
                         g_MouseManager.RightButtonPressed = true;
                         g_MouseManager.CancelDoubleClick = false;
                         uint32_t ticks = SDL_GetTicks();

@@ -579,7 +579,6 @@ bool RenderDraw_DrawLine(const DrawLineCmd &cmd, RenderState *state)
 {
     ScopedPerfMarker(__FUNCTION__);
 
-    RenderState_SetColor(state, cmd.color);
     RenderState_SetBlend(
         state,
         true,

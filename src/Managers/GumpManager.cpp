@@ -34,9 +34,12 @@
 #include "../Gumps/GumpSkill.h"
 #include "../Gumps/GumpJournal.h"
 #include "../Gumps/GumpBook.h"
+#include "../Gumps/DesktopSpellPersistence_rules.h"
 #include "../Gumps/GumpSpell.h"
+#include "../Spells.h"
 #include "../Gumps/GumpConsoleType.h"
 #include "../Gumps/GumpBuff.h"
+#include "../Gumps/GumpFpsCounter.h"
 #include "../Gumps/GumpStatusbar.h"
 #include "../Gumps/GumpPaperdoll.h"
 #include "../Gumps/GumpWorldMap.h"
@@ -60,6 +63,38 @@
 #endif // xuoassist::g_MenuManager (the menu-replay tap)
 
 CGumpManager g_GumpManager;
+
+static bool IsPersistablePlayerContainer(const CGump *gump)
+{
+    if (gump == nullptr || g_World == nullptr ||
+        (gump->GumpType != GT_CONTAINER && gump->GumpType != GT_SPELLBOOK))
+    {
+        return false;
+    }
+
+    CGameObject *obj = g_World->FindWorldObject(gump->Serial);
+    if (obj == nullptr || obj->NPC || obj->IsCorpse() || ((CGameItem *)obj)->Layer == OL_BANK)
+    {
+        return false;
+    }
+
+    CGameObject *top = obj->GetTopObject();
+    return top != nullptr && top->Serial == g_PlayerSerial;
+}
+
+static void RememberContainerGumpPosition(const CGump *gump)
+{
+    if (IsPersistablePlayerContainer(gump))
+    {
+        SaveContainerPosition(
+            gump->Serial,
+            static_cast<short>(gump->GetX()),
+            static_cast<short>(gump->GetY()),
+            static_cast<short>(gump->MinimizedX),
+            static_cast<short>(gump->MinimizedY),
+            gump->LockMoving);
+    }
+}
 
 int CGumpManager::GetNonpartyStatusbarsCount()
 {
@@ -179,6 +214,10 @@ void CGumpManager::AddGump(CGump *obj)
 
                     MoveToBack(gump);
                     gump->FrameCreated = false;
+                    if (g_ConfigLoaded && ShouldTriggerDesktopSaveForGump(gumpType))
+                    {
+                        g_Game.RequestDesktopSave();
+                    }
                     return;
                 }
             }
@@ -251,6 +290,11 @@ void CGumpManager::AddGump(CGump *obj)
                 break;
         }
         obj->PrepareTextures();
+    }
+
+    if (g_ConfigLoaded && ShouldTriggerDesktopSaveForGump(obj->GumpType))
+    {
+        g_Game.RequestDesktopSave();
     }
 }
 
@@ -393,6 +437,7 @@ void CGumpManager::CloseGump(uint32_t serial, uint32_t id, GUMP_TYPE type)
 
 void CGumpManager::RemoveGump(CGump *obj)
 {
+    RememberContainerGumpPosition(obj);
     Unlink(obj);
 
     if (g_World != nullptr)
@@ -955,6 +1000,11 @@ bool CGumpManager::OnLeftMouseButtonUp(bool blocked)
 
                 g_MouseManager.CancelDoubleClick = true;
 
+                if (ShouldTriggerDesktopSaveForGump(gump->GumpType))
+                {
+                    g_Game.RequestDesktopSave();
+                }
+
                 //gump->FrameCreated = false;
             }
 
@@ -969,6 +1019,8 @@ bool CGumpManager::OnLeftMouseButtonUp(bool blocked)
             {
                 gump->OnLeftMouseButtonUp();
             }
+
+            RememberContainerGumpPosition(gump);
 
             if (gump->GumpType == GT_WORLD_MAP && g_ConfigManager.GetUseGlobalMapLayer())
             {
@@ -1070,8 +1122,10 @@ void CGumpManager::OnRightMouseButtonUp(bool blocked)
             (gump->CanBeMoved() || gump->GumpType == GT_GENERIC ||
              gump->GumpType == GT_RACE_CHANGE))
         {
+            // Capture the type before CloseGump/RemoveGump can delete `gump`.
+            const GUMP_TYPE closedType = gump->GumpType;
             //gump->OnClose();
-            switch (gump->GumpType)
+            switch (closedType)
             {
                 case GT_CONTAINER:
                 {
@@ -1079,6 +1133,14 @@ void CGumpManager::OnRightMouseButtonUp(bool blocked)
 
                     if (obj != nullptr)
                     {
+                        // Snapshot open player container positions before Clear()
+                        // destroys child CGameItem objects and closes nested bags.
+                        for (CGump *openGump = (CGump *)m_Items; openGump != nullptr;
+                             openGump = (CGump *)openGump->m_Next)
+                        {
+                            RememberContainerGumpPosition(openGump);
+                        }
+
                         if (obj->IsCorpse())
                         {
                             for (CGameItem *gi = (CGameItem *)obj->m_Items; gi != nullptr;)
@@ -1211,6 +1273,7 @@ void CGumpManager::OnRightMouseButtonUp(bool blocked)
 				}*/
                 case GT_SPELLBOOK:
                 {
+                    RememberContainerGumpPosition(gump);
                     g_Game.PlaySoundEffect(0x0055);
                     CloseGump(gump->Serial, gump->ID, gump->GumpType);
 
@@ -1248,6 +1311,11 @@ void CGumpManager::OnRightMouseButtonUp(bool blocked)
 
                     break;
                 }
+            }
+
+            if (ShouldTriggerDesktopSaveForGump(closedType))
+            {
+                g_Game.RequestDesktopSave();
             }
 
             break;
@@ -1372,9 +1440,51 @@ void CGumpManager::Load(const fs_path &path)
 
         int spellGroupMembers = 0;
         CGumpSpell *topSpell = nullptr;
+        std::vector<CGumpSpell *> loadedSpellGroup;
         int skillGroupMembers = 0;
         CGumpSkill *topSkill = nullptr;
+        std::vector<CGumpSkill *> loadedSkillGroup;
         bool menubarLoaded = false;
+
+        auto flushSpellGroup = [&]() {
+            if (loadedSpellGroup.empty())
+            {
+                return;
+            }
+            std::vector<DesktopCoordPoint> pts;
+            pts.reserve(loadedSpellGroup.size());
+            for (CGumpSpell *member : loadedSpellGroup)
+            {
+                pts.push_back({ member->GetX(), member->GetY() });
+            }
+            NormalizeDesktopGroupCoords(pts);
+            for (size_t idx = 0; idx < loadedSpellGroup.size(); ++idx)
+            {
+                loadedSpellGroup[idx]->SetX(pts[idx].X);
+                loadedSpellGroup[idx]->SetY(pts[idx].Y);
+            }
+            loadedSpellGroup.clear();
+        };
+
+        auto flushSkillGroup = [&]() {
+            if (loadedSkillGroup.empty())
+            {
+                return;
+            }
+            std::vector<DesktopCoordPoint> pts;
+            pts.reserve(loadedSkillGroup.size());
+            for (CGumpSkill *member : loadedSkillGroup)
+            {
+                pts.push_back({ member->GetX(), member->GetY() });
+            }
+            NormalizeDesktopGroupCoords(pts);
+            for (size_t idx = 0; idx < loadedSkillGroup.size(); ++idx)
+            {
+                loadedSkillGroup[idx]->SetX(pts[idx].X);
+                loadedSkillGroup[idx]->SetY(pts[idx].Y);
+            }
+            loadedSkillGroup.clear();
+        };
 
         while (!file.IsEOF())
         {
@@ -1397,12 +1507,12 @@ void CGumpManager::Load(const fs_path &path)
 
                 CGump *gump = nullptr;
                 const auto gumpType = (GUMP_TYPE)str_to_int(fields[0]);
-                const auto gumpX = (uint16_t)str_to_int(fields[1]);
-                const auto gumpY = (uint16_t)str_to_int(fields[2]);
-                const auto gumpMinimized = str_to_int(fields[3]);
-                const auto gumpMinimizedX = (uint16_t)str_to_int(fields[4]);
-                const auto gumpMinimizedY = (uint16_t)str_to_int(fields[5]);
-                const auto gumpLockMoving = str_to_int(fields[6]);
+                const int gumpX = str_to_int(fields[1]);
+                const int gumpY = str_to_int(fields[2]);
+                const int gumpMinimized = str_to_int(fields[3]);
+                const int gumpMinimizedX = str_to_int(fields[4]);
+                const int gumpMinimizedY = str_to_int(fields[5]);
+                const int gumpLockMoving = str_to_int(fields[6]);
                 auto extra = [&fields](size_t idx) -> astr_t
                 {
                     return idx < fields.size() ? fields[idx] : astr_t("0");
@@ -1486,6 +1596,14 @@ void CGumpManager::Load(const fs_path &path)
 
                         break;
                     }
+                    case GT_FPS_COUNTER:
+                    {
+                        gump = new CGumpFpsCounter(
+                            str_to_int(fields[1]),
+                            str_to_int(fields[2]),
+                            fields.size() > 7 ? str_to_int(fields[7]) : 100);
+                        break;
+                    }
                     case GT_BUFF:
                     {
                         bufficonWindowFound = true;
@@ -1513,24 +1631,63 @@ void CGumpManager::Load(const fs_path &path)
                     case GT_SPELLBOOK:
                     {
                         const uint32_t serial = TextToUInt(extra(7));
-                        g_ContainerStack.push_back(CContainerStackItem(
-                            serial,
-                            gumpX,
-                            gumpY,
-                            gumpMinimizedX,
-                            gumpMinimizedY,
-                            gumpMinimized != 0,
-                            gumpLockMoving != 0));
+                        if (serial != 0u)
+                        {
+                            for (auto it = g_ContainerStack.begin(); it != g_ContainerStack.end();)
+                            {
+                                if (it->Serial == serial)
+                                {
+                                    it = g_ContainerStack.erase(it);
+                                }
+                                else
+                                {
+                                    ++it;
+                                }
+                            }
+                            g_ContainerStack.push_back(CContainerStackItem(
+                                static_cast<int>(serial),
+                                static_cast<short>(gumpX),
+                                static_cast<short>(gumpY),
+                                static_cast<short>(gumpMinimizedX),
+                                static_cast<short>(gumpMinimizedY),
+                                gumpMinimized != 0,
+                                gumpLockMoving != 0));
+                            SaveContainerPosition(
+                                serial,
+                                static_cast<short>(gumpX),
+                                static_cast<short>(gumpY),
+                                static_cast<short>(gumpMinimizedX),
+                                static_cast<short>(gumpMinimizedY),
+                                gumpLockMoving != 0);
 
-                        g_UseItemActions.Add(serial);
+                            g_UseItemActions.Add(static_cast<int>(serial));
+                        }
                         break;
                     }
                     case GT_SPELL:
                     {
+                        if (fields.size() < 10)
+                        {
+                            break;
+                        }
                         const uint32_t serial = TextToUInt(extra(7));
                         const uint16_t graphic = (uint16_t)str_to_int(extra(8));
                         const SPELLBOOK_TYPE spellType = (SPELLBOOK_TYPE)str_to_int(extra(9));
-                        gump = new CGumpSpell(serial, spellType, graphic, gumpX, gumpY);
+                        const Spell *spellInfo = FindSpellByGraphicAndType(graphic, spellType);
+                        if (spellInfo == nullptr && serial > 0u && serial <= 0xFFFFu)
+                        {
+                            spellInfo = GetSpellById(static_cast<uint16_t>(serial));
+                        }
+                        if (spellInfo == nullptr)
+                        {
+                            break;
+                        }
+                        gump = new CGumpSpell(
+                            spellInfo->Id,
+                            spellInfo->Type,
+                            spellInfo->SpellIconGraphic,
+                            static_cast<short>(gumpX),
+                            static_cast<short>(gumpY));
                         break;
                     }
                     case GT_CONSOLE_TYPE:
@@ -1599,6 +1756,7 @@ void CGumpManager::Load(const fs_path &path)
             }
             else if (key == "SpellGroup" && v.size() >= 2)
             {
+                flushSpellGroup();
                 spellGroupMembers = str_to_int(v[1]);
                 topSpell = nullptr;
             }
@@ -1611,17 +1769,33 @@ void CGumpManager::Load(const fs_path &path)
                     continue;
                 }
 
-                const auto spellX = (uint16_t)str_to_int(fields[1]);
-                const auto spellY = (uint16_t)str_to_int(fields[2]);
+                const int spellX = str_to_int(fields[1]);
+                const int spellY = str_to_int(fields[2]);
                 const uint8_t gumpLockMoving = (uint8_t)str_to_int(fields[6]);
                 const uint32_t serial = TextToUInt(fields[7]);
                 const uint16_t graphic = (uint16_t)str_to_int(fields[8]);
                 const SPELLBOOK_TYPE spellType = (SPELLBOOK_TYPE)str_to_int(fields[9]);
 
-                CGumpSpell *spell = new CGumpSpell(serial, spellType, graphic, spellX, spellY);
+                const Spell *spellInfo = FindSpellByGraphicAndType(graphic, spellType);
+                if (spellInfo == nullptr && serial > 0u && serial <= 0xFFFFu)
+                {
+                    spellInfo = GetSpellById(static_cast<uint16_t>(serial));
+                }
+                if (spellInfo == nullptr || GetGump(spellInfo->Id, 0, GT_SPELL) != nullptr)
+                {
+                    continue;
+                }
+
+                CGumpSpell *spell = new CGumpSpell(
+                    spellInfo->Id,
+                    spellInfo->Type,
+                    spellInfo->SpellIconGraphic,
+                    static_cast<short>(spellX),
+                    static_cast<short>(spellY));
                 spell->LockMoving = (gumpLockMoving != 0);
 
                 AddGump(spell);
+                loadedSpellGroup.push_back(spell);
                 if (topSpell == nullptr)
                 {
                     topSpell = spell;
@@ -1632,9 +1806,14 @@ void CGumpManager::Load(const fs_path &path)
                 }
 
                 spell->WantUpdateContent = true;
+                if (spellGroupMembers == 0)
+                {
+                    flushSpellGroup();
+                }
             }
             else if (key == "SkillGroup" && v.size() >= 2)
             {
+                flushSkillGroup();
                 skillGroupMembers = str_to_int(v[1]);
                 topSkill = nullptr;
             }
@@ -1649,15 +1828,22 @@ void CGumpManager::Load(const fs_path &path)
                     continue;
                 }
 
-                const auto skillX = (uint16_t)str_to_int(fields[1]);
-                const auto skillY = (uint16_t)str_to_int(fields[2]);
+                const int skillX = str_to_int(fields[1]);
+                const int skillY = str_to_int(fields[2]);
                 const uint8_t skillLockMoving = (uint8_t)str_to_int(fields[6]);
                 const uint32_t serial = TextToUInt(fields[7]);
 
-                CGumpSkill *skill = new CGumpSkill(serial, skillX, skillY);
+                if (GetGump(serial, 0, GT_SKILL) != nullptr)
+                {
+                    continue;
+                }
+
+                CGumpSkill *skill = new CGumpSkill(
+                    serial, static_cast<short>(skillX), static_cast<short>(skillY));
                 skill->LockMoving = (skillLockMoving != 0);
 
                 AddGump(skill);
+                loadedSkillGroup.push_back(skill);
                 if (topSkill == nullptr)
                 {
                     topSkill = skill;
@@ -1665,6 +1851,29 @@ void CGumpManager::Load(const fs_path &path)
                 else
                 {
                     topSkill->AddSkill(skill);
+                }
+                if (skillGroupMembers == 0)
+                {
+                    flushSkillGroup();
+                }
+            }
+            else if (key == "ContainerPos" && v.size() >= 2)
+            {
+                const auto fields = TextFields(v);
+                if (fields.size() < 6)
+                {
+                    continue;
+                }
+                const uint32_t serial = TextToUInt(fields[0]);
+                if (serial != 0u)
+                {
+                    SaveContainerPosition(
+                        serial,
+                        static_cast<short>(str_to_int(fields[1])),
+                        static_cast<short>(str_to_int(fields[2])),
+                        static_cast<short>(str_to_int(fields[3])),
+                        static_cast<short>(str_to_int(fields[4])),
+                        str_to_int(fields[5]) != 0);
                 }
             }
             else if (key == "Size" && v.size() >= 2)
@@ -1686,6 +1895,8 @@ void CGumpManager::Load(const fs_path &path)
             }
         }
 
+        flushSpellGroup();
+        flushSkillGroup();
     }
     else
     {
@@ -1772,6 +1983,13 @@ void CGumpManager::Load(const fs_path &path)
         AddGump(new CGumpBuff(x, y));
     }
 
+    if (GetGump(0, 0, GT_FPS_COUNTER) == nullptr)
+    {
+        AddGump(new CGumpFpsCounter(
+            g_ConfigManager.GameWindowX + g_ConfigManager.GameWindowWidth + 10,
+            g_ConfigManager.GameWindowY));
+    }
+
     AddGump(new CGumpConsoleType(minimizedConsoleType, showFullTextConsoleType));
 }
 
@@ -1813,6 +2031,7 @@ void CGumpManager::Save(TextFileWriter &writer)
             case GT_RESOURCETRACKER:
             case GT_PROPERTY_ICON:
             case GT_MENUBAR:
+            case GT_FPS_COUNTER:
             case GT_BUFF:
             case GT_ABILITY:
             case GT_COMBAT_BOOK:
@@ -1836,10 +2055,13 @@ void CGumpManager::Save(TextFileWriter &writer)
                     ? (bool)((CGumpMenubar *)gump)->GetOpened()
                     : gump->Minimized;
 
+                const CPoint2Di position = gump->GumpType == GT_FPS_COUNTER
+                    ? static_cast<const CGumpFpsCounter *>(gump)->GetDesktopPosition()
+                    : CPoint2Di(gump->GetX(), gump->GetY());
                 astr_t line = GumpBaseLine(
                     gump->GumpType,
-                    gump->GetX(),
-                    gump->GetY(),
+                    position.X,
+                    position.Y,
                     stateFlag,
                     gump->MinimizedX,
                     gump->MinimizedY,
@@ -1862,9 +2084,13 @@ void CGumpManager::Save(TextFileWriter &writer)
                     case GT_SKILLS:
                         line += "," + str_from(((CGumpSkills *)gump)->Height);
                         break;
+                    case GT_FPS_COUNTER:
+                        line += "," + str_from(static_cast<CGumpFpsCounter *>(gump)->GetSizePercent());
+                        break;
                     case GT_BUFF:
                         line += "," + str_from((int)gump->Graphic);
                         break;
+                    case GT_SKILL:
                     case GT_ABILITY:
                     case GT_RACIAL_ABILITY:
                     {
@@ -1903,6 +2129,7 @@ void CGumpManager::Save(TextFileWriter &writer)
                         break;
                     }
 
+                    RememberContainerGumpPosition(gump);
                     containerList.push_back(gump);
                     break;
                 }
@@ -1964,7 +2191,7 @@ void CGumpManager::Save(TextFileWriter &writer)
             for (CGameItem *item = (CGameItem *)owner->m_Items; item != nullptr;
                  item = (CGameItem *)item->m_Next)
             {
-                if (item->Opened)
+                if (item->Opened || !item->Empty())
                 {
                     playerContainers.push_back(item->Serial);
                 }
@@ -1972,10 +2199,35 @@ void CGumpManager::Save(TextFileWriter &writer)
         }
     }
 
+    // Flush any remaining open player-owned containers/spellbooks not reached
+    // through an opened parent chain so their open state is not dropped.
+    for (CGump *gump : containerList)
+    {
+        writer.WriteRaw(
+            GumpBaseLine(
+                gump->GumpType,
+                gump->GetX(),
+                gump->GetY(),
+                gump->Minimized,
+                gump->MinimizedX,
+                gump->MinimizedY,
+                gump->LockMoving) +
+            "," + std::to_string(gump->Serial));
+    }
+
+    for (const auto &saved : g_ContainerPositions)
+    {
+        writer.WriteRaw(
+            "ContainerPos=" + std::to_string(saved.Serial) + "," + str_from((int)saved.X) + "," +
+            str_from((int)saved.Y) + "," + str_from((int)saved.MinimizedX) + "," +
+            str_from((int)saved.MinimizedY) + "," + str_from((int)saved.LockMoving));
+    }
+
     // spell groups: one "SpellGroup=<memberCount>" line followed by the
     // member "Spell=..." lines, in group order
     while (!spellInGroupList.empty())
     {
+        const size_t beforeCount = spellInGroupList.size();
         CGumpSpell *topSpell = ((CGumpSpell *)spellInGroupList[0])->GetTopSpell();
 
         int spellsCount = 0;
@@ -1984,7 +2236,10 @@ void CGumpManager::Save(TextFileWriter &writer)
             spellsCount++;
         }
 
-        writer.WriteRaw("SpellGroup=" + str_from(spellsCount));
+        if (spellsCount > 0)
+        {
+            writer.WriteRaw("SpellGroup=" + str_from(spellsCount));
+        }
         for (auto *spell = topSpell; spell != nullptr; spell = spell->m_GroupNext)
         {
             // member lines carry an explicit "Spell" key: the loader only
@@ -2007,12 +2262,17 @@ void CGumpManager::Save(TextFileWriter &writer)
                 }
             }
         }
+        if (spellInGroupList.size() == beforeCount)
+        {
+            spellInGroupList.erase(spellInGroupList.begin());
+        }
     }
 
     // skill groups: one "SkillGroup=<memberCount>" line followed by the member
     // "Skill=..." lines, in group order (same field layout the loader reads)
     while (!skillInGroupList.empty())
     {
+        const size_t beforeCount = skillInGroupList.size();
         CGumpSkill *topSkill = ((CGumpSkill *)skillInGroupList[0])->GetTopSkill();
 
         int skillsCount = 0;
@@ -2021,7 +2281,10 @@ void CGumpManager::Save(TextFileWriter &writer)
             skillsCount++;
         }
 
-        writer.WriteRaw("SkillGroup=" + str_from(skillsCount));
+        if (skillsCount > 0)
+        {
+            writer.WriteRaw("SkillGroup=" + str_from(skillsCount));
+        }
         for (auto *skill = topSkill; skill != nullptr; skill = skill->m_GroupNext)
         {
             writer.WriteRaw(
@@ -2037,6 +2300,10 @@ void CGumpManager::Save(TextFileWriter &writer)
                     break;
                 }
             }
+        }
+        if (skillInGroupList.size() == beforeCount)
+        {
+            skillInGroupList.erase(skillInGroupList.begin());
         }
     }
 

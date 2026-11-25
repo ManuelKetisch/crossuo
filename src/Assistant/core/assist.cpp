@@ -9,11 +9,15 @@
 #include "assist.h"
 #include "../Misc.h" // unpack16/unpack32 (the client byte-order helpers)
 #include "../script/scriptgump.h" // the text window dump
+#include "../script/scriptstate.h" // ScriptPromptTarget_* handshake
 #include "Network/Packets.h" // ::CPacketStatusRequest and the other client send builders
 #include "Managers/PacketManager.h"      // ::g_PacketManager (DisplayTalkTextW, DeleteObject)
 #include "textconv.h"
 #include "Target.h" // ::g_Target (the shared target cursor: RequestCursor, FromAssist)
 #include "assistantevents.h"
+#include "inventoryagent.h"
+#include "potionhands.h"
+#include "../ui/tabinventory.h"
 #include "world.h"
 #include "worldutil.h"
 #include "textconv.h"
@@ -165,7 +169,7 @@ int CAssistant::TextToLayer(astr_t text)
 {
     text = str_lower(text);
 
-    for (int i = 0; i < 30; i++)
+    for (int i = 0; i < OL_EXTENDED_COUNT; i++)
     {
         if (text == str_lower(g_LayerName[i]))
         {
@@ -883,6 +887,11 @@ void CAssistant::MoveItem(const CGameItem *item) const
 {
     // The original app sent the pickup/drop pair directly (no client-side
     // use-action queue); the client's ObjectOnCursor flow is untouched.
+    if (InventoryAgent_MoveInFlight() || PotionHands_BlocksItemMove())
+    {
+        ClientPrint("Wait for the current item move to finish.");
+        return;
+    }
     if (item == nullptr)
     {
         return;
@@ -897,7 +906,7 @@ void CAssistant::MoveItem(const CGameItem *item) const
 
     ::CPacketPickupRequest(serial, g_MoveItemData.Count).Send();
 
-    if (g_Config.ClientVersion >= CV_6017)
+    if (g_Config.ProtocolClientVersion >= CV_6017)
     {
         ::CPacketDropRequestNew(
             serial, g_MoveItemData.X, g_MoveItemData.Y, g_MoveItemData.Z, 0, g_MoveItemData.Container)
@@ -913,6 +922,11 @@ void CAssistant::MoveItem(const CGameItem *item) const
 
 void CAssistant::MoveEquip(const uint32_t &serial, const int &layer, const uint32_t &container) const
 {
+    if (InventoryAgent_MoveInFlight() || PotionHands_BlocksItemMove())
+    {
+        ClientPrint("Wait for the current item move to finish.");
+        return;
+    }
     ::CPacketPickupRequest(serial, 1).Send();
     ::CPacketEquipRequest(serial, layer, container).Send();
 }
@@ -934,6 +948,11 @@ void CAssistant::Track(const bool &state, short x, short y) const
     ::g_PacketManager.DisplayQuestArrow(state, (uint16_t)x, (uint16_t)y);
 
     g_AssistantEvents->OnTrack(state, x, y);
+}
+
+void CAssistant::HandleTargetInventory(uint8_t *buf) const
+{
+    TabInventory_TargetReturned(unpack32(buf + 7));
 }
 
 void CAssistant::HandleTargetType(uint8_t *buf) const
@@ -1343,6 +1362,34 @@ void CAssistant::HandleSetPVPCaller(uint8_t *buf) const
     g_Game.ValueInt(VKI_SET_PVPCALLER, unpack32(buf + 7));
 }
 
+bool CAssistant::HandleScriptPromptTarget(uint8_t *buf) const
+{
+    if (!ScriptPromptTarget_Active())
+    {
+        return false;
+    }
+
+    uint32_t serial = 0;
+    if (buf != nullptr && buf[1] == 0)
+    {
+        serial = unpack32(buf + 7);
+    }
+
+    ScriptPromptTarget_Deliver(serial);
+    return true;
+}
+
+bool CAssistant::HandleScriptPromptTargetCancel() const
+{
+    if (!ScriptPromptTarget_Active())
+    {
+        return false;
+    }
+
+    ScriptPromptTarget_Deliver(0);
+    return true;
+}
+
 void CAssistant::SetDressBag(const uint32_t &serial) const
 {
     // the dress-bag serial is config data (no label color updates here)
@@ -1562,6 +1609,7 @@ void AssistantOnEnterWorld(const uint32_t serial)
     // g_Target.FromAssist/ClientWantTarget would swallow the first real
     // cursor of the new session
     g_TargetHandler = nullptr;
+    ScriptPromptTarget_Cancel();
     g_Target.FromAssist = false;
     g_Target.ClientWantTarget = false;
     // discard any open recording and stop playback - macro state never

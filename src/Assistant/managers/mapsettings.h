@@ -33,6 +33,7 @@ public:
     bool DisplayCoordinates = true;
     bool ShowOnLogin = false;
     bool ShowLastCorpse = true;
+    bool ShowServerWaypoints = true;
     bool MarkDeadMobiles = true;
     bool RotateMap = true;
 
@@ -97,6 +98,7 @@ public:
     XA_MAP_FIELD_PTR(DisplayCoordinates, bool)
     XA_MAP_FIELD_PTR(ShowOnLogin, bool)
     XA_MAP_FIELD_PTR(ShowLastCorpse, bool)
+    XA_MAP_FIELD_PTR(ShowServerWaypoints, bool)
     XA_MAP_FIELD_PTR(MarkDeadMobiles, bool)
     XA_MAP_FIELD_PTR(RotateMap, bool)
     XA_MAP_FIELD_PTR(PlayerFontStyle, int)

@@ -88,6 +88,7 @@ void CMapSettings::Load()
     load_bool(ini, "display_coordinates", &DisplayCoordinates);
     load_bool(ini, "show_on_login", &ShowOnLogin);
     load_bool(ini, "show_last_corpse", &ShowLastCorpse);
+    load_bool(ini, "show_server_waypoints", &ShowServerWaypoints);
     load_bool(ini, "mark_dead_mobiles", &MarkDeadMobiles);
     load_int(ini, "opacity", &Opacity);
     load_bool(ini, "rotate_map", &RotateMap);
@@ -148,6 +149,7 @@ void CMapSettings::Save() const
     set_bool(ini, "display_coordinates", DisplayCoordinates);
     set_bool(ini, "show_on_login", ShowOnLogin);
     set_bool(ini, "show_last_corpse", ShowLastCorpse);
+    set_bool(ini, "show_server_waypoints", ShowServerWaypoints);
     set_bool(ini, "mark_dead_mobiles", MarkDeadMobiles);
     set_int(ini, "opacity", Opacity);
     set_bool(ini, "rotate_map", RotateMap);

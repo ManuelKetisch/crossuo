@@ -96,6 +96,7 @@ set(gumps_src
   Gumps/GumpBaseScroll.cpp
   Gumps/GumpBook.cpp
   Gumps/GumpBuff.cpp
+  Gumps/GumpFpsCounter.cpp
   Gumps/GumpBulletinBoard.cpp
   Gumps/GumpBulletinBoardItem.cpp
   Gumps/GumpChat.cpp
@@ -150,6 +151,7 @@ set(gumps_src
   Gumps/GumpTip.cpp
   Gumps/GumpWorldMap.cpp
   Gumps/GumpResourceTracker.cpp
+  Gumps/GumpToolbar.cpp
 )
 
 set(managers_src

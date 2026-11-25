@@ -8,6 +8,8 @@
 class CGUIDrawObject : public CBaseGUI
 {
 public:
+    bool Mirrored = false;
+
     CGUIDrawObject(
         GUMP_OBJECT_TYPE type, int serial, uint16_t graphic, uint16_t color, int x, int y);
     virtual ~CGUIDrawObject() override;

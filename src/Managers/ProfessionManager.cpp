@@ -349,28 +349,9 @@ bool CProfessionManager::Load()
         apc->SetSkillIndex(2, 0xFF);
         apc->SetSkillIndex(3, 0xFF);
 
-        if (g_Config.ProtocolClientVersion >= CV_70160)
-        {
-            apc->Str = 45;
-            apc->Int = 35;
-            apc->Dex = 10;
-
-            apc->SetSkillValue(0, 30);
-            apc->SetSkillValue(1, 30);
-            apc->SetSkillValue(2, 30);
-            apc->SetSkillValue(3, 30);
-        }
-        else
-        {
-            apc->Str = 44;
-            apc->Int = 10;
-            apc->Dex = 11;
-
-            apc->SetSkillValue(0, 50);
-            apc->SetSkillValue(1, 50);
-            apc->SetSkillValue(2, 0);
-            apc->SetSkillValue(3, 0);
-        }
+        apc->Str = CProfession::MinStartingStat;
+        apc->Dex = CProfession::MinStartingStat;
+        apc->Int = CProfession::MinStartingStat;
 
         head->Add(apc);
 

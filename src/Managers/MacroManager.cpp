@@ -30,6 +30,7 @@
 #include "../Walker/PathFinder.h"
 #if defined(XUO_ASSISTANT)
 #include <macros/macroexecutor.h> // xuoassist::g_MacroExecutor.Record* (macro taps)
+#include <core/targetassist.h>
 #include <core/assist.h> // xuoassist::AssistantSpeechIntercept (speech taps)
 #include "../Assistant/AssistantWindow.h" // AssistantWindow_Toggle (MC_ASSISTANT)
 #endif
@@ -1265,8 +1266,12 @@ MACRO_RETURN_CODE CMacroManager::Process(CMacroObject *macro)
         }
         case MC_TARGET_NEXT:
         {
-            CGameObject *obj =
-                g_World->SearchWorldObject(g_LastTargetObject, 30, STO_MOBILES, SMO_NEXT);
+            CGameObject *obj = g_World->SearchWorldObject(
+                g_LastTargetObject, 30, STO_MOBILES, SMO_NEXT
+#if defined(XUO_ASSISTANT)
+                , xuoassist::TargetAssist_CycleFilter()
+#endif
+            );
 
             if (obj != nullptr)
             {
@@ -1535,7 +1540,13 @@ MACRO_RETURN_CODE CMacroManager::Process(CMacroObject *macro)
                 g_NewTargetSystem.Serial,
                 10,
                 scanType,
-                (SCAN_MODE_OBJECT)(macro->Code - MC_SELECT_NEXT));
+                (SCAN_MODE_OBJECT)(macro->Code - MC_SELECT_NEXT)
+#if defined(XUO_ASSISTANT)
+                , scanType == STO_HOSTILE || scanType == STO_MOBILES
+                    ? xuoassist::TargetAssist_CycleFilter()
+                    : nullptr
+#endif
+            );
 
             if (obj != nullptr)
             {

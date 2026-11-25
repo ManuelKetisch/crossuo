@@ -32,14 +32,25 @@ public:
 private:
     int m_CursorOffset[2][16];
     bool m_Hidden = false;
+    bool m_CaptureOnX11 = false;
+    CPoint2Df m_CaptureWindowStart;
+    CPoint2Df m_CaptureDesktopStart;
+
+    bool HasPressedButtons() const;
+    void SetPosition(float x, float y);
+    void UpdateX11Capture();
 
 public:
     CMouseManager() { memset(&m_CursorOffset[0][0], 0, sizeof(m_CursorOffset)); }
     ~CMouseManager() = default;
 
     void Update();
-    void Release() const;
-    void Capture() const;
+    void UpdateFromEvent(float x, float y);
+    void SyncWindowPosition();
+    bool IsButtonPressed(uint8_t button) const;
+    void Release();
+    void Capture(float windowX, float windowY);
+    void CancelCapture();
 
     CPoint2Di LeftDroppedOffset() const;
 

@@ -4,6 +4,7 @@
 // Ported from X:UO Assist (managers/contextmenumanager.cpp).
 
 #include "contextmenumanager.h"
+#include "trademanager.h"
 #include "../core/assist.h"
 #include "../macros/macroexecutor.h"
 #include "Network/Packets.h" // ::CPacketPopupMenuSelection (the client's own 0xBF/0x15 builder)
@@ -33,6 +34,7 @@ bool CContextMenuManager::OnPacketReceived(CDataReader &reader)
     uint16_t mode = reader.ReadUInt16BE();
     bool isNewClilocs = (mode >= 2);
     Serial = reader.ReadUInt32BE();
+    g_TradeManager.ObserveContextMenu(Serial, reader, isNewClilocs);
 
     // a playing macro waiting on this context menu consumes the packet (the
     // macro replay answers the server itself); deliberately no g_World gate.

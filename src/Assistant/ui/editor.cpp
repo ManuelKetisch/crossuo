@@ -64,13 +64,13 @@ ImU32 token_color(int token)
     switch (token)
     {
         case TC_METHOD:
-            return IM_COL32(0xAA, 0x00, 0xAA, 0xFF); // darkMagenta
+            return IM_COL32(0xD2, 0x7A, 0xD2, 0xFF); // bright magenta
         case TC_KEYWORD:
             return IM_COL32(0x6A, 0x9E, 0xD8, 0xFF); // soft blue
         case TC_API:
             return IM_COL32(0xE5, 0xC0, 0x7B, 0xFF); // warm gold: the API objects
         case TC_GLOBAL:
-            return IM_COL32(0x80, 0x80, 0x00, 0xFF); // darkYellow: sentinel aliases
+            return IM_COL32(0xD4, 0xC9, 0x6A, 0xFF); // warm yellow: sentinel aliases
         case TC_NUMBER:
             return IM_COL32(0x6A, 0xB0, 0x6A, 0xFF); // green
         case TC_STRING:

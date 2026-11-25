@@ -10,6 +10,7 @@ class CGUITextEntry;
 class CGUIGumppic;
 class CGUIText;
 class CEntryText;
+class CProfession;
 
 class CGumpScreenSelectProfession : public CGump
 {
@@ -23,7 +24,16 @@ private:
     void NoFeatureError();
 
     void ShuffleStats(int id, int maxSum, int maxVal);
-    void ShuffleSkills(int id);
+    void AddSkillPicker(const CProfession &profession, int x, int y, int width, int height);
+    CGUISlider *AddPointSlider(
+        int serial, int x, int y, int width, int min, int max, int value, bool adjustable);
+    void UpdateStatPoints(int slot, int value);
+    void StepStatPoints(int slot, int direction);
+    void UpdateSkillPoints(int slot, int value);
+    void UpdateAllocationStatus(const CProfession &profession, bool prompting = false);
+
+    CGUIText *m_StatPointsStatus = nullptr;
+    CGUIText *m_SkillPointsStatus = nullptr;
 
     CGUISlider *m_StatsSliders[3];
     CGUISlider *m_SkillsSliders[4];

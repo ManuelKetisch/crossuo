@@ -22,6 +22,7 @@
 #include "../config/assistantconfig.h"
 #include "../core/assist.h"
 #include "../core/assistantevents.h" // OnClientPrint
+#include "../script/externalruntime.h"
 #include "../script/scriptlist.h"
 #include "../script/scripthandle.h"
 
@@ -150,7 +151,7 @@ void TabScripts_Draw()
     {
         ScriptPicker_RequestLoad();
     }
-    ImGui::SetItemTooltip("Imports a script file into this list (it opens in an editor on double-click)");
+    ImGui::SetItemTooltip("Imports a JavaScript (.js), Python (.py), or C# (.cs) script into this list (double-click to edit)");
 
     ImGui::SameLine();
     ImGui::BeginDisabled(selected == nullptr || selectedState == 1);
@@ -158,7 +159,7 @@ void TabScripts_Draw()
     {
         tab_play(*selected);
     }
-    ImGui::SetItemTooltip("Runs the script file (top-level). Save editor changes first: the file on disk is what runs");
+    ImGui::SetItemTooltip("Runs the selected script (.js, .py, or .cs). Save editor changes first: the file on disk is what runs");
     ImGui::EndDisabled();
 
     ImGui::SameLine();
@@ -208,7 +209,7 @@ void TabScripts_Draw()
     {
         if (order.empty())
         {
-            ImGui::TextDisabled("No scripts loaded. Press Load to add one.");
+            ImGui::TextDisabled("No scripts loaded. Press Load to add a .js, .py, or .cs script.");
         }
         for (int index : order)
         {
@@ -238,7 +239,8 @@ void TabScripts_Draw()
             }
             if (ImGui::IsItemHovered())
             {
-                ImGui::SetTooltip("%s", script.Path.c_str());
+                ImGui::SetTooltip("%s\nLanguage: %s", script.Path.c_str(),
+                    ExternalScript_LanguageLabel(script.Path));
             }
 
             if (ImGui::BeginPopupContextItem())
@@ -297,7 +299,7 @@ void TabScripts_Draw()
     }
 
     // --- footer ------------------------------------------------------------
-    ImGui::TextDisabled("%d script(s) | double-click a script to edit it", (int)scripts.size());
+    ImGui::TextDisabled("%d script(s) (.js, .py, .cs) | double-click a script to edit it", (int)scripts.size());
     ImGui::SameLine();
     if (ImGui::SmallButton("Script examples"))
     {

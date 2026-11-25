@@ -6,6 +6,8 @@
 #include "Gump.h"
 #include "../TextEngine/TextRenderer.h"
 
+class CGUIText;
+
 class CGumpContainer : public CGump
 {
     bool IsGameBoard = false;
@@ -18,6 +20,10 @@ private:
 
     CGUIGumppic *m_CorpseEyes{ nullptr };
     CGUIDataBox *m_DataBox{ nullptr };
+#if defined(XUO_ASSISTANT)
+    CGUIText *m_AssistantLabel = nullptr;
+    astr_t m_AssistantLabelText;
+#endif
 
 protected:
     virtual void CalculateGumpState() override;

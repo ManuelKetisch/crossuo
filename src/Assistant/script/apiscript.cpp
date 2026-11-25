@@ -35,6 +35,7 @@
 #endif
 
 #include <common/logging/logging.h>
+#include <cstdlib>
 
 extern "C" {
 #include "quickjs/quickjs.h"
@@ -47,6 +48,13 @@ extern "C" {
 #include "../core/assist.h"
 #include "../core/assistantevents.h" // g_AssistantEvents (LoadScript import failure)
 #include "../core/dressagent.h"
+#include "../core/inventoryagent.h"
+#include "../core/bandageheal.h"
+#if !defined(XUO_ASSISTANT_HARNESS)
+#include "../core/damagemeter.h"
+#include "../core/targetassist.h"
+#include "../compat/razorhotkeys.h"
+#endif
 #include "../core/textcommandmanager.h"
 #include "../managers/spellmanager.h"
 #include "../managers/gumpmanager.h"
@@ -73,10 +81,13 @@ extern "C" {
 #include "ScreenshotBuilder.h" // g_ScreenshotBuilder (Client.Screenshot)
 #include "Walker/PathFinder.h" // g_PathFinder (client walker)
 
+#include <algorithm>
 #include <chrono>
-#include <random>
+#include <cmath>
 #include <cstring>
 #include <ctime>
+#include <memory>
+#include <random>
 #include <thread>
 
 #include <revision.h> // PRODUCT_VERSION_STR
@@ -298,7 +309,9 @@ void raise_interrupted(JSContext *ctx)
         return;
     }
     JS_ThrowInternalError(ctx, "interrupted");
-    JS_SetUncatchableError(ctx, JS_GetException(ctx));
+    JSValue exc = JS_GetException(ctx);
+    JS_SetUncatchableError(ctx, exc);
+    JS_Throw(ctx, exc);
 }
 
 // Returns false when the script must stop (the error has been raised).
@@ -776,8 +789,7 @@ JSValue jsn_wait(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
         // the JS interrupt only fires between bytecode instructions: a script
         // that spends its life in Wait would never observe the terminate, so
         // raise the same uncatchable "interrupted" error from here
-        JS_ThrowInternalError(ctx, "interrupted");
-        JS_SetUncatchableError(ctx, JS_GetException(ctx));
+        raise_interrupted(ctx);
         return JS_EXCEPTION;
     }
     pause_gate(ctx);
@@ -990,6 +1002,8 @@ JSValue jsn_say(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int 
     auto *command = sc_make(SC_SAY);
     command->SubTag = magic;
     command->TextB = text;
+    command->BoolA = argc > 1;
+    command->UshortA = static_cast<uint16_t>(arg_int(ctx, argv, argc, 1, 0));
     sc_exec_wait(command);
     delete command;
     pause_gate(ctx);
@@ -1577,6 +1591,117 @@ JSValue jsn_moveitem(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv,
         return JS_EXCEPTION; // stopped
     }
     return JS_UNDEFINED;
+}
+
+// [Q] Start an existing inventory preset on the game thread.
+JSValue jsn_runinventoryagent(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *command = sc_make(SC_INVENTORY_AGENT);
+    command->TextA = arg_text(ctx, argv, argc, 0, "");
+    command->IntA = argc > 1 ? arg_int(ctx, argv, argc, 1, 0) : 0;
+    command->BoolA = argc > 1;
+    sc_exec_wait(command);
+    const bool started = result_bool(command);
+    pause_gate(ctx);
+    return JS_NewBool(ctx, started);
+}
+
+// [Q] Query the active inventory preset on the game thread.
+JSValue jsn_inventoryagentbusy(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *command = sc_make(SC_INVENTORY_AGENT);
+    command->SubTag = 1;
+    sc_exec_wait(command);
+    const bool busy = result_bool(command);
+    pause_gate(ctx);
+    return JS_NewBool(ctx, busy);
+}
+
+enum NativeAgentOp
+{
+    NativeDamageStart,
+    NativeDamagePause,
+    NativeDamageResume,
+    NativeDamageStop,
+    NativeDamageRunning,
+    NativeDamageGet,
+    NativeBandageStart,
+    NativeBandageStop,
+    NativeBandageRunning,
+    NativeRazorHotkey,
+    NativeTargetPreset,
+};
+
+JSValue jsn_native_agent(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int operation)
+{
+    if (operation == NativeRazorHotkey)
+    {
+        double id;
+        if (argc == 0 || !JS_IsNumber(argv[0]) || JS_ToFloat64(ctx, &id, argv[0]) != 0 ||
+            !(id >= 1.0 && id <= 65535.0) || static_cast<unsigned>(id) != id)
+        {
+            return JS_NewBool(ctx, false);
+        }
+    }
+    auto *command = sc_make(SC_NATIVE_AGENT);
+    command->SubTag = operation;
+    if (operation == NativeRazorHotkey)
+    {
+        command->IntA = arg_int(ctx, argv, argc, 0, 0);
+    }
+    else if (operation == NativeDamageGet)
+    {
+        command->TextA = arg_text(ctx, argv, argc, 0, "");
+    }
+    if (operation == NativeTargetPreset)
+    {
+        command->TextA = arg_text(ctx, argv, argc, 0, "");
+        command->BoolA = arg_bool(ctx, argv, argc, 1, false);
+    }
+    sc_exec_wait(command);
+    pause_gate(ctx);
+    if (operation == NativeDamageGet)
+    {
+        const uint64_t amount = command->ResultDropped ? 0 : std::strtoull(command->ResultText.c_str(), nullptr, 10);
+        delete command;
+        return JS_NewFloat64(ctx, static_cast<double>(amount));
+    }
+    if (operation == NativeTargetPreset)
+    {
+        const auto serial = result_serial(command);
+        if (serial == 0)
+        {
+            return JS_NULL;
+        }
+        return JS_NewString(ctx, CAssistant::SerialToText(serial).c_str());
+    }
+    return JS_NewBool(ctx, result_bool(command));
+}
+
+JSValue jsn_inventory_control(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int operation)
+{
+    auto *command = sc_make(SC_INVENTORY_AGENT);
+    command->SubTag = operation;
+    if (operation == 3)
+    {
+        command->TextA = arg_text(ctx, argv, argc, 0, "");
+    }
+    sc_exec_wait(command);
+    const bool worked = result_bool(command);
+    pause_gate(ctx);
+    return JS_NewBool(ctx, worked);
+}
+
+// [Q] Set the target used by native assistant commands and recorded macros.
+JSValue jsn_setlasttarget(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *command = sc_make(SC_CLIENT_CMD);
+    command->IntA = 347;
+    command->TextA = arg_text(ctx, argv, argc, 0, "");
+    sc_exec_wait(command);
+    const bool changed = result_bool(command);
+    pause_gate(ctx);
+    return JS_NewBool(ctx, changed);
 }
 
 // [Q] LoadScript(path) - imports the file into the Scripts tab list and opens
@@ -2286,6 +2411,8 @@ JSValue jsn_promptinfo(JSContext *ctx, JSValueConst, int, JSValueConst *, int ma
         return JS_NewBool(ctx, result_bool(command));
     }
     const astr_t text = CAssistant::SerialToText(command->ResultSerial);
+    delete command;
+    pause_gate(ctx);
     return JS_NewStringLen(ctx, text.c_str(), text.size());
 }
 
@@ -2720,8 +2847,10 @@ JSValue jsn_globalget(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv
     command->SubTag = 2; // get
     command->TextA = arg_text(ctx, argv, argc, 0, "");
     sc_exec_wait(command);
-    return JS_NewStringLen(
-        ctx, command->ResultText.c_str(), command->ResultText.size());
+    const auto text = std::move(command->ResultText);
+    delete command;
+    pause_gate(ctx);
+    return JS_NewStringLen(ctx, text.c_str(), text.size());
 }
 
 // [Q] BandageSelf/BandageTarget - OnCommandBandageTarget: find the
@@ -3040,6 +3169,2650 @@ JSValue jsn_split(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
 
 
 // ---------------------------------------------------------------------------
+// Razor Enhanced-compatible shared game script API (thread-safe snapshots &
+// marshaled CCommandQueue calls; 100% compatible with existing Client/Player)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct ScriptItemSnapshot
+{
+    uint32_t Serial{ 0 };
+    uint16_t ItemID{ 0 };
+    uint16_t Hue{ 0 };
+    uint32_t Amount{ 0 };
+    uint32_t Container{ 0xFFFFFFFF };
+    int Layer{ 0 };
+    int X{ 0 };
+    int Y{ 0 };
+    int Z{ 0 };
+    int Map{ 0 };
+    bool IsContainer{ false };
+    bool IsCorpse{ false };
+    bool OnGround{ false };
+    bool Opened{ false };
+    astr_t Name;
+    vector<astr_t> Properties;
+    vector<ScriptItemSnapshot> Contains;
+};
+
+struct ScriptMobileSnapshot
+{
+    uint32_t Serial{ 0 };
+    uint16_t Body{ 0 };
+    uint16_t Hue{ 0 };
+    int Hits{ 0 };
+    int HitsMax{ 0 };
+    int Mana{ 0 };
+    int ManaMax{ 0 };
+    int Stam{ 0 };
+    int StamMax{ 0 };
+    int Notoriety{ 0 };
+    int Direction{ 0 };
+    int X{ 0 };
+    int Y{ 0 };
+    int Z{ 0 };
+    int Map{ 0 };
+    int Distance{ 100500 };
+    uint32_t Backpack{ 0 };
+    bool Poisoned{ false };
+    bool Paralyzed{ false };
+    bool YellowHits{ false };
+    bool WarMode{ false };
+    bool Hidden{ false };
+    bool Dead{ false };
+    bool IsHuman{ false };
+    bool Female{ false };
+    astr_t Name;
+    vector<astr_t> Properties;
+};
+
+struct ScriptPlayerPosSnapshot
+{
+    int X{ 0 };
+    int Y{ 0 };
+    int Z{ 0 };
+    int Map{ 0 };
+    bool Valid{ false };
+};
+
+// Packed tri-state filter helpers (0 = ignore, 1 = require false, 2 = require true)
+enum RE_TRISTATE
+{
+    RE_TRI_ANY = 0,
+    RE_TRI_FALSE = 1,
+    RE_TRI_TRUE = 2
+};
+
+// Sleep `ms` milliseconds while honoring script pause and immediate terminate.
+// Returns false when terminated (having raised the uncatchable interrupted error).
+bool re_sleep_ms(JSContext *ctx, int ms)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    if (!pause_gate(ctx))
+    {
+        return abort_point(ctx, engine);
+    }
+    if (ms <= 0)
+    {
+        return abort_point(ctx, engine);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            return abort_point(ctx, engine);
+        }
+        if (engine != nullptr && engine->PauseFlag())
+        {
+            if (!pause_gate(ctx))
+            {
+                return abort_point(ctx, engine);
+            }
+            continue;
+        }
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        const int slice = remaining > 10 ? 10 : (remaining > 0 ? (int)remaining : 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+    }
+    if (engine != nullptr && engine->TerminateRequested())
+    {
+        return abort_point(ctx, engine);
+    }
+    return pause_gate(ctx);
+}
+
+// Parse a serial argument accepting uint32 number, hex/sentinel string, GameObject,
+// or snapshot object with a .Serial property.
+astr_t arg_serial_text(JSContext *ctx, JSValueConst *argv, int argc, int idx, const astr_t &def)
+{
+    if (idx >= argc || JS_IsUndefined(argv[idx]) || JS_IsNull(argv[idx]))
+    {
+        return def;
+    }
+    JSValueConst val = argv[idx];
+    if (JS_IsNumber(val))
+    {
+        uint32_t u = 0;
+        if (JS_ToUint32(ctx, &u, val) == 0)
+        {
+            return CAssistant::SerialToText(u);
+        }
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return def;
+    }
+    if (JS_IsObject(val))
+    {
+        auto *go = (XA_JS_GAMEOBJECT *)JS_GetOpaque(val, s_GameObjectClass);
+        if (go != nullptr)
+        {
+            return CAssistant::SerialToText(go->Serial);
+        }
+        JSValue prop = JS_GetPropertyStr(ctx, val, "Serial");
+        astr_t result = def;
+        if (JS_IsNumber(prop))
+        {
+            uint32_t u = 0;
+            if (JS_ToUint32(ctx, &u, prop) == 0)
+            {
+                result = CAssistant::SerialToText(u);
+            }
+            else
+            {
+                JS_FreeValue(ctx, JS_GetException(ctx));
+            }
+        }
+        else if (JS_IsString(prop))
+        {
+            size_t len = 0;
+            const char *s = JS_ToCStringLen(ctx, &len, prop);
+            if (s != nullptr)
+            {
+                result.assign(s, len);
+                JS_FreeCString(ctx, s);
+            }
+        }
+        JS_FreeValue(ctx, prop);
+        return result;
+    }
+    return arg_text(ctx, argv, argc, idx, def);
+}
+
+uint32_t arg_u32(JSContext *ctx, JSValueConst *argv, int argc, int idx, uint32_t def)
+{
+    if (idx >= argc || JS_IsUndefined(argv[idx]) || JS_IsNull(argv[idx]))
+    {
+        return def;
+    }
+    JSValueConst val = argv[idx];
+    if (JS_IsNumber(val))
+    {
+        double d = 0.0;
+        if (JS_ToFloat64(ctx, &d, val) != 0)
+        {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            return def;
+        }
+        if (d < 0.0)
+        {
+            return def;
+        }
+        return (uint32_t)d;
+    }
+    const astr_t txt = arg_text(ctx, argv, argc, idx, "");
+    if (txt.empty())
+    {
+        return def;
+    }
+    char *end = nullptr;
+    const unsigned long parsed = strtoul(txt.c_str(), &end, 0);
+    return (end != txt.c_str()) ? (uint32_t)parsed : def;
+}
+
+int arg_id_or_any(JSContext *ctx, JSValueConst *argv, int argc, int idx, int def = -1)
+{
+    if (idx >= argc || JS_IsUndefined(argv[idx]) || JS_IsNull(argv[idx]))
+    {
+        return def;
+    }
+    JSValueConst val = argv[idx];
+    if (JS_IsNumber(val))
+    {
+        int32_t v = def;
+        if (JS_ToInt32(ctx, &v, val) != 0)
+        {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            return def;
+        }
+        return v;
+    }
+    const astr_t txt = arg_text(ctx, argv, argc, idx, "");
+    if (txt.empty() || txt == "-1" || str_lower(txt) == "any")
+    {
+        return -1;
+    }
+    char *end = nullptr;
+    const long parsed = strtol(txt.c_str(), &end, 0);
+    return (end != txt.c_str()) ? (int)parsed : def;
+}
+
+int parse_direction_text(const astr_t &raw)
+{
+    const astr_t d = str_lower(raw);
+    if (d == "north" || d == "n" || d == "up") return 0;
+    if (d == "northeast" || d == "ne" || d == "right") return 1;
+    if (d == "east" || d == "e") return 2;
+    if (d == "southeast" || d == "se" || d == "down") return 3;
+    if (d == "south" || d == "s") return 4;
+    if (d == "southwest" || d == "sw" || d == "left") return 5;
+    if (d == "west" || d == "w") return 6;
+    if (d == "northwest" || d == "nw") return 7;
+    char *end = nullptr;
+    const long num = strtol(d.c_str(), &end, 10);
+    if (end != d.c_str() && *end == '\0' && num >= 0 && num <= 7)
+    {
+        return (int)num;
+    }
+    return -1;
+}
+
+int arg_direction(JSContext *ctx, JSValueConst *argv, int argc, int idx)
+{
+    if (idx >= argc || JS_IsUndefined(argv[idx]) || JS_IsNull(argv[idx]))
+    {
+        return -1;
+    }
+    if (JS_IsNumber(argv[idx]))
+    {
+        const int v = arg_int(ctx, argv, argc, idx, -1);
+        return (v >= 0 && v <= 7) ? v : -1;
+    }
+    return parse_direction_text(arg_text(ctx, argv, argc, idx, ""));
+}
+
+JSValue string_vector_to_js(JSContext *ctx, const vector<astr_t> &lines)
+{
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < lines.size(); i++)
+    {
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i,
+            JS_NewStringLen(ctx, lines[i].c_str(), lines[i].size()));
+    }
+    return arr;
+}
+
+JSValue pos_object_to_js(JSContext *ctx, int x, int y, int z, int mapIndex)
+{
+    JSValue pos = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, pos, "X", JS_NewInt32(ctx, x));
+    JS_SetPropertyStr(ctx, pos, "Y", JS_NewInt32(ctx, y));
+    JS_SetPropertyStr(ctx, pos, "Z", JS_NewInt32(ctx, z));
+    JS_SetPropertyStr(ctx, pos, "Map", JS_NewInt32(ctx, mapIndex));
+    JS_SetPropertyStr(ctx, pos, "x", JS_NewInt32(ctx, x));
+    JS_SetPropertyStr(ctx, pos, "y", JS_NewInt32(ctx, y));
+    JS_SetPropertyStr(ctx, pos, "z", JS_NewInt32(ctx, z));
+    JS_SetPropertyStr(ctx, pos, "map", JS_NewInt32(ctx, mapIndex));
+    return pos;
+}
+
+JSValue item_snapshot_to_js(JSContext *ctx, const ScriptItemSnapshot &snap)
+{
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "Serial", JS_NewUint32(ctx, snap.Serial));
+    const astr_t serialHex = CAssistant::SerialToText(snap.Serial);
+    JS_SetPropertyStr(ctx, obj, "SerialHex", JS_NewStringLen(ctx, serialHex.c_str(), serialHex.size()));
+    JS_SetPropertyStr(ctx, obj, "ItemID", JS_NewInt32(ctx, snap.ItemID));
+    JS_SetPropertyStr(ctx, obj, "Graphic", JS_NewInt32(ctx, snap.ItemID));
+    JS_SetPropertyStr(ctx, obj, "Hue", JS_NewInt32(ctx, snap.Hue));
+    JS_SetPropertyStr(ctx, obj, "Color", JS_NewInt32(ctx, snap.Hue));
+    JS_SetPropertyStr(ctx, obj, "Amount", JS_NewUint32(ctx, snap.Amount));
+    JS_SetPropertyStr(ctx, obj, "Count", JS_NewUint32(ctx, snap.Amount));
+    JS_SetPropertyStr(ctx, obj, "Container", JS_NewUint32(ctx, snap.Container));
+    JS_SetPropertyStr(ctx, obj, "Layer", JS_NewInt32(ctx, snap.Layer));
+    JS_SetPropertyStr(ctx, obj, "X", JS_NewInt32(ctx, snap.X));
+    JS_SetPropertyStr(ctx, obj, "Y", JS_NewInt32(ctx, snap.Y));
+    JS_SetPropertyStr(ctx, obj, "Z", JS_NewInt32(ctx, snap.Z));
+    JS_SetPropertyStr(ctx, obj, "Map", JS_NewInt32(ctx, snap.Map));
+    JS_SetPropertyStr(ctx, obj, "Position", pos_object_to_js(ctx, snap.X, snap.Y, snap.Z, snap.Map));
+    JS_SetPropertyStr(ctx, obj, "IsContainer", JS_NewBool(ctx, snap.IsContainer));
+    JS_SetPropertyStr(ctx, obj, "IsCorpse", JS_NewBool(ctx, snap.IsCorpse));
+    JS_SetPropertyStr(ctx, obj, "OnGround", JS_NewBool(ctx, snap.OnGround));
+    JS_SetPropertyStr(ctx, obj, "Name", JS_NewStringLen(ctx, snap.Name.c_str(), snap.Name.size()));
+    JS_SetPropertyStr(ctx, obj, "Properties", string_vector_to_js(ctx, snap.Properties));
+
+    JSValue contains = JS_NewArray(ctx);
+    for (size_t i = 0; i < snap.Contains.size(); i++)
+    {
+        JS_SetPropertyUint32(ctx, contains, (uint32_t)i, item_snapshot_to_js(ctx, snap.Contains[i]));
+    }
+    JS_SetPropertyStr(ctx, obj, "Contains", contains);
+    return obj;
+}
+
+JSValue mobile_snapshot_to_js(JSContext *ctx, const ScriptMobileSnapshot &snap)
+{
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "Serial", JS_NewUint32(ctx, snap.Serial));
+    const astr_t serialHex = CAssistant::SerialToText(snap.Serial);
+    JS_SetPropertyStr(ctx, obj, "SerialHex", JS_NewStringLen(ctx, serialHex.c_str(), serialHex.size()));
+    JS_SetPropertyStr(ctx, obj, "Body", JS_NewInt32(ctx, snap.Body));
+    JS_SetPropertyStr(ctx, obj, "MobileID", JS_NewInt32(ctx, snap.Body));
+    JS_SetPropertyStr(ctx, obj, "Graphic", JS_NewInt32(ctx, snap.Body));
+    JS_SetPropertyStr(ctx, obj, "Hue", JS_NewInt32(ctx, snap.Hue));
+    JS_SetPropertyStr(ctx, obj, "Color", JS_NewInt32(ctx, snap.Hue));
+    JS_SetPropertyStr(ctx, obj, "Name", JS_NewStringLen(ctx, snap.Name.c_str(), snap.Name.size()));
+    JS_SetPropertyStr(ctx, obj, "Hits", JS_NewInt32(ctx, snap.Hits));
+    JS_SetPropertyStr(ctx, obj, "HitsMax", JS_NewInt32(ctx, snap.HitsMax));
+    JS_SetPropertyStr(ctx, obj, "Mana", JS_NewInt32(ctx, snap.Mana));
+    JS_SetPropertyStr(ctx, obj, "ManaMax", JS_NewInt32(ctx, snap.ManaMax));
+    JS_SetPropertyStr(ctx, obj, "Stam", JS_NewInt32(ctx, snap.Stam));
+    JS_SetPropertyStr(ctx, obj, "StamMax", JS_NewInt32(ctx, snap.StamMax));
+    JS_SetPropertyStr(ctx, obj, "Notoriety", JS_NewInt32(ctx, snap.Notoriety));
+    JS_SetPropertyStr(ctx, obj, "Direction", JS_NewInt32(ctx, snap.Direction));
+    JS_SetPropertyStr(ctx, obj, "X", JS_NewInt32(ctx, snap.X));
+    JS_SetPropertyStr(ctx, obj, "Y", JS_NewInt32(ctx, snap.Y));
+    JS_SetPropertyStr(ctx, obj, "Z", JS_NewInt32(ctx, snap.Z));
+    JS_SetPropertyStr(ctx, obj, "Map", JS_NewInt32(ctx, snap.Map));
+    JS_SetPropertyStr(ctx, obj, "Position", pos_object_to_js(ctx, snap.X, snap.Y, snap.Z, snap.Map));
+    JS_SetPropertyStr(ctx, obj, "Distance", JS_NewInt32(ctx, snap.Distance));
+    JS_SetPropertyStr(ctx, obj, "Backpack", JS_NewUint32(ctx, snap.Backpack));
+    JS_SetPropertyStr(ctx, obj, "Poisoned", JS_NewBool(ctx, snap.Poisoned));
+    JS_SetPropertyStr(ctx, obj, "Paralyzed", JS_NewBool(ctx, snap.Paralyzed));
+    JS_SetPropertyStr(ctx, obj, "Paralized", JS_NewBool(ctx, snap.Paralyzed));
+    JS_SetPropertyStr(ctx, obj, "YellowHits", JS_NewBool(ctx, snap.YellowHits));
+    JS_SetPropertyStr(ctx, obj, "Mortaled", JS_NewBool(ctx, snap.YellowHits));
+    JS_SetPropertyStr(ctx, obj, "WarMode", JS_NewBool(ctx, snap.WarMode));
+    JS_SetPropertyStr(ctx, obj, "Hidden", JS_NewBool(ctx, snap.Hidden));
+    JS_SetPropertyStr(ctx, obj, "Dead", JS_NewBool(ctx, snap.Dead));
+    JS_SetPropertyStr(ctx, obj, "IsHuman", JS_NewBool(ctx, snap.IsHuman));
+    JS_SetPropertyStr(ctx, obj, "Female", JS_NewBool(ctx, snap.Female));
+    JS_SetPropertyStr(ctx, obj, "Properties", string_vector_to_js(ctx, snap.Properties));
+    return obj;
+}
+
+// Parse a numeric property value from OPL property lines (Razor Enhanced GetPropValue).
+double extract_prop_value(const vector<astr_t> &lines, const astr_t &propName)
+{
+    const astr_t needle = str_lower(propName);
+    if (needle.empty())
+    {
+        return 0.0;
+    }
+
+    const astr_t *matchedLine = nullptr;
+    size_t matchEnd = 0;
+
+    // Pass 1: prefer prefix match ("Luck 120", "Fire Resist 15%", "Weight: 4 stones")
+    for (const astr_t &line : lines)
+    {
+        const astr_t lowered = str_lower(line);
+        if (lowered.compare(0, needle.size(), needle) == 0)
+        {
+            const size_t after = needle.size();
+            if (after == lowered.size() || !isalnum((unsigned char)lowered[after]))
+            {
+                matchedLine = &line;
+                matchEnd = after;
+                break;
+            }
+        }
+    }
+
+    // Pass 2: fallback substring match
+    if (matchedLine == nullptr)
+    {
+        for (const astr_t &line : lines)
+        {
+            const astr_t lowered = str_lower(line);
+            const size_t pos = lowered.find(needle);
+            if (pos != astr_t::npos)
+            {
+                matchedLine = &line;
+                matchEnd = pos + needle.size();
+                break;
+            }
+        }
+    }
+
+    if (matchedLine == nullptr)
+    {
+        return 0.0;
+    }
+
+    const char *text = matchedLine->c_str();
+    const size_t len = matchedLine->size();
+
+    // Look for a number starting at or after the matched property name first.
+    auto scanNumber = [&](size_t startPos, double &outVal) -> bool {
+        for (size_t i = startPos; i < len; i++)
+        {
+            const char c = text[i];
+            const bool isSignDigit = (c == '-' || c == '+') && (i + 1 < len) &&
+                isdigit((unsigned char)text[i + 1]);
+            if (isdigit((unsigned char)c) || isSignDigit)
+            {
+                char *endPtr = nullptr;
+                outVal = strtod(text + i, &endPtr);
+                if (endPtr != text + i)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    double parsed = 0.0;
+    if (scanNumber(matchEnd, parsed) || scanNumber(0, parsed))
+    {
+        return parsed;
+    }
+
+    // Boolean/tag property present without numeric payload (e.g., "Spell Channeling", "Blessed")
+    return 1.0;
+}
+
+// --- Player.* Razor Enhanced additions & stat-getter fix --------------------
+
+// [G] Player.Hits/Mana/Stam/Weight: raw value by default, percentage when passed "%".
+JSValue player_get_stat(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    const bool percent = argc >= 1 && arg_text(ctx, argv, argc, 0, "") == "%";
+    auto *valCmd = sc_make(SC_PLAYER_GET);
+    valCmd->SubTag = magic;
+    if (!sc_exec_wait(valCmd))
+    {
+        delete valCmd;
+        return JS_EXCEPTION;
+    }
+    const int val = valCmd->ResultDropped ? 0 : valCmd->ResultInt;
+    delete valCmd;
+    if (!percent)
+    {
+        return JS_NewInt32(ctx, val);
+    }
+
+    auto *maxCmd = sc_make(SC_PLAYER_GET);
+    maxCmd->SubTag = magic + 1; // OF_INT_HITS->MAXHITS, MANA->MAXMANA, STAM->MAXSTAM, WEIGHT->MAXWEIGHT
+    if (!sc_exec_wait(maxCmd))
+    {
+        delete maxCmd;
+        return JS_EXCEPTION;
+    }
+    const int maxVal = maxCmd->ResultDropped ? 0 : maxCmd->ResultInt;
+    delete maxCmd;
+    return JS_NewInt32(ctx, maxVal == 0 ? 0 : (val * 100) / maxVal);
+}
+
+// [G/Q] Player.WarMode() reads bool; Player.WarMode(state) sets war mode.
+JSValue player_warmode(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    if (argc >= 1 && !JS_IsUndefined(argv[0]))
+    {
+        const bool state = arg_bool(ctx, argv, argc, 0, false);
+        if (!run_command(ctx, "warmode", { state ? "on" : "off" }))
+        {
+            return JS_EXCEPTION;
+        }
+        return JS_NewBool(ctx, state);
+    }
+    auto *cmd = sc_make(SC_PLAYER_GET);
+    cmd->SubTag = OF_BOOL_WARMODE;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, result_bool(cmd));
+}
+
+JSValue player_position(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_RE_PLAYER_INFO);
+    cmd->SubTag = 0;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    auto *pos = static_cast<ScriptPlayerPosSnapshot *>(cmd->SharedResult.get());
+    JSValue result = pos != nullptr
+        ? pos_object_to_js(ctx, pos->X, pos->Y, pos->Z, pos->Map)
+        : pos_object_to_js(ctx, 0, 0, 0, 0);
+    delete cmd;
+    return result;
+}
+
+JSValue player_backpack(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_RE_PLAYER_INFO);
+    cmd->SubTag = 1;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    auto *snap = static_cast<ScriptItemSnapshot *>(cmd->SharedResult.get());
+    JSValue result = (!cmd->ResultDropped && snap != nullptr)
+        ? item_snapshot_to_js(ctx, *snap)
+        : JS_NULL;
+    delete cmd;
+    return result;
+}
+
+JSValue player_getlayeritem(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_PLAYER_INFO);
+    cmd->SubTag = 2;
+    if (argc >= 1 && JS_IsNumber(argv[0]))
+    {
+        cmd->IntA = arg_int(ctx, argv, argc, 0, 0);
+        cmd->BoolA = true;
+    }
+    else
+    {
+        cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+        cmd->BoolA = false;
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    auto *snap = static_cast<ScriptItemSnapshot *>(cmd->SharedResult.get());
+    JSValue result = (!cmd->ResultDropped && snap != nullptr)
+        ? item_snapshot_to_js(ctx, *snap)
+        : JS_NULL;
+    delete cmd;
+    return result;
+}
+
+JSValue player_walk_run(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    const int dir = arg_direction(ctx, argv, argc, 0);
+    if (dir < 0)
+    {
+        return JS_FALSE;
+    }
+    auto *cmd = sc_make(SC_RE_WALK);
+    cmd->SubTag = 0;
+    cmd->IntA = dir;
+    cmd->BoolA = (magic != 0); // 0 = Walk, 1 = Run
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue pathfinding_pathfindto(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    if (argc < 2)
+    {
+        return JS_FALSE;
+    }
+    auto *cmd = sc_make(SC_RE_WALK);
+    cmd->SubTag = 1;
+    cmd->IntA = arg_int(ctx, argv, argc, 0, 0);
+    cmd->IntB = arg_int(ctx, argv, argc, 1, 0);
+    cmd->BoolA = (argc >= 3 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2]));
+    cmd->IntC = cmd->BoolA ? arg_int(ctx, argv, argc, 2, 0) : 0;
+    cmd->UshortA = (uint16_t)(argc >= 4 ? arg_int(ctx, argv, argc, 3, 1) : 1);
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+// --- Items.* ----------------------------------------------------------------
+
+JSValue re_items_findbyserial(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_QUERY);
+    cmd->SubTag = 0;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    auto *snap = static_cast<ScriptItemSnapshot *>(cmd->SharedResult.get());
+    JSValue result = (!cmd->ResultDropped && snap != nullptr)
+        ? item_snapshot_to_js(ctx, *snap)
+        : JS_NULL;
+    delete cmd;
+    return result;
+}
+
+// magic 0 = FindByID (single item or null), magic 1 = FindAllByID (array)
+JSValue re_items_findbyid(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_QUERY);
+    cmd->SubTag = 1;
+    // Accept single itemID or array of itemIDs
+    if (argc >= 1 && JS_IsArray(argv[0]))
+    {
+        cmd->ListA = arg_list(ctx, argv, argc, 0);
+    }
+    else
+    {
+        const int idVal = arg_id_or_any(ctx, argv, argc, 0, -1);
+        if (idVal >= 0)
+        {
+            cmd->ListA.push_back(CAssistant::GraphicToText((uint16_t)idVal));
+        }
+    }
+    cmd->IntA = arg_id_or_any(ctx, argv, argc, 1, -1); // color (-1 = any)
+    // container: -1 / omitted = backpack, 0 / "ground" = world ground, >0 = container serial
+    if (argc < 3 || JS_IsUndefined(argv[2]) || JS_IsNull(argv[2]))
+    {
+        cmd->TextA = "backpack";
+    }
+    else if (JS_IsNumber(argv[2]))
+    {
+        const int cVal = arg_int(ctx, argv, argc, 2, -1);
+        if (cVal < 0)
+        {
+            cmd->TextA = "backpack";
+        }
+        else if (cVal == 0)
+        {
+            cmd->TextA = "ground";
+        }
+        else
+        {
+            cmd->TextA = CAssistant::SerialToText((uint32_t)cVal);
+        }
+    }
+    else
+    {
+        cmd->TextA = arg_serial_text(ctx, argv, argc, 2, "backpack");
+    }
+
+    // Arg 3: recursive bool (default true) OR integer range (when searching ground)
+    bool recursive = true;
+    int maxRange = -1;
+    if (argc >= 4 && !JS_IsUndefined(argv[3]))
+    {
+        if (JS_IsBool(argv[3]))
+        {
+            recursive = arg_bool(ctx, argv, argc, 3, true);
+        }
+        else if (JS_IsNumber(argv[3]))
+        {
+            maxRange = arg_int(ctx, argv, argc, 3, -1);
+        }
+    }
+    const bool ignoreCheck = argc >= 5 ? arg_bool(ctx, argv, argc, 4, false) : false;
+    cmd->BoolA = recursive;
+    cmd->IntB = maxRange;
+    // IntC: bit 0 = findAll, bit 1 = ignoreCheck
+    cmd->IntC = (magic != 0 ? 1 : 0) | (ignoreCheck ? 2 : 0);
+
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    auto *matches = static_cast<vector<ScriptItemSnapshot> *>(cmd->SharedResult.get());
+    JSValue result = JS_NULL;
+    if (magic != 0)
+    {
+        result = JS_NewArray(ctx);
+        if (!cmd->ResultDropped && matches != nullptr)
+        {
+            for (size_t i = 0; i < matches->size(); i++)
+            {
+                JS_SetPropertyUint32(
+                    ctx, result, (uint32_t)i, item_snapshot_to_js(ctx, (*matches)[i]));
+            }
+        }
+    }
+    else if (!cmd->ResultDropped && matches != nullptr && !matches->empty())
+    {
+        result = item_snapshot_to_js(ctx, (*matches)[0]);
+    }
+    delete cmd;
+    return result;
+}
+
+JSValue re_items_backpackcount(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_QUERY);
+    cmd->SubTag = 2;
+    cmd->IntA = arg_id_or_any(ctx, argv, argc, 0, -1); // itemID
+    cmd->IntB = arg_id_or_any(ctx, argv, argc, 1, -1); // color (-1 = any)
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewInt32(ctx, result_int(cmd));
+}
+
+JSValue re_items_useitem(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_ACTION);
+    cmd->SubTag = 0;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    cmd->TextB = argc >= 2 ? arg_serial_text(ctx, argv, argc, 1, "") : astr_t();
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_items_useitembyid(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_ACTION);
+    cmd->SubTag = 1;
+    cmd->IntA = arg_id_or_any(ctx, argv, argc, 0, -1);
+    cmd->IntB = arg_id_or_any(ctx, argv, argc, 1, -1);
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_items_move(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_ACTION);
+    cmd->SubTag = 2;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (argc < 2 || JS_IsUndefined(argv[1]) || JS_IsNull(argv[1]))
+    {
+        cmd->TextB = "backpack";
+    }
+    else if (JS_IsNumber(argv[1]) && arg_int(ctx, argv, argc, 1, -1) <= 0)
+    {
+        cmd->TextB = "backpack";
+    }
+    else
+    {
+        cmd->TextB = arg_serial_text(ctx, argv, argc, 1, "backpack");
+    }
+    cmd->IntA = arg_int(ctx, argv, argc, 2, 0);        // amount (0 = all)
+    cmd->IntB = argc >= 4 ? arg_int(ctx, argv, argc, 3, -1) : -1; // x
+    cmd->IntC = argc >= 5 ? arg_int(ctx, argv, argc, 4, -1) : -1; // y
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_items_moveonground(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_ACTION);
+    cmd->SubTag = 3;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    cmd->IntA = arg_int(ctx, argv, argc, 1, 0); // amount (0 = all)
+    cmd->IntB = arg_int(ctx, argv, argc, 2, 0); // x
+    cmd->IntC = arg_int(ctx, argv, argc, 3, 0); // y
+    cmd->UshortA = (uint16_t)(int16_t)arg_int(ctx, argv, argc, 4, 0); // z (signed byte cast)
+    cmd->BoolA = argc >= 5;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_items_getpropstringlist(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_QUERY);
+    cmd->SubTag = 3;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    return string_vector_to_js(ctx, lines);
+}
+
+JSValue re_items_getpropvalue(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_ITEM_QUERY);
+    cmd->SubTag = 3;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    const astr_t propName = arg_text(ctx, argv, argc, 1, "");
+    return JS_NewFloat64(ctx, extract_prop_value(lines, propName));
+}
+
+JSValue re_items_waitforcontents(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const astr_t serialText = arg_serial_text(ctx, argv, argc, 0, "0");
+    const int timeoutMs = argc >= 2 ? arg_int(ctx, argv, argc, 1, 1000) : 1000;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0);
+
+    bool requestedOpen = false;
+    while (true)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            abort_point(ctx, engine);
+            return JS_EXCEPTION;
+        }
+        auto *cmd = sc_make(SC_RE_ITEM_QUERY);
+        cmd->SubTag = 4;
+        cmd->TextA = serialText;
+        cmd->BoolA = !requestedOpen; // send DoubleClick once if not already open
+        if (!sc_exec_wait(cmd))
+        {
+            delete cmd;
+            return JS_EXCEPTION;
+        }
+        requestedOpen = true;
+        const bool dropped = cmd->ResultDropped;
+        const bool ready = !dropped && cmd->ResultBool;
+        const bool exists = !dropped && (cmd->IntA != 0);
+        delete cmd;
+
+        if (ready)
+        {
+            if (!pause_gate(ctx))
+            {
+                return JS_EXCEPTION;
+            }
+            return JS_TRUE;
+        }
+        if (dropped || !exists || std::chrono::steady_clock::now() >= deadline)
+        {
+            break;
+        }
+        if (!re_sleep_ms(ctx, 10))
+        {
+            return JS_EXCEPTION;
+        }
+    }
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_FALSE;
+}
+
+// --- Mobiles.* --------------------------------------------------------------
+
+// Read a JS property trying multiple case aliases (e.g. "RangeMax", "rangeMax", "range").
+JSValue get_prop_alias(
+    JSContext *ctx, JSValueConst obj, const char *a, const char *b = nullptr, const char *c = nullptr)
+{
+    JSValue v = JS_GetPropertyStr(ctx, obj, a);
+    if (!JS_IsUndefined(v))
+    {
+        return v;
+    }
+    JS_FreeValue(ctx, v);
+    if (b != nullptr)
+    {
+        v = JS_GetPropertyStr(ctx, obj, b);
+        if (!JS_IsUndefined(v))
+        {
+            return v;
+        }
+        JS_FreeValue(ctx, v);
+    }
+    if (c != nullptr)
+    {
+        v = JS_GetPropertyStr(ctx, obj, c);
+        if (!JS_IsUndefined(v))
+        {
+            return v;
+        }
+        JS_FreeValue(ctx, v);
+    }
+    return JS_UNDEFINED;
+}
+
+int parse_tristate_value(JSContext *ctx, JSValueConst val)
+{
+    if (JS_IsUndefined(val) || JS_IsNull(val))
+    {
+        return RE_TRI_ANY;
+    }
+    if (JS_IsBool(val))
+    {
+        return JS_ToBool(ctx, val) != 0 ? RE_TRI_TRUE : RE_TRI_FALSE;
+    }
+    if (JS_IsNumber(val))
+    {
+        int32_t v = -1;
+        if (JS_ToInt32(ctx, &v, val) != 0)
+        {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            return RE_TRI_ANY;
+        }
+        if (v < 0) return RE_TRI_ANY;
+        return v == 0 ? RE_TRI_FALSE : RE_TRI_TRUE;
+    }
+    return RE_TRI_ANY;
+}
+
+int parse_notoriety_token(const astr_t &raw)
+{
+    const astr_t s = str_lower(raw);
+    if (s == "innocent" || s == "blue" || s == "1") return 1;
+    if (s == "ally" || s == "friendly" || s == "green" || s == "2") return 2;
+    if (s == "gray" || s == "grey" || s == "attackable" || s == "3") return 3;
+    if (s == "criminal" || s == "4") return 4;
+    if (s == "enemy" || s == "orange" || s == "5") return 5;
+    if (s == "murderer" || s == "red" || s == "6") return 6;
+    if (s == "invulnerable" || s == "yellow" || s == "7") return 7;
+    return 0;
+}
+
+JSValue re_mobiles_findbyserial(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_MOBILE_QUERY);
+    cmd->SubTag = 0;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    auto *snap = static_cast<ScriptMobileSnapshot *>(cmd->SharedResult.get());
+    JSValue result = (!cmd->ResultDropped && snap != nullptr)
+        ? mobile_snapshot_to_js(ctx, *snap)
+        : JS_NULL;
+    delete cmd;
+    return result;
+}
+
+JSValue re_mobiles_filter_factory(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    JSValue f = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, f, "Enabled", JS_TRUE);
+    JS_SetPropertyStr(ctx, f, "RangeMin", JS_NewInt32(ctx, -1));
+    JS_SetPropertyStr(ctx, f, "RangeMax", JS_NewInt32(ctx, -1));
+    JS_SetPropertyStr(ctx, f, "Notorieties", JS_NewArray(ctx));
+    JS_SetPropertyStr(ctx, f, "Bodies", JS_NewArray(ctx));
+    JS_SetPropertyStr(ctx, f, "Poisoned", JS_NewInt32(ctx, -1));
+    JS_SetPropertyStr(ctx, f, "IsHuman", JS_NewInt32(ctx, -1));
+    JS_SetPropertyStr(ctx, f, "IsGhost", JS_NewInt32(ctx, -1));
+    JS_SetPropertyStr(ctx, f, "Warmode", JS_NewInt32(ctx, -1));
+    JS_SetPropertyStr(ctx, f, "CheckLineOfSight", JS_FALSE);
+    JS_SetPropertyStr(ctx, f, "CheckIgnoreObject", JS_TRUE);
+    JS_SetPropertyStr(ctx, f, "Name", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, f, "Selector", JS_NewString(ctx, ""));
+    return f;
+}
+
+JSValue re_mobiles_applyfilter(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    int rangeMin = -1;
+    int rangeMax = -1;
+    int poisoned = RE_TRI_ANY;
+    int isHuman = RE_TRI_ANY;
+    int isGhost = RE_TRI_ANY;
+    int warmode = RE_TRI_ANY;
+    bool checkLos = false;
+    bool checkIgnore = true;
+    int notorietyMask = 0;
+    vector<astr_t> bodies;
+    astr_t nameFilter;
+    astr_t selector;
+
+    if (argc >= 1 && JS_IsObject(argv[0]))
+    {
+        JSValueConst filter = argv[0];
+
+        JSValue enabledVal = get_prop_alias(ctx, filter, "Enabled", "enabled");
+        if (!JS_IsUndefined(enabledVal) && JS_ToBool(ctx, enabledVal) == 0)
+        {
+            JS_FreeValue(ctx, enabledVal);
+            return JS_NewArray(ctx);
+        }
+        JS_FreeValue(ctx, enabledVal);
+
+        JSValue rMinVal = get_prop_alias(ctx, filter, "RangeMin", "rangeMin", "minRange");
+        if (JS_IsNumber(rMinVal))
+        {
+            int32_t v = -1;
+            if (JS_ToInt32(ctx, &v, rMinVal) == 0) rangeMin = v;
+        }
+        JS_FreeValue(ctx, rMinVal);
+
+        JSValue rMaxVal = get_prop_alias(ctx, filter, "RangeMax", "rangeMax", "range");
+        if (JS_IsNumber(rMaxVal))
+        {
+            int32_t v = -1;
+            if (JS_ToInt32(ctx, &v, rMaxVal) == 0) rangeMax = v;
+        }
+        JS_FreeValue(ctx, rMaxVal);
+
+        JSValue poisVal = get_prop_alias(ctx, filter, "Poisoned", "poisoned");
+        poisoned = parse_tristate_value(ctx, poisVal);
+        JS_FreeValue(ctx, poisVal);
+
+        JSValue humanVal = get_prop_alias(ctx, filter, "IsHuman", "isHuman", "human");
+        isHuman = parse_tristate_value(ctx, humanVal);
+        JS_FreeValue(ctx, humanVal);
+
+        JSValue ghostVal = get_prop_alias(ctx, filter, "IsGhost", "isGhost", "dead");
+        isGhost = parse_tristate_value(ctx, ghostVal);
+        JS_FreeValue(ctx, ghostVal);
+
+        JSValue warVal = get_prop_alias(ctx, filter, "Warmode", "WarMode", "warmode");
+        warmode = parse_tristate_value(ctx, warVal);
+        JS_FreeValue(ctx, warVal);
+
+        JSValue losVal =
+            get_prop_alias(ctx, filter, "CheckLineOfSight", "checkLineOfSight", "checklineofsight");
+        if (!JS_IsUndefined(losVal))
+        {
+            checkLos = JS_ToBool(ctx, losVal) != 0;
+        }
+        JS_FreeValue(ctx, losVal);
+
+        JSValue ignVal =
+            get_prop_alias(ctx, filter, "CheckIgnoreObject", "checkIgnoreObject", "ignore");
+        if (!JS_IsUndefined(ignVal))
+        {
+            checkIgnore = JS_ToBool(ctx, ignVal) != 0;
+        }
+        JS_FreeValue(ctx, ignVal);
+
+        JSValue notoVal = get_prop_alias(ctx, filter, "Notorieties", "notorieties", "notoriety");
+        if (!JS_IsUndefined(notoVal) && !JS_IsNull(notoVal))
+        {
+            auto addNoto = [&](JSValueConst entry) {
+                int n = 0;
+                if (JS_IsNumber(entry))
+                {
+                    int32_t v = 0;
+                    if (JS_ToInt32(ctx, &v, entry) == 0) n = v;
+                }
+                else if (JS_IsString(entry))
+                {
+                    size_t len = 0;
+                    const char *s = JS_ToCStringLen(ctx, &len, entry);
+                    if (s != nullptr)
+                    {
+                        n = parse_notoriety_token(astr_t(s, len));
+                        JS_FreeCString(ctx, s);
+                    }
+                }
+                if (n >= 1 && n <= 7)
+                {
+                    notorietyMask |= (1 << (n - 1));
+                }
+            };
+            if (JS_IsArray(notoVal))
+            {
+                JSValue lenVal = JS_GetPropertyStr(ctx, notoVal, "length");
+                int32_t arrLen = 0;
+                JS_ToInt32(ctx, &arrLen, lenVal);
+                JS_FreeValue(ctx, lenVal);
+                for (int32_t i = 0; i < arrLen; i++)
+                {
+                    JSValue elem = JS_GetPropertyUint32(ctx, notoVal, (uint32_t)i);
+                    addNoto(elem);
+                    JS_FreeValue(ctx, elem);
+                }
+            }
+            else
+            {
+                addNoto(notoVal);
+            }
+        }
+        JS_FreeValue(ctx, notoVal);
+
+        JSValue bodyVal = get_prop_alias(ctx, filter, "Bodies", "bodies", "body");
+        if (!JS_IsUndefined(bodyVal) && !JS_IsNull(bodyVal))
+        {
+            auto addBody = [&](JSValueConst entry) {
+                if (JS_IsNumber(entry))
+                {
+                    int32_t v = -1;
+                    if (JS_ToInt32(ctx, &v, entry) == 0 && v >= 0)
+                    {
+                        bodies.push_back(CAssistant::GraphicToText((uint16_t)v));
+                    }
+                }
+                else if (JS_IsString(entry))
+                {
+                    size_t len = 0;
+                    const char *s = JS_ToCStringLen(ctx, &len, entry);
+                    if (s != nullptr)
+                    {
+                        if (len > 0) bodies.push_back(astr_t(s, len));
+                        JS_FreeCString(ctx, s);
+                    }
+                }
+            };
+            if (JS_IsArray(bodyVal))
+            {
+                JSValue lenVal = JS_GetPropertyStr(ctx, bodyVal, "length");
+                int32_t arrLen = 0;
+                JS_ToInt32(ctx, &arrLen, lenVal);
+                JS_FreeValue(ctx, lenVal);
+                for (int32_t i = 0; i < arrLen; i++)
+                {
+                    JSValue elem = JS_GetPropertyUint32(ctx, bodyVal, (uint32_t)i);
+                    addBody(elem);
+                    JS_FreeValue(ctx, elem);
+                }
+            }
+            else
+            {
+                addBody(bodyVal);
+            }
+        }
+        JS_FreeValue(ctx, bodyVal);
+
+        JSValue nameVal = get_prop_alias(ctx, filter, "Name", "name");
+        if (JS_IsString(nameVal))
+        {
+            size_t len = 0;
+            const char *s = JS_ToCStringLen(ctx, &len, nameVal);
+            if (s != nullptr)
+            {
+                nameFilter.assign(s, len);
+                JS_FreeCString(ctx, s);
+            }
+        }
+        JS_FreeValue(ctx, nameVal);
+
+        JSValue selVal = get_prop_alias(ctx, filter, "Selector", "selector");
+        if (JS_IsString(selVal))
+        {
+            size_t len = 0;
+            const char *s = JS_ToCStringLen(ctx, &len, selVal);
+            if (s != nullptr)
+            {
+                selector.assign(s, len);
+                JS_FreeCString(ctx, s);
+            }
+        }
+        JS_FreeValue(ctx, selVal);
+    }
+
+    auto *cmd = sc_make(SC_RE_MOBILE_QUERY);
+    cmd->SubTag = 1;
+    cmd->IntA = rangeMin;
+    cmd->IntB = rangeMax;
+    cmd->IntC = (poisoned & 0x3) |
+                ((isHuman & 0x3) << 2) |
+                ((isGhost & 0x3) << 4) |
+                ((warmode & 0x3) << 6) |
+                (checkLos ? (1 << 8) : 0) |
+                (checkIgnore ? (1 << 9) : 0) |
+                ((notorietyMask & 0x7F) << 10);
+    cmd->ListA = bodies;
+    cmd->TextA = str_lower(nameFilter);
+    cmd->TextB = str_lower(selector);
+
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+
+    JSValue result = JS_NewArray(ctx);
+    auto *mobiles = static_cast<vector<ScriptMobileSnapshot> *>(cmd->SharedResult.get());
+    if (!cmd->ResultDropped && mobiles != nullptr)
+    {
+        for (size_t i = 0; i < mobiles->size(); i++)
+        {
+            JS_SetPropertyUint32(
+                ctx, result, (uint32_t)i, mobile_snapshot_to_js(ctx, (*mobiles)[i]));
+        }
+    }
+    delete cmd;
+    return result;
+}
+
+// Mobiles.Select(mobilesArray, selector) -> single Mobile or null
+JSValue re_mobiles_select(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    if (argc < 1 || !JS_IsArray(argv[0]))
+    {
+        return JS_NULL;
+    }
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+    int32_t arrLen = 0;
+    JS_ToInt32(ctx, &arrLen, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    if (arrLen <= 0)
+    {
+        return JS_NULL;
+    }
+
+    const astr_t sel = str_lower(arg_text(ctx, argv, argc, 1, "nearest"));
+    if (sel == "random")
+    {
+        static std::mt19937 rng((unsigned)g_Ticks ^ 0x5A17u);
+        std::uniform_int_distribution<int32_t> dist(0, arrLen - 1);
+        return JS_GetPropertyUint32(ctx, argv[0], (uint32_t)dist(rng));
+    }
+
+    auto propInt = [&](JSValueConst obj, const char *name, int fallback) -> int {
+        JSValue p = JS_GetPropertyStr(ctx, obj, name);
+        int32_t v = fallback;
+        if (JS_IsNumber(p))
+        {
+            JS_ToInt32(ctx, &v, p);
+        }
+        JS_FreeValue(ctx, p);
+        return v;
+    };
+
+    int32_t bestIdx = 0;
+    JSValue bestObj = JS_GetPropertyUint32(ctx, argv[0], 0);
+    int bestDist = propInt(bestObj, "Distance", 100500);
+    int bestHits = propInt(bestObj, "Hits", 0);
+
+    for (int32_t i = 1; i < arrLen; i++)
+    {
+        JSValue cand = JS_GetPropertyUint32(ctx, argv[0], (uint32_t)i);
+        const int candDist = propInt(cand, "Distance", 100500);
+        const int candHits = propInt(cand, "Hits", 0);
+        bool better = false;
+        if (sel == "farthest" || sel == "furthest")
+        {
+            better = candDist > bestDist;
+        }
+        else if (sel == "weakest" || sel == "lowest")
+        {
+            better = (candHits < bestHits) || (candHits == bestHits && candDist < bestDist);
+        }
+        else if (sel == "strongest")
+        {
+            better = (candHits > bestHits) || (candHits == bestHits && candDist < bestDist);
+        }
+        else // nearest / closest / default
+        {
+            better = candDist < bestDist;
+        }
+
+        if (better)
+        {
+            JS_FreeValue(ctx, bestObj);
+            bestObj = cand;
+            bestIdx = i;
+            bestDist = candDist;
+            bestHits = candHits;
+        }
+        else
+        {
+            JS_FreeValue(ctx, cand);
+        }
+    }
+    (void)bestIdx;
+    return bestObj;
+}
+
+JSValue re_mobiles_usemobile(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_MOBILE_QUERY);
+    cmd->SubTag = 2;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_mobiles_waitforstats(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const astr_t serialText = arg_serial_text(ctx, argv, argc, 0, "0");
+    const int timeoutMs = argc >= 2 ? arg_int(ctx, argv, argc, 1, 1000) : 1000;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0);
+
+    bool requested = false;
+    while (true)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            abort_point(ctx, engine);
+            return JS_EXCEPTION;
+        }
+        auto *cmd = sc_make(SC_RE_MOBILE_QUERY);
+        cmd->SubTag = 3;
+        cmd->TextA = serialText;
+        cmd->BoolA = !requested; // request status packet on first check if MaxHits == 0
+        if (!sc_exec_wait(cmd))
+        {
+            delete cmd;
+            return JS_EXCEPTION;
+        }
+        requested = true;
+        const bool dropped = cmd->ResultDropped;
+        const bool ready = !dropped && cmd->ResultBool;
+        const bool exists = !dropped && (cmd->IntA != 0);
+        delete cmd;
+
+        if (ready)
+        {
+            if (!pause_gate(ctx))
+            {
+                return JS_EXCEPTION;
+            }
+            return JS_TRUE;
+        }
+        if (dropped || !exists || std::chrono::steady_clock::now() >= deadline)
+        {
+            break;
+        }
+        if (!re_sleep_ms(ctx, 10))
+        {
+            return JS_EXCEPTION;
+        }
+    }
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_FALSE;
+}
+
+// --- Target.* ---------------------------------------------------------------
+
+JSValue re_target_hastarget(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_HAVE_TARGET);
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, result_int(cmd) != 0);
+}
+
+JSValue re_target_waitfortarget(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const int timeoutMs = argc >= 1 ? arg_int(ctx, argv, argc, 0, 1000) : 1000;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0);
+
+    while (true)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            abort_point(ctx, engine);
+            return JS_EXCEPTION;
+        }
+        auto *cmd = sc_make(SC_HAVE_TARGET);
+        if (!sc_exec_wait(cmd))
+        {
+            delete cmd;
+            return JS_EXCEPTION;
+        }
+        const bool dropped = cmd->ResultDropped;
+        const bool up = !dropped && (cmd->ResultInt != 0);
+        delete cmd;
+
+        if (up)
+        {
+            if (!pause_gate(ctx))
+            {
+                return JS_EXCEPTION;
+            }
+            return JS_TRUE;
+        }
+        if (dropped || std::chrono::steady_clock::now() >= deadline)
+        {
+            break;
+        }
+        if (!re_sleep_ms(ctx, 10))
+        {
+            return JS_EXCEPTION;
+        }
+    }
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_FALSE;
+}
+
+JSValue re_target_execute(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_TARGET);
+    if (argc >= 3)
+    {
+        // Tile target: TargetExecute(x, y, z[, graphic])
+        cmd->SubTag = 1;
+        cmd->IntA = arg_int(ctx, argv, argc, 0, 0);
+        cmd->IntB = arg_int(ctx, argv, argc, 1, 0);
+        cmd->IntC = arg_int(ctx, argv, argc, 2, 0);
+        cmd->UshortA = (uint16_t)arg_u32(ctx, argv, argc, 3, 0);
+    }
+    else
+    {
+        // Object target: TargetExecute(serialOrObj)
+        cmd->SubTag = 0;
+        cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+// magic: 2 = Self, 3 = Last, 4 = Cancel
+JSValue re_target_simple(JSContext *ctx, JSValueConst, int, JSValueConst *, int magic)
+{
+    auto *cmd = sc_make(SC_RE_TARGET);
+    cmd->SubTag = magic;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_target_setlast(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_TARGET);
+    cmd->SubTag = 5;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_target_getlast(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_RE_TARGET);
+    cmd->SubTag = 6;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewUint32(ctx, result_serial(cmd));
+}
+
+JSValue re_target_prompttarget(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const astr_t message = arg_text(ctx, argv, argc, 0, "Select a target");
+    const uint16_t color = (uint16_t)arg_u32(ctx, argv, argc, 1, 0x03B2);
+    const int timeoutMs = argc >= 3 ? arg_int(ctx, argv, argc, 2, 15000) : 15000;
+
+    auto *arm = sc_make(SC_RE_TARGET);
+    arm->SubTag = 7; // arm prompt cursor
+    arm->TextA = message;
+    arm->UshortA = color;
+    if (!sc_exec_wait(arm))
+    {
+        delete arm;
+        return JS_EXCEPTION;
+    }
+    const bool armed = !arm->ResultDropped && arm->ResultBool;
+    const uint32_t savedLast = arm->ResultSerial;
+    delete arm;
+
+    if (!armed)
+    {
+        return JS_NewUint32(ctx, 0);
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0);
+
+    uint32_t picked = 0;
+    while (true)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            auto *cancelCmd = sc_make(SC_RE_TARGET);
+            cancelCmd->SubTag = 9;
+            cancelCmd->SerialA = savedLast;
+            ScriptQueue_ExecCleanup(cancelCmd, 200);
+            delete cancelCmd;
+            abort_point(ctx, engine);
+            return JS_EXCEPTION;
+        }
+        auto *poll = sc_make(SC_RE_TARGET);
+        poll->SubTag = 8;
+        poll->SerialA = savedLast;
+        if (!sc_exec_wait(poll))
+        {
+            delete poll;
+            return JS_EXCEPTION;
+        }
+        const bool dropped = poll->ResultDropped;
+        const bool finished = !dropped && poll->ResultBool;
+        picked = poll->ResultSerial;
+        delete poll;
+
+        if (finished)
+        {
+            if (!pause_gate(ctx))
+            {
+                return JS_EXCEPTION;
+            }
+            return JS_NewUint32(ctx, picked);
+        }
+        if (dropped || std::chrono::steady_clock::now() >= deadline)
+        {
+            auto *cancelCmd = sc_make(SC_RE_TARGET);
+            cancelCmd->SubTag = 9;
+            cancelCmd->SerialA = savedLast;
+            ScriptQueue_Exec(cancelCmd, 200);
+            delete cancelCmd;
+            break;
+        }
+        if (!re_sleep_ms(ctx, 10))
+        {
+            auto *cancelCmd = sc_make(SC_RE_TARGET);
+            cancelCmd->SubTag = 9;
+            cancelCmd->SerialA = savedLast;
+            ScriptQueue_ExecCleanup(cancelCmd, 200);
+            delete cancelCmd;
+            return JS_EXCEPTION;
+        }
+    }
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewUint32(ctx, 0);
+}
+
+// --- Journal.* --------------------------------------------------------------
+
+JSValue re_journal_search(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 0;
+    cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, result_bool(cmd));
+}
+
+JSValue re_journal_searchbyname(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 1;
+    cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    cmd->TextB = arg_text(ctx, argv, argc, 1, "");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, result_bool(cmd));
+}
+
+JSValue re_journal_waitjournal(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const astr_t needle = arg_text(ctx, argv, argc, 0, "");
+    const int timeoutMs = argc >= 2 ? arg_int(ctx, argv, argc, 1, 1000) : 1000;
+    if (needle.empty())
+    {
+        return JS_FALSE;
+    }
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0);
+
+    while (true)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            abort_point(ctx, engine);
+            return JS_EXCEPTION;
+        }
+        auto *cmd = sc_make(SC_RE_JOURNAL);
+        cmd->SubTag = 0;
+        cmd->TextA = needle;
+        if (!sc_exec_wait(cmd))
+        {
+            delete cmd;
+            return JS_EXCEPTION;
+        }
+        const bool dropped = cmd->ResultDropped;
+        const bool found = !dropped && cmd->ResultBool;
+        delete cmd;
+
+        if (found)
+        {
+            if (!pause_gate(ctx))
+            {
+                return JS_EXCEPTION;
+            }
+            return JS_TRUE;
+        }
+        if (dropped || std::chrono::steady_clock::now() >= deadline)
+        {
+            break;
+        }
+        if (!re_sleep_ms(ctx, 10))
+        {
+            return JS_EXCEPTION;
+        }
+    }
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_FALSE;
+}
+
+JSValue re_journal_clear(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 2;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    delete cmd;
+    return JS_UNDEFINED;
+}
+
+JSValue re_journal_gettextbyserial(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 3;
+    cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    cmd->BoolA = argc >= 2 ? arg_bool(ctx, argv, argc, 1, false) : false;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    return string_vector_to_js(ctx, lines);
+}
+
+JSValue re_journal_getlinetext(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 4;
+    cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    cmd->BoolA = argc >= 2 ? arg_bool(ctx, argv, argc, 1, false) : false;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const astr_t text = cmd->ResultDropped ? astr_t() : cmd->ResultText;
+    delete cmd;
+    return JS_NewStringLen(ctx, text.c_str(), text.size());
+}
+
+JSValue re_journal_gettextbycolor(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 5;
+    cmd->UshortA = (uint16_t)arg_u32(ctx, argv, argc, 0, 0);
+    cmd->BoolA = argc >= 2 ? arg_bool(ctx, argv, argc, 1, false) : false;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    return string_vector_to_js(ctx, lines);
+}
+
+JSValue re_journal_gettextbytype(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_JOURNAL);
+    cmd->SubTag = 6;
+    cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    cmd->BoolA = argc >= 2 ? arg_bool(ctx, argv, argc, 1, false) : false;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    return string_vector_to_js(ctx, lines);
+}
+
+// --- Gumps.* ----------------------------------------------------------------
+
+JSValue re_gumps_hasgump(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 0;
+    cmd->SerialA = argc >= 1 ? arg_u32(ctx, argv, argc, 0, 0) : 0;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, result_bool(cmd));
+}
+
+JSValue re_gumps_currentgump(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 1;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    return JS_NewUint32(ctx, result_serial(cmd));
+}
+
+JSValue re_gumps_waitforgump(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const uint32_t gumpId = argc >= 1 ? arg_u32(ctx, argv, argc, 0, 0) : 0;
+    const int timeoutMs = argc >= 2 ? arg_int(ctx, argv, argc, 1, 1000) : 1000;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 0);
+
+    while (true)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            abort_point(ctx, engine);
+            return JS_EXCEPTION;
+        }
+        auto *cmd = sc_make(SC_RE_GUMP);
+        cmd->SubTag = 0;
+        cmd->SerialA = gumpId;
+        if (!sc_exec_wait(cmd))
+        {
+            delete cmd;
+            return JS_EXCEPTION;
+        }
+        const bool dropped = cmd->ResultDropped;
+        const bool present = !dropped && cmd->ResultBool;
+        delete cmd;
+
+        if (present)
+        {
+            if (!pause_gate(ctx))
+            {
+                return JS_EXCEPTION;
+            }
+            return JS_TRUE;
+        }
+        if (dropped || std::chrono::steady_clock::now() >= deadline)
+        {
+            break;
+        }
+        if (!re_sleep_ms(ctx, 10))
+        {
+            return JS_EXCEPTION;
+        }
+    }
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_FALSE;
+}
+
+JSValue re_gumps_sendaction(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 2;
+    cmd->SerialA = arg_u32(ctx, argv, argc, 0, 0); // gumpId (0 = current/last)
+    cmd->IntA = arg_int(ctx, argv, argc, 1, 0);    // buttonId
+
+    // Optional arg 2: switches array [switchId, ...]
+    if (argc >= 3 && JS_IsArray(argv[2]))
+    {
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[2], "length");
+        int32_t arrLen = 0;
+        JS_ToInt32(ctx, &arrLen, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < arrLen; i++)
+        {
+            JSValue elem = JS_GetPropertyUint32(ctx, argv[2], (uint32_t)i);
+            int32_t sw = 0;
+            if (JS_ToInt32(ctx, &sw, elem) == 0)
+            {
+                cmd->ListB.push_back(int_to_text(sw));
+                cmd->ListB.push_back("1");
+            }
+            else
+            {
+                JS_FreeValue(ctx, JS_GetException(ctx));
+            }
+            JS_FreeValue(ctx, elem);
+        }
+    }
+
+    // Optional arg 3 (and 4): text entries as (ids[], texts[]) OR object { id: text }
+    if (argc >= 5 && JS_IsArray(argv[3]) && JS_IsArray(argv[4]))
+    {
+        const vector<astr_t> ids = arg_list(ctx, argv, argc, 3);
+        const vector<astr_t> texts = arg_list(ctx, argv, argc, 4);
+        const size_t pairCount = ids.size() < texts.size() ? ids.size() : texts.size();
+        for (size_t i = 0; i < pairCount; i++)
+        {
+            cmd->ListA.push_back(ids[i]);
+            cmd->ListA.push_back(texts[i]);
+        }
+    }
+    else if (argc >= 4 && JS_IsObject(argv[3]) && !JS_IsNull(argv[3]))
+    {
+        JSPropertyEnum *props = nullptr;
+        uint32_t propCount = 0;
+        if (JS_GetOwnPropertyNames(
+                ctx, &props, &propCount, argv[3], JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0)
+        {
+            for (uint32_t i = 0; i < propCount; i++)
+            {
+                const char *key = JS_AtomToCString(ctx, props[i].atom);
+                JSValue val = JS_GetProperty(ctx, argv[3], props[i].atom);
+                size_t len = 0;
+                const char *txt = JS_ToCStringLen(ctx, &len, val);
+                if (key != nullptr && txt != nullptr)
+                {
+                    cmd->ListA.push_back(key);
+                    cmd->ListA.push_back(astr_t(txt, len));
+                }
+                if (txt != nullptr) JS_FreeCString(ctx, txt);
+                if (key != nullptr) JS_FreeCString(ctx, key);
+                JS_FreeValue(ctx, val);
+                JS_FreeAtom(ctx, props[i].atom);
+            }
+            js_free(ctx, props);
+        }
+    }
+
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+JSValue re_gumps_lastgumpgetlinelist(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 3;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    return string_vector_to_js(ctx, lines);
+}
+
+JSValue re_gumps_lastgumpgetline(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    const int idx = arg_int(ctx, argv, argc, 0, -1);
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 3;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    if (idx < 0 || idx >= (int)lines.size())
+    {
+        return JS_NewString(ctx, "");
+    }
+    return JS_NewStringLen(ctx, lines[idx].c_str(), lines[idx].size());
+}
+
+JSValue re_gumps_lastgumptextexist(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    const astr_t needle = str_lower(arg_text(ctx, argv, argc, 0, ""));
+    if (needle.empty())
+    {
+        return JS_FALSE;
+    }
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 3;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const vector<astr_t> lines = result_list(cmd);
+    for (const astr_t &line : lines)
+    {
+        if (str_lower(line).find(needle) != astr_t::npos)
+        {
+            return JS_TRUE;
+        }
+    }
+    return JS_FALSE;
+}
+
+JSValue re_gumps_closegump(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_GUMP);
+    cmd->SubTag = 4;
+    cmd->SerialA = argc >= 1 ? arg_u32(ctx, argv, argc, 0, 0) : 0;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+// --- Timer.* (Razor Enhanced countdown timers) ------------------------------
+
+// magic: 0 = Create, 1 = Check, 2 = Remaining, 3 = Remove, 4 = Clear
+JSValue re_timer_op(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    auto *cmd = sc_make(SC_RE_TIMER);
+    cmd->SubTag = magic;
+    if (magic != 4)
+    {
+        cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    }
+    if (magic == 0)
+    {
+        cmd->IntA = arg_int(ctx, argv, argc, 1, 0);
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    if (magic == 1 || magic == 3)
+    {
+        return JS_NewBool(ctx, result_bool(cmd));
+    }
+    if (magic == 2)
+    {
+        return JS_NewInt32(ctx, result_int(cmd));
+    }
+    delete cmd;
+    return JS_UNDEFINED;
+}
+
+// --- Misc.* -----------------------------------------------------------------
+
+JSValue re_misc_pause(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    const int ms = arg_int(ctx, argv, argc, 0, 0);
+    if (!re_sleep_ms(ctx, ms))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue re_misc_sendmessage(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_SAY);
+    cmd->SubTag = SAY_PRINT;
+    cmd->TextB = arg_text(ctx, argv, argc, 0, "");
+    if (argc >= 2 && !JS_IsUndefined(argv[1]))
+    {
+        const uint16_t color = (uint16_t)arg_u32(ctx, argv, argc, 1, 0x03B2);
+        cmd->TextA = CAssistant::GraphicToText(color);
+    }
+    else
+    {
+        cmd->TextA = "0x03B2";
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    delete cmd;
+    return JS_UNDEFINED;
+}
+
+JSValue re_misc_nooperation(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    if (!pause_gate(ctx) || !abort_point(ctx, engine))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue re_misc_setsharedvalue(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    const astr_t name = arg_text(ctx, argv, argc, 0, "");
+    if (name.empty())
+    {
+        return JS_UNDEFINED;
+    }
+    astr_t payload = "null";
+    if (argc >= 2 && !JS_IsUndefined(argv[1]))
+    {
+        JSValue json = JS_JSONStringify(ctx, argv[1], JS_UNDEFINED, JS_UNDEFINED);
+        if (!JS_IsException(json) && JS_IsString(json))
+        {
+            size_t len = 0;
+            const char *s = JS_ToCStringLen(ctx, &len, json);
+            if (s != nullptr)
+            {
+                payload.assign(s, len);
+                JS_FreeCString(ctx, s);
+            }
+        }
+        else if (JS_IsException(json))
+        {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            // Fallback: stringify as text
+            const astr_t fallback = arg_text(ctx, argv, argc, 1, "");
+            JSValue strVal = JS_NewStringLen(ctx, fallback.c_str(), fallback.size());
+            JSValue strJson = JS_JSONStringify(ctx, strVal, JS_UNDEFINED, JS_UNDEFINED);
+            if (!JS_IsException(strJson) && JS_IsString(strJson))
+            {
+                size_t len = 0;
+                const char *s = JS_ToCStringLen(ctx, &len, strJson);
+                if (s != nullptr)
+                {
+                    payload.assign(s, len);
+                    JS_FreeCString(ctx, s);
+                }
+            }
+            JS_FreeValue(ctx, strJson);
+            JS_FreeValue(ctx, strVal);
+        }
+        JS_FreeValue(ctx, json);
+    }
+
+    auto *cmd = sc_make(SC_RE_SHARED);
+    cmd->SubTag = 1;
+    cmd->TextA = name;
+    cmd->TextB = payload;
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    delete cmd;
+    return JS_UNDEFINED;
+}
+
+JSValue re_misc_readsharedvalue(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    auto *cmd = sc_make(SC_RE_SHARED);
+    cmd->SubTag = 0;
+    cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    const bool found = !cmd->ResultDropped && cmd->ResultBool;
+    const astr_t payload = cmd->ResultText;
+    delete cmd;
+
+    if (!found)
+    {
+        return JS_NULL;
+    }
+    JSValue parsed = JS_ParseJSON(ctx, payload.c_str(), payload.size(), "<shared>");
+    if (JS_IsException(parsed))
+    {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_NewStringLen(ctx, payload.c_str(), payload.size());
+    }
+    return parsed;
+}
+
+// magic: 2 = CheckSharedValue, 3 = RemoveSharedValue, 4 = AllSharedValue
+JSValue re_misc_shared_op(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    auto *cmd = sc_make(SC_RE_SHARED);
+    cmd->SubTag = magic;
+    if (magic != 4)
+    {
+        cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    if (magic == 4)
+    {
+        const vector<astr_t> keys = result_list(cmd);
+        return string_vector_to_js(ctx, keys);
+    }
+    return JS_NewBool(ctx, result_bool(cmd));
+}
+
+// magic: 0 = IgnoreObject, 1 = UnIgnoreObject, 2 = CheckIgnoreObject, 3 = ClearIgnore
+JSValue re_misc_ignore_op(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    auto *cmd = sc_make(SC_RE_IGNORE);
+    cmd->SubTag = magic;
+    if (magic != 3)
+    {
+        cmd->TextA = arg_serial_text(ctx, argv, argc, 0, "0");
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    if (magic == 2)
+    {
+        return JS_NewBool(ctx, result_bool(cmd));
+    }
+    delete cmd;
+    return JS_UNDEFINED;
+}
+
+JSValue re_misc_currentscriptdir(JSContext *ctx, JSValueConst, int, JSValueConst *)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    if (engine != nullptr && !engine->ScriptDir.empty())
+    {
+        return JS_NewStringLen(ctx, engine->ScriptDir.c_str(), engine->ScriptDir.size());
+    }
+    return JS_NewString(ctx, ".");
+}
+
+// --- Agent facades (AutoLoot, BandageHeal, Organizer, Restock, Scavenger) ---
+
+enum RE_AGENT_OP
+{
+    RE_AG_AUTOLOOT_START = 0,
+    RE_AG_AUTOLOOT_RUNONCE,
+    RE_AG_AUTOLOOT_CHANGELIST,
+    RE_AG_ORGANIZER_START,
+    RE_AG_ORGANIZER_CHANGELIST,
+    RE_AG_RESTOCK_START,
+    RE_AG_RESTOCK_CHANGELIST,
+    RE_AG_SCAVENGER_START,
+    RE_AG_SCAVENGER_CHANGELIST,
+    RE_AG_SCAVENGER_RESETIGNORE,
+    RE_AG_INVENTORY_STOP,
+    RE_AG_INVENTORY_STATUS,
+    RE_AG_BANDAGE_START,
+    RE_AG_BANDAGE_STOP,
+    RE_AG_BANDAGE_STATUS
+};
+
+JSValue re_agent_op(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv, int magic)
+{
+    auto *cmd = sc_make(SC_RE_AGENT);
+    cmd->SubTag = magic;
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0]))
+    {
+        cmd->TextA = arg_text(ctx, argv, argc, 0, "");
+    }
+    if (!sc_exec_wait(cmd))
+    {
+        delete cmd;
+        return JS_EXCEPTION;
+    }
+    if (magic == RE_AG_AUTOLOOT_CHANGELIST || magic == RE_AG_ORGANIZER_CHANGELIST ||
+        magic == RE_AG_RESTOCK_CHANGELIST || magic == RE_AG_SCAVENGER_CHANGELIST ||
+        magic == RE_AG_SCAVENGER_RESETIGNORE)
+    {
+        delete cmd;
+        return JS_UNDEFINED;
+    }
+    const bool ok = result_bool(cmd);
+    if (!pause_gate(ctx))
+    {
+        return JS_EXCEPTION;
+    }
+    return JS_NewBool(ctx, ok);
+}
+
+// --- PathFinding / Route helper ---------------------------------------------
+
+struct ScriptWaypoint
+{
+    int X{ 0 };
+    int Y{ 0 };
+    int Z{ 0 };
+    bool HasZ{ false };
+};
+
+bool parse_waypoint(JSContext *ctx, JSValueConst val, ScriptWaypoint &out)
+{
+    if (JS_IsArray(val))
+    {
+        JSValue xVal = JS_GetPropertyUint32(ctx, val, 0);
+        JSValue yVal = JS_GetPropertyUint32(ctx, val, 1);
+        JSValue zVal = JS_GetPropertyUint32(ctx, val, 2);
+        int32_t x = 0, y = 0, z = 0;
+        const bool ok = JS_IsNumber(xVal) && JS_IsNumber(yVal) &&
+            JS_ToInt32(ctx, &x, xVal) == 0 && JS_ToInt32(ctx, &y, yVal) == 0;
+        if (ok)
+        {
+            out.X = x;
+            out.Y = y;
+            if (JS_IsNumber(zVal) && JS_ToInt32(ctx, &z, zVal) == 0)
+            {
+                out.Z = z;
+                out.HasZ = true;
+            }
+        }
+        JS_FreeValue(ctx, xVal);
+        JS_FreeValue(ctx, yVal);
+        JS_FreeValue(ctx, zVal);
+        return ok;
+    }
+    if (JS_IsObject(val) && !JS_IsNull(val))
+    {
+        JSValue xVal = get_prop_alias(ctx, val, "X", "x");
+        JSValue yVal = get_prop_alias(ctx, val, "Y", "y");
+        JSValue zVal = get_prop_alias(ctx, val, "Z", "z");
+        int32_t x = 0, y = 0, z = 0;
+        const bool ok = JS_IsNumber(xVal) && JS_IsNumber(yVal) &&
+            JS_ToInt32(ctx, &x, xVal) == 0 && JS_ToInt32(ctx, &y, yVal) == 0;
+        if (ok)
+        {
+            out.X = x;
+            out.Y = y;
+            if (JS_IsNumber(zVal) && JS_ToInt32(ctx, &z, zVal) == 0)
+            {
+                out.Z = z;
+                out.HasZ = true;
+            }
+        }
+        JS_FreeValue(ctx, xVal);
+        JS_FreeValue(ctx, yVal);
+        JS_FreeValue(ctx, zVal);
+        return ok;
+    }
+    return false;
+}
+
+// Walk to one waypoint and wait until arrival, stuck/retry limit, timeout, or interrupt.
+// Returns 1 = arrived, 0 = failed/timed out, -1 = interrupted (JS_EXCEPTION already raised).
+int run_single_waypoint(
+    JSContext *ctx,
+    const ScriptWaypoint &wp,
+    int tolerance,
+    int timeoutMs,
+    bool stopIfStuck,
+    int maxRetry)
+{
+    CScriptEngine *engine = (CScriptEngine *)JS_GetContextOpaque(ctx);
+    const int effTol = tolerance >= 0 ? tolerance : 1;
+    const int effTimeout = timeoutMs > 0 ? timeoutMs : 15000;
+    const int effRetry = maxRetry > 0 ? maxRetry : 1;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(effTimeout);
+
+    auto stopWalk = [&]() {
+        auto *stopCmd = sc_make(SC_RE_WALK);
+        stopCmd->SubTag = 3;
+        ScriptQueue_ExecCleanup(stopCmd, 200);
+        delete stopCmd;
+    };
+
+    for (int attempt = 0; attempt < effRetry; attempt++)
+    {
+        if (engine != nullptr && engine->TerminateRequested())
+        {
+            stopWalk();
+            abort_point(ctx, engine);
+            return -1;
+        }
+
+        // Already at waypoint?
+        {
+            auto *check = sc_make(SC_RE_WALK);
+            check->SubTag = 2;
+            check->IntA = wp.X;
+            check->IntB = wp.Y;
+            if (!sc_exec_wait(check))
+            {
+                delete check;
+                return -1;
+            }
+            const int dist = check->ResultDropped ? 100500 : check->ResultInt;
+            delete check;
+            if (dist <= effTol)
+            {
+                return 1;
+            }
+        }
+
+        auto *startCmd = sc_make(SC_RE_WALK);
+        startCmd->SubTag = 1;
+        startCmd->IntA = wp.X;
+        startCmd->IntB = wp.Y;
+        startCmd->IntC = wp.Z;
+        startCmd->BoolA = wp.HasZ;
+        startCmd->UshortA = (uint16_t)effTol;
+        if (!sc_exec_wait(startCmd))
+        {
+            delete startCmd;
+            return -1;
+        }
+        const bool started = result_bool(startCmd);
+        if (!started)
+        {
+            if (stopIfStuck || std::chrono::steady_clock::now() >= deadline)
+            {
+                return 0;
+            }
+            if (!re_sleep_ms(ctx, 50))
+            {
+                return -1;
+            }
+            continue;
+        }
+
+        while (true)
+        {
+            if (engine != nullptr && engine->TerminateRequested())
+            {
+                stopWalk();
+                abort_point(ctx, engine);
+                return -1;
+            }
+            auto *check = sc_make(SC_RE_WALK);
+            check->SubTag = 2;
+            check->IntA = wp.X;
+            check->IntB = wp.Y;
+            if (!sc_exec_wait(check))
+            {
+                delete check;
+                return -1;
+            }
+            const bool dropped = check->ResultDropped;
+            const bool walking = !dropped && check->ResultBool;
+            const int dist = dropped ? 100500 : check->ResultInt;
+            delete check;
+
+            if (dist <= effTol)
+            {
+                return 1;
+            }
+            if (dropped || std::chrono::steady_clock::now() >= deadline)
+            {
+                stopWalk();
+                return 0;
+            }
+            if (!walking)
+            {
+                // Auto-walk stopped short of target
+                if (stopIfStuck)
+                {
+                    return 0;
+                }
+                break; // retry outer attempt
+            }
+            if (!re_sleep_ms(ctx, 20))
+            {
+                stopWalk();
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+JSValue pathfinding_route_factory(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    JSValue route = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, route, "X", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, route, "Y", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, route, "Z", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, route, "Distance", JS_NewInt32(ctx, 1));
+    JS_SetPropertyStr(ctx, route, "StopIfStuck", JS_FALSE);
+    JS_SetPropertyStr(ctx, route, "MaxRetry", JS_NewInt32(ctx, 3));
+    JS_SetPropertyStr(ctx, route, "Timeout", JS_NewInt32(ctx, 15000));
+    JSValue wps = JS_NewArray(ctx);
+    if (argc >= 1 && JS_IsArray(argv[0]))
+    {
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+        int32_t arrLen = 0;
+        JS_ToInt32(ctx, &arrLen, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < arrLen; i++)
+        {
+            JSValue elem = JS_GetPropertyUint32(ctx, argv[0], (uint32_t)i);
+            JS_SetPropertyUint32(ctx, wps, (uint32_t)i, elem);
+        }
+    }
+    JS_SetPropertyStr(ctx, route, "Waypoints", wps);
+    return route;
+}
+
+JSValue pathfinding_go_or_route(JSContext *ctx, JSValueConst, int argc, JSValueConst *argv)
+{
+    if (argc < 1)
+    {
+        return JS_FALSE;
+    }
+
+    vector<ScriptWaypoint> waypoints;
+    int tolerance = 1;
+    int timeoutMs = 15000;
+    bool stopIfStuck = false;
+    int maxRetry = 3;
+
+    auto readOptions = [&](JSValueConst opts) {
+        if (!JS_IsObject(opts) || JS_IsNull(opts))
+        {
+            return;
+        }
+        JSValue tolVal = get_prop_alias(ctx, opts, "Distance", "Tolerance", "tolerance");
+        if (JS_IsNumber(tolVal))
+        {
+            int32_t v = 1;
+            if (JS_ToInt32(ctx, &v, tolVal) == 0) tolerance = v;
+        }
+        JS_FreeValue(ctx, tolVal);
+
+        JSValue toVal = get_prop_alias(ctx, opts, "Timeout", "timeout");
+        if (JS_IsNumber(toVal))
+        {
+            int32_t v = 15000;
+            if (JS_ToInt32(ctx, &v, toVal) == 0) timeoutMs = v;
+        }
+        JS_FreeValue(ctx, toVal);
+
+        JSValue stuckVal = get_prop_alias(ctx, opts, "StopIfStuck", "stopIfStuck");
+        if (!JS_IsUndefined(stuckVal))
+        {
+            stopIfStuck = JS_ToBool(ctx, stuckVal) != 0;
+        }
+        JS_FreeValue(ctx, stuckVal);
+
+        JSValue retryVal = get_prop_alias(ctx, opts, "MaxRetry", "maxRetry");
+        if (JS_IsNumber(retryVal))
+        {
+            int32_t v = 3;
+            if (JS_ToInt32(ctx, &v, retryVal) == 0) maxRetry = v;
+        }
+        JS_FreeValue(ctx, retryVal);
+    };
+
+    if (JS_IsNumber(argv[0]) && argc >= 2 && JS_IsNumber(argv[1]))
+    {
+        ScriptWaypoint wp;
+        wp.X = arg_int(ctx, argv, argc, 0, 0);
+        wp.Y = arg_int(ctx, argv, argc, 1, 0);
+        if (argc >= 3 && JS_IsNumber(argv[2]))
+        {
+            wp.Z = arg_int(ctx, argv, argc, 2, 0);
+            wp.HasZ = true;
+            if (argc >= 4) readOptions(argv[3]);
+        }
+        else if (argc >= 3 && JS_IsObject(argv[2]))
+        {
+            readOptions(argv[2]);
+        }
+        waypoints.push_back(wp);
+    }
+    else if (JS_IsArray(argv[0]))
+    {
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+        int32_t arrLen = 0;
+        JS_ToInt32(ctx, &arrLen, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < arrLen; i++)
+        {
+            JSValue elem = JS_GetPropertyUint32(ctx, argv[0], (uint32_t)i);
+            ScriptWaypoint wp;
+            if (parse_waypoint(ctx, elem, wp))
+            {
+                waypoints.push_back(wp);
+            }
+            JS_FreeValue(ctx, elem);
+        }
+        if (argc >= 2) readOptions(argv[1]);
+    }
+    else if (JS_IsObject(argv[0]) && !JS_IsNull(argv[0]))
+    {
+        readOptions(argv[0]);
+        if (argc >= 2) readOptions(argv[1]);
+
+        JSValue wpsVal = get_prop_alias(ctx, argv[0], "Waypoints", "waypoints");
+        if (JS_IsArray(wpsVal))
+        {
+            JSValue lenVal = JS_GetPropertyStr(ctx, wpsVal, "length");
+            int32_t arrLen = 0;
+            JS_ToInt32(ctx, &arrLen, lenVal);
+            JS_FreeValue(ctx, lenVal);
+            for (int32_t i = 0; i < arrLen; i++)
+            {
+                JSValue elem = JS_GetPropertyUint32(ctx, wpsVal, (uint32_t)i);
+                ScriptWaypoint wp;
+                if (parse_waypoint(ctx, elem, wp))
+                {
+                    waypoints.push_back(wp);
+                }
+                JS_FreeValue(ctx, elem);
+            }
+        }
+        JS_FreeValue(ctx, wpsVal);
+
+        // Single-target Razor Enhanced Route object: { X, Y, ... } with empty Waypoints
+        if (waypoints.empty())
+        {
+            ScriptWaypoint wp;
+            if (parse_waypoint(ctx, argv[0], wp))
+            {
+                waypoints.push_back(wp);
+            }
+        }
+    }
+
+    if (waypoints.empty())
+    {
+        return JS_FALSE;
+    }
+
+    for (const ScriptWaypoint &wp : waypoints)
+    {
+        const int rc = run_single_waypoint(ctx, wp, tolerance, timeoutMs, stopIfStuck, maxRetry);
+        if (rc < 0)
+        {
+            return JS_EXCEPTION;
+        }
+        if (rc == 0)
+        {
+            return JS_FALSE;
+        }
+    }
+    return JS_TRUE;
+}
+
+} // namespace (Razor Enhanced shared game script API)
+
+// ---------------------------------------------------------------------------
 // registration (the CScriptHandle::RunEngine global-object block)
 // ---------------------------------------------------------------------------
 
@@ -3245,6 +6018,21 @@ const JSCFunctionListEntry CLIENT_FUNCS[] = {
     JS_CFUNC_MAGIC_DEF("MoveItem", 0, jsn_moveitem, MK_MOVE_ITEM),
     JS_CFUNC_MAGIC_DEF("Drop", 0, jsn_moveitem, MK_DROP),
     JS_CFUNC_MAGIC_DEF("DropHere", 0, jsn_moveitem, MK_DROP_HERE),
+    JS_CFUNC_DEF("RunInventoryAgent", 2, jsn_runinventoryagent),
+    JS_CFUNC_DEF("InventoryAgentBusy", 0, jsn_inventoryagentbusy),
+    JS_CFUNC_MAGIC_DEF("StopInventoryAgent", 0, jsn_inventory_control, 2),
+    JS_CFUNC_MAGIC_DEF("AutoLootOnce", 1, jsn_inventory_control, 3),
+    JS_CFUNC_MAGIC_DEF("StartDamageMeter", 0, jsn_native_agent, NativeDamageStart),
+    JS_CFUNC_MAGIC_DEF("PauseDamageMeter", 0, jsn_native_agent, NativeDamagePause),
+    JS_CFUNC_MAGIC_DEF("ResumeDamageMeter", 0, jsn_native_agent, NativeDamageResume),
+    JS_CFUNC_MAGIC_DEF("StopDamageMeter", 0, jsn_native_agent, NativeDamageStop),
+    JS_CFUNC_MAGIC_DEF("DamageMeterRunning", 0, jsn_native_agent, NativeDamageRunning),
+    JS_CFUNC_MAGIC_DEF("GetRecordedDamage", 1, jsn_native_agent, NativeDamageGet),
+    JS_CFUNC_MAGIC_DEF("StartBandageHeal", 0, jsn_native_agent, NativeBandageStart),
+    JS_CFUNC_MAGIC_DEF("StopBandageHeal", 0, jsn_native_agent, NativeBandageStop),
+    JS_CFUNC_MAGIC_DEF("BandageHealRunning", 0, jsn_native_agent, NativeBandageRunning),
+    JS_CFUNC_MAGIC_DEF("ExecuteRazorHotkey", 1, jsn_native_agent, NativeRazorHotkey),
+    JS_CFUNC_MAGIC_DEF("RunTargetPreset", 2, jsn_native_agent, NativeTargetPreset),
     JS_CFUNC_DEF("LoadScript", 1, jsn_loadscript),
     JS_CFUNC_DEF("Exec", 1, jsn_exec),
     JS_CFUNC_DEF("ScriptRunning", 1, jsn_scriptrunning),
@@ -3254,6 +6042,7 @@ const JSCFunctionListEntry CLIENT_FUNCS[] = {
     JS_CFUNC_DEF("AssistVersion", 0, jsn_assistversion),
     JS_CFUNC_DEF("Connected", 0, jsn_connected),
     JS_CFUNC_MAGIC_DEF("ClientLastTarget", 0, jsn_lastserial, 0),
+    JS_CFUNC_DEF("SetLastTarget", 1, jsn_setlasttarget),
     JS_CFUNC_MAGIC_DEF("ClientLastAttack", 0, jsn_lastserial, 1),
     JS_CFUNC_MAGIC_DEF("TargetSystemSerial", 0, jsn_lastserial, 2),
     JS_CFUNC_MAGIC_DEF("GetLastTargetPosition", 0, jsn_lastpos, 0),
@@ -3472,7 +6261,8 @@ const JSCFunctionListEntry PLAYER_FUNCS[] = {
     PLAYER_FIELD_DEF("YellowHits", OF_BOOL_YELLOWHITS),
     PLAYER_FIELD_DEF("IgnoreCharacters", OF_BOOL_IGNORECHARS),
     PLAYER_FIELD_DEF("Locked", OF_BOOL_LOCKED),
-    PLAYER_FIELD_DEF("WarMode", OF_BOOL_WARMODE),
+    JS_CFUNC_DEF("WarMode", 0, player_warmode),
+    JS_CFUNC_DEF("SetWarMode", 1, player_warmode),
     PLAYER_FIELD_DEF("Hidden", OF_BOOL_HIDDEN),
     PLAYER_FIELD_DEF("IsHuman", OF_BOOL_ISHUMAN),
     PLAYER_FIELD_DEF("IsPlayer", OF_BOOL_ISPLAYER),
@@ -3480,12 +6270,30 @@ const JSCFunctionListEntry PLAYER_FUNCS[] = {
     PLAYER_FIELD_DEF("Layer", OF_INT_LAYER),
     PLAYER_FIELD_DEF("IsMulti", OF_BOOL_ISMULTI),
     PLAYER_FIELD_DEF("EquipLayer", OF_INT_EQUIPLAYER),
-    JS_CFUNC_MAGIC_DEF("Hits", 0, obj_get_percent, OF_INT_HITS),
+    JS_CFUNC_MAGIC_DEF("Hits", 0, player_get_stat, OF_INT_HITS),
+    PLAYER_FIELD_DEF("HP", OF_INT_HITS),
+    PLAYER_FIELD_DEF("HitsValue", OF_INT_HITS),
     PLAYER_FIELD_DEF("MaxHits", OF_INT_MAXHITS),
-    JS_CFUNC_MAGIC_DEF("Mana", 0, obj_get_percent, OF_INT_MANA),
+    PLAYER_FIELD_DEF("HitsMax", OF_INT_MAXHITS),
+    JS_CFUNC_MAGIC_DEF("Mana", 0, player_get_stat, OF_INT_MANA),
+    PLAYER_FIELD_DEF("ManaValue", OF_INT_MANA),
     PLAYER_FIELD_DEF("MaxMana", OF_INT_MAXMANA),
-    JS_CFUNC_MAGIC_DEF("Stam", 0, obj_get_percent, OF_INT_STAM),
+    PLAYER_FIELD_DEF("ManaMax", OF_INT_MAXMANA),
+    JS_CFUNC_MAGIC_DEF("Stam", 0, player_get_stat, OF_INT_STAM),
+    PLAYER_FIELD_DEF("StamValue", OF_INT_STAM),
     PLAYER_FIELD_DEF("MaxStam", OF_INT_MAXSTAM),
+    PLAYER_FIELD_DEF("StamMax", OF_INT_MAXSTAM),
+    PLAYER_FIELD_DEF("Mortaled", OF_BOOL_YELLOWHITS),
+    PLAYER_FIELD_DEF("Paralyzed", OF_BOOL_FROZEN),
+    PLAYER_FIELD_DEF("Paralized", OF_BOOL_FROZEN),
+    JS_CFUNC_DEF("Position", 0, player_position),
+    JS_CFUNC_DEF("Backpack", 0, player_backpack),
+    JS_CFUNC_DEF("GetLayerItem", 1, player_getlayeritem),
+    JS_CFUNC_DEF("BuffsExist", 1, jsn_buffexists),
+    JS_CFUNC_DEF("UseSkill", 1, jsn_useskill),
+    JS_CFUNC_MAGIC_DEF("Walk", 1, player_walk_run, 0),
+    JS_CFUNC_MAGIC_DEF("Run", 1, player_walk_run, 1),
+    JS_CFUNC_DEF("PathFindTo", 2, pathfinding_pathfindto),
     PLAYER_FIELD_DEF("Female", OF_BOOL_FEMALE),
     PLAYER_FIELD_DEF("Race", OF_INT_RACE),
     PLAYER_FIELD_DEF("Direction", OF_INT_DIRECTION),
@@ -3502,7 +6310,8 @@ const JSCFunctionListEntry PLAYER_FUNCS[] = {
     PLAYER_FIELD_DEF("LockStrState", OF_INT_LOCKSTR),
     PLAYER_FIELD_DEF("LockIntState", OF_INT_LOCKINT),
     PLAYER_FIELD_DEF("LockDexState", OF_INT_LOCKDEX),
-    JS_CFUNC_MAGIC_DEF("Weight", 0, obj_get_percent, OF_INT_WEIGHT),
+    JS_CFUNC_MAGIC_DEF("Weight", 0, player_get_stat, OF_INT_WEIGHT),
+    PLAYER_FIELD_DEF("WeightValue", OF_INT_WEIGHT),
     PLAYER_FIELD_DEF("MaxWeight", OF_INT_MAXWEIGHT),
     PLAYER_FIELD_DEF("Armor", OF_INT_ARMOR),
     PLAYER_FIELD_DEF("Gold", OF_INT_GOLD),
@@ -3608,6 +6417,141 @@ const JSCFunctionListEntry CLIENTMACRO_PROTOTYPE[] = {
     JS_CFUNC_DEF("Play", 0, macro_play),
 };
 
+// --- Razor Enhanced-compatible namespace tables -----------------------------
+
+const JSCFunctionListEntry ITEMS_FUNCS[] = {
+    JS_CFUNC_DEF("FindBySerial", 1, re_items_findbyserial),
+    JS_CFUNC_MAGIC_DEF("FindByID", 1, re_items_findbyid, 0),
+    JS_CFUNC_MAGIC_DEF("FindAllByID", 1, re_items_findbyid, 1),
+    JS_CFUNC_DEF("BackpackCount", 1, re_items_backpackcount),
+    JS_CFUNC_DEF("UseItem", 1, re_items_useitem),
+    JS_CFUNC_DEF("UseItemByID", 1, re_items_useitembyid),
+    JS_CFUNC_DEF("Move", 2, re_items_move),
+    JS_CFUNC_DEF("MoveOnGround", 4, re_items_moveonground),
+    JS_CFUNC_DEF("GetPropValue", 2, re_items_getpropvalue),
+    JS_CFUNC_DEF("GetPropStringList", 1, re_items_getpropstringlist),
+    JS_CFUNC_DEF("WaitForContents", 1, re_items_waitforcontents),
+};
+
+const JSCFunctionListEntry MOBILES_FUNCS[] = {
+    JS_CFUNC_DEF("FindBySerial", 1, re_mobiles_findbyserial),
+    JS_CFUNC_DEF("Filter", 0, re_mobiles_filter_factory),
+    JS_CFUNC_DEF("ApplyFilter", 1, re_mobiles_applyfilter),
+    JS_CFUNC_DEF("Select", 2, re_mobiles_select),
+    JS_CFUNC_DEF("UseMobile", 1, re_mobiles_usemobile),
+    JS_CFUNC_DEF("WaitForStats", 1, re_mobiles_waitforstats),
+};
+
+const JSCFunctionListEntry TARGET_FUNCS[] = {
+    JS_CFUNC_DEF("HasTarget", 0, re_target_hastarget),
+    JS_CFUNC_DEF("WaitForTarget", 1, re_target_waitfortarget),
+    JS_CFUNC_DEF("TargetExecute", 1, re_target_execute),
+    JS_CFUNC_MAGIC_DEF("Self", 0, re_target_simple, 2),
+    JS_CFUNC_MAGIC_DEF("Last", 0, re_target_simple, 3),
+    JS_CFUNC_MAGIC_DEF("Cancel", 0, re_target_simple, 4),
+    JS_CFUNC_DEF("SetLast", 1, re_target_setlast),
+    JS_CFUNC_DEF("GetLast", 0, re_target_getlast),
+    JS_CFUNC_DEF("PromptTarget", 0, re_target_prompttarget),
+};
+
+const JSCFunctionListEntry JOURNAL_FUNCS[] = {
+    JS_CFUNC_DEF("Search", 1, re_journal_search),
+    JS_CFUNC_DEF("SearchByName", 2, re_journal_searchbyname),
+    JS_CFUNC_DEF("WaitJournal", 2, re_journal_waitjournal),
+    JS_CFUNC_DEF("Clear", 0, re_journal_clear),
+    JS_CFUNC_DEF("GetTextBySerial", 1, re_journal_gettextbyserial),
+    JS_CFUNC_DEF("GetLineText", 1, re_journal_getlinetext),
+    JS_CFUNC_DEF("GetTextByColor", 1, re_journal_gettextbycolor),
+    JS_CFUNC_DEF("GetTextByType", 1, re_journal_gettextbytype),
+};
+
+const JSCFunctionListEntry GUMPS_FUNCS[] = {
+    JS_CFUNC_DEF("HasGump", 0, re_gumps_hasgump),
+    JS_CFUNC_DEF("CurrentGump", 0, re_gumps_currentgump),
+    JS_CFUNC_DEF("WaitForGump", 2, re_gumps_waitforgump),
+    JS_CFUNC_DEF("SendAction", 2, re_gumps_sendaction),
+    JS_CFUNC_DEF("SendAdvancedAction", 3, re_gumps_sendaction),
+    JS_CFUNC_DEF("LastGumpGetLineList", 0, re_gumps_lastgumpgetlinelist),
+    JS_CFUNC_DEF("LastGumpGetLine", 1, re_gumps_lastgumpgetline),
+    JS_CFUNC_DEF("LastGumpTextExist", 1, re_gumps_lastgumptextexist),
+    JS_CFUNC_DEF("CloseGump", 0, re_gumps_closegump),
+};
+
+const JSCFunctionListEntry TIMER_FUNCS[] = {
+    JS_CFUNC_MAGIC_DEF("Create", 2, re_timer_op, 0),
+    JS_CFUNC_MAGIC_DEF("Check", 1, re_timer_op, 1),
+    JS_CFUNC_MAGIC_DEF("Remaining", 1, re_timer_op, 2),
+    JS_CFUNC_MAGIC_DEF("Remove", 1, re_timer_op, 3),
+    JS_CFUNC_MAGIC_DEF("Clear", 0, re_timer_op, 4),
+};
+
+const JSCFunctionListEntry MISC_FUNCS[] = {
+    JS_CFUNC_DEF("Pause", 1, re_misc_pause),
+    JS_CFUNC_DEF("SendMessage", 1, re_misc_sendmessage),
+    JS_CFUNC_DEF("NoOperation", 0, re_misc_nooperation),
+    JS_CFUNC_DEF("ReadSharedValue", 1, re_misc_readsharedvalue),
+    JS_CFUNC_DEF("SetSharedValue", 2, re_misc_setsharedvalue),
+    JS_CFUNC_MAGIC_DEF("CheckSharedValue", 1, re_misc_shared_op, 2),
+    JS_CFUNC_MAGIC_DEF("RemoveSharedValue", 1, re_misc_shared_op, 3),
+    JS_CFUNC_MAGIC_DEF("AllSharedValue", 0, re_misc_shared_op, 4),
+    JS_CFUNC_MAGIC_DEF("IgnoreObject", 1, re_misc_ignore_op, 0),
+    JS_CFUNC_MAGIC_DEF("UnIgnoreObject", 1, re_misc_ignore_op, 1),
+    JS_CFUNC_MAGIC_DEF("CheckIgnoreObject", 1, re_misc_ignore_op, 2),
+    JS_CFUNC_MAGIC_DEF("ClearIgnore", 0, re_misc_ignore_op, 3),
+    JS_CFUNC_DEF("CurrentScriptDirectory", 0, re_misc_currentscriptdir),
+    JS_CFUNC_DEF("ScriptStatus", 1, jsn_scriptrunning),
+};
+
+const JSCFunctionListEntry AUTOLOOT_FUNCS[] = {
+    JS_CFUNC_MAGIC_DEF("Start", 0, re_agent_op, RE_AG_AUTOLOOT_START),
+    JS_CFUNC_MAGIC_DEF("Stop", 0, re_agent_op, RE_AG_INVENTORY_STOP),
+    JS_CFUNC_MAGIC_DEF("Status", 0, re_agent_op, RE_AG_INVENTORY_STATUS),
+    JS_CFUNC_MAGIC_DEF("RunOnce", 0, re_agent_op, RE_AG_AUTOLOOT_RUNONCE),
+    JS_CFUNC_MAGIC_DEF("ChangeList", 1, re_agent_op, RE_AG_AUTOLOOT_CHANGELIST),
+};
+
+const JSCFunctionListEntry BANDAGEHEAL_FUNCS[] = {
+    JS_CFUNC_MAGIC_DEF("Start", 0, re_agent_op, RE_AG_BANDAGE_START),
+    JS_CFUNC_MAGIC_DEF("Stop", 0, re_agent_op, RE_AG_BANDAGE_STOP),
+    JS_CFUNC_MAGIC_DEF("Status", 0, re_agent_op, RE_AG_BANDAGE_STATUS),
+};
+
+const JSCFunctionListEntry ORGANIZER_FUNCS[] = {
+    JS_CFUNC_MAGIC_DEF("FStart", 0, re_agent_op, RE_AG_ORGANIZER_START),
+    JS_CFUNC_MAGIC_DEF("Start", 0, re_agent_op, RE_AG_ORGANIZER_START),
+    JS_CFUNC_MAGIC_DEF("FStop", 0, re_agent_op, RE_AG_INVENTORY_STOP),
+    JS_CFUNC_MAGIC_DEF("Stop", 0, re_agent_op, RE_AG_INVENTORY_STOP),
+    JS_CFUNC_MAGIC_DEF("Status", 0, re_agent_op, RE_AG_INVENTORY_STATUS),
+    JS_CFUNC_MAGIC_DEF("ChangeList", 1, re_agent_op, RE_AG_ORGANIZER_CHANGELIST),
+};
+
+const JSCFunctionListEntry RESTOCK_FUNCS[] = {
+    JS_CFUNC_MAGIC_DEF("FStart", 0, re_agent_op, RE_AG_RESTOCK_START),
+    JS_CFUNC_MAGIC_DEF("Start", 0, re_agent_op, RE_AG_RESTOCK_START),
+    JS_CFUNC_MAGIC_DEF("FStop", 0, re_agent_op, RE_AG_INVENTORY_STOP),
+    JS_CFUNC_MAGIC_DEF("Stop", 0, re_agent_op, RE_AG_INVENTORY_STOP),
+    JS_CFUNC_MAGIC_DEF("Status", 0, re_agent_op, RE_AG_INVENTORY_STATUS),
+    JS_CFUNC_MAGIC_DEF("ChangeList", 1, re_agent_op, RE_AG_RESTOCK_CHANGELIST),
+};
+
+const JSCFunctionListEntry SCAVENGER_FUNCS[] = {
+    JS_CFUNC_MAGIC_DEF("Start", 0, re_agent_op, RE_AG_SCAVENGER_START),
+    JS_CFUNC_MAGIC_DEF("Stop", 0, re_agent_op, RE_AG_INVENTORY_STOP),
+    JS_CFUNC_MAGIC_DEF("Status", 0, re_agent_op, RE_AG_INVENTORY_STATUS),
+    JS_CFUNC_MAGIC_DEF("RunOnce", 0, re_agent_op, RE_AG_SCAVENGER_START),
+    JS_CFUNC_MAGIC_DEF("ResetIgnore", 0, re_agent_op, RE_AG_SCAVENGER_RESETIGNORE),
+    JS_CFUNC_MAGIC_DEF("ChangeList", 1, re_agent_op, RE_AG_SCAVENGER_CHANGELIST),
+};
+
+const JSCFunctionListEntry PATHFINDING_FUNCS[] = {
+    JS_CFUNC_DEF("Go", 1, pathfinding_go_or_route),
+    JS_CFUNC_DEF("PathFindTo", 2, pathfinding_pathfindto),
+    JS_CFUNC_DEF("Route", 0, pathfinding_route_factory),
+    JS_CFUNC_DEF("RunRoute", 1, pathfinding_go_or_route),
+    JS_CFUNC_MAGIC_DEF("IsWalking", 0, jsn_move, 3),
+    JS_CFUNC_DEF("Stop", 0, jsn_stopwalking),
+};
+
 // --- public entry points (apiscript.h) --------------------------------------
 
 } // namespace <executor helpers>
@@ -3705,10 +6649,25 @@ const vector<XA_API_COMPLETION> &ScriptAPI_CompletionList()
     addTable("GumpHook", GUMPHOOK_PROTOTYPE, count_of(GUMPHOOK_PROTOTYPE));
     addTable("ClientMacro", CLIENTMACRO_PROTOTYPE, count_of(CLIENTMACRO_PROTOTYPE));
     addTable("File", FILE_PROTOTYPE, count_of(FILE_PROTOTYPE));
+    addTable("Items", ITEMS_FUNCS, count_of(ITEMS_FUNCS));
+    addTable("Mobiles", MOBILES_FUNCS, count_of(MOBILES_FUNCS));
+    addTable("Target", TARGET_FUNCS, count_of(TARGET_FUNCS));
+    addTable("Journal", JOURNAL_FUNCS, count_of(JOURNAL_FUNCS));
+    addTable("Gumps", GUMPS_FUNCS, count_of(GUMPS_FUNCS));
+    addTable("Timer", TIMER_FUNCS, count_of(TIMER_FUNCS));
+    addTable("Misc", MISC_FUNCS, count_of(MISC_FUNCS));
+    addTable("AutoLoot", AUTOLOOT_FUNCS, count_of(AUTOLOOT_FUNCS));
+    addTable("BandageHeal", BANDAGEHEAL_FUNCS, count_of(BANDAGEHEAL_FUNCS));
+    addTable("Organizer", ORGANIZER_FUNCS, count_of(ORGANIZER_FUNCS));
+    addTable("Restock", RESTOCK_FUNCS, count_of(RESTOCK_FUNCS));
+    addTable("Scavenger", SCAVENGER_FUNCS, count_of(SCAVENGER_FUNCS));
+    addTable("PathFinding", PATHFINDING_FUNCS, count_of(PATHFINDING_FUNCS));
 
     // the global identifiers: the API objects themselves, the sentinel serial
     // aliases (plain strings resolved by the API) and ScriptName
-    static const char *const OBJECTS[] = { "Client", "Player", "TextWindow", "SelectedTile" };
+    static const char *const OBJECTS[] = { "Client", "Player", "TextWindow", "SelectedTile",
+        "Items", "Mobiles", "Target", "Journal", "Gumps", "Timer", "Misc", "AutoLoot",
+        "BandageHeal", "Organizer", "Restock", "Scavenger", "PathFinding" };
     for (const char *name : OBJECTS)
     {
         list.push_back({ "", name, -1, false });
@@ -3810,6 +6769,26 @@ void Script_RegisterAPI(JSContext *ctx, const astr_t &scriptName)
         ctx, selectedTile, SELECTEDTILE_FUNCS, count_of(SELECTEDTILE_FUNCS));
     JS_SetPropertyStr(ctx, global, "SelectedTile", selectedTile);
 
+    // Razor Enhanced-compatible namespaces registered alongside Client/Player
+    auto registerNamespace = [&](const char *nsName, const JSCFunctionListEntry *funcs, size_t n) {
+        JSValue nsObj = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, nsObj, funcs, (int)n);
+        JS_SetPropertyStr(ctx, global, nsName, nsObj);
+    };
+    registerNamespace("Items", ITEMS_FUNCS, count_of(ITEMS_FUNCS));
+    registerNamespace("Mobiles", MOBILES_FUNCS, count_of(MOBILES_FUNCS));
+    registerNamespace("Target", TARGET_FUNCS, count_of(TARGET_FUNCS));
+    registerNamespace("Journal", JOURNAL_FUNCS, count_of(JOURNAL_FUNCS));
+    registerNamespace("Gumps", GUMPS_FUNCS, count_of(GUMPS_FUNCS));
+    registerNamespace("Timer", TIMER_FUNCS, count_of(TIMER_FUNCS));
+    registerNamespace("Misc", MISC_FUNCS, count_of(MISC_FUNCS));
+    registerNamespace("AutoLoot", AUTOLOOT_FUNCS, count_of(AUTOLOOT_FUNCS));
+    registerNamespace("BandageHeal", BANDAGEHEAL_FUNCS, count_of(BANDAGEHEAL_FUNCS));
+    registerNamespace("Organizer", ORGANIZER_FUNCS, count_of(ORGANIZER_FUNCS));
+    registerNamespace("Restock", RESTOCK_FUNCS, count_of(RESTOCK_FUNCS));
+    registerNamespace("Scavenger", SCAVENGER_FUNCS, count_of(SCAVENGER_FUNCS));
+    registerNamespace("PathFinding", PATHFINDING_FUNCS, count_of(PATHFINDING_FUNCS));
+
     // The sentinel globals: STRINGS on the global object ("self", ...);
     // the serial resolution pattern-matches them;
     // they stay strings so existing scripts keep working.
@@ -3854,6 +6833,349 @@ void RunDressTextCommand(const char *name, const astr_t &arg)
 CGameObject *world_object(uint32_t serial)
 {
     return g_World != nullptr ? g_World->FindWorldObject(serial) : nullptr;
+}
+
+CGameObject *re_backpack_object()
+{
+    if (g_Player != nullptr)
+    {
+        CGameItem *bp = g_Player->FindLayer(OL_BACKPACK);
+        if (bp != nullptr)
+        {
+            return bp;
+        }
+    }
+    if (g_Backpack != 0)
+    {
+        return world_object(g_Backpack);
+    }
+    return nullptr;
+}
+
+uint32_t re_backpack_serial()
+{
+    CGameObject *bp = re_backpack_object();
+    return bp != nullptr ? bp->Serial : g_Backpack;
+}
+
+uint32_t re_resolve_serial(const astr_t &raw)
+{
+    const astr_t key = str_lower(raw);
+    if (key.empty() || key == "0" || key == "0x0")
+    {
+        return 0;
+    }
+    if (key == "self") return g_PlayerSerial;
+    if (key == "backpack") return re_backpack_serial();
+    if (key == "lasttarget") return g_LastTargetObject;
+    if (key == "lastattack") return g_LastAttackObject;
+    if (key == "lastcorpse") return g_LastCorpseObject;
+    if (key == "lastcontainer") return g_LastContainerObject;
+    if (key == "lastobject") return g_LastUseObject;
+    if (key == "ground") return 0xFFFFFFFF;
+    return CAssistant::TextToSerial(raw);
+}
+
+astr_t re_resolve_name(uint32_t serial)
+{
+    CGameObject *obj = world_object(serial);
+    return obj != nullptr ? obj->GetName() : astr_t();
+}
+
+vector<astr_t> re_split_opl(const astr_t &raw)
+{
+    vector<astr_t> lines;
+    size_t pos = 0;
+    while (pos < raw.size())
+    {
+        size_t eol = raw.find('\n', pos);
+        if (eol == astr_t::npos)
+        {
+            eol = raw.size();
+        }
+        astr_t line = raw.substr(pos, eol - pos);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+        {
+            line.pop_back();
+        }
+        if (!line.empty())
+        {
+            lines.push_back(line);
+        }
+        pos = eol + 1;
+    }
+    return lines;
+}
+
+ScriptItemSnapshot re_snapshot_item(CGameObject *obj, bool includeContents)
+{
+    ScriptItemSnapshot snap;
+    if (obj == nullptr)
+    {
+        return snap;
+    }
+    snap.Serial = obj->Serial;
+    snap.ItemID = obj->Graphic;
+    snap.Hue = obj->Color;
+    snap.Amount = obj->Count > 0 ? obj->Count : 1;
+    snap.Container = obj->Container;
+    snap.X = obj->GetX();
+    snap.Y = obj->GetY();
+    snap.Z = obj->GetZ();
+    snap.Map = obj->MapIndex;
+    snap.IsCorpse = obj->IsCorpse();
+    snap.OnGround = (obj->Container == 0xFFFFFFFF);
+    snap.Name = obj->GetName();
+    if (!obj->NPC)
+    {
+        auto *item = static_cast<CGameItem *>(obj);
+        snap.Layer = item->Layer;
+        snap.Opened = item->Opened;
+        snap.IsContainer = snap.IsCorpse || !item->Empty() || item->Opened ||
+            item->Layer == OL_BACKPACK || item->Layer == OL_BANK;
+    }
+    snap.Properties = re_split_opl(::g_ObjectPropertiesManager.GetData(obj->Serial));
+
+    if (includeContents)
+    {
+        for (CBaseQueueItem *child = obj->m_Items; child != nullptr; child = child->m_Next)
+        {
+            auto *childObj = static_cast<CGameObject *>(child);
+            if (!childObj->NPC)
+            {
+                snap.Contains.push_back(re_snapshot_item(childObj, false));
+            }
+        }
+    }
+    return snap;
+}
+
+ScriptMobileSnapshot re_snapshot_mobile(CGameCharacter *mob)
+{
+    ScriptMobileSnapshot snap;
+    if (mob == nullptr)
+    {
+        return snap;
+    }
+    snap.Serial = mob->Serial;
+    snap.Body = mob->Graphic;
+    snap.Hue = mob->Color;
+    snap.Name = mob->GetName();
+    snap.Hits = mob->Hits;
+    snap.HitsMax = mob->MaxHits;
+    snap.Mana = mob->Mana;
+    snap.ManaMax = mob->MaxMana;
+    snap.Stam = mob->Stam;
+    snap.StamMax = mob->MaxStam;
+    snap.Notoriety = mob->Notoriety;
+    snap.Direction = mob->Direction;
+    snap.X = mob->GetX();
+    snap.Y = mob->GetY();
+    snap.Z = mob->GetZ();
+    snap.Map = mob->MapIndex;
+    snap.Distance = g_Player != nullptr
+        ? Distance(g_Player->GetX(), g_Player->GetY(), mob->GetX(), mob->GetY())
+        : 100500;
+    CGameItem *bp = mob->FindLayer(OL_BACKPACK);
+    snap.Backpack = bp != nullptr ? bp->Serial : 0;
+    snap.Poisoned = mob->IsPoisoned();
+    snap.Paralyzed = mob->IsParalyzed();
+    snap.YellowHits = mob->YellowHits();
+    snap.WarMode = mob->InWarMode();
+    snap.Hidden = mob->Hidden();
+    snap.Dead = mob->IsDead();
+    snap.IsHuman = mob->IsHuman();
+    snap.Female = (mob->Gender == GENDER_FEMALE);
+    snap.Properties = re_split_opl(::g_ObjectPropertiesManager.GetData(mob->Serial));
+    return snap;
+}
+
+bool re_item_matches(
+    CGameObject *obj,
+    const vector<uint16_t> &ids,
+    int color,
+    bool ignoreCheck)
+{
+    if (obj == nullptr || obj->NPC)
+    {
+        return false;
+    }
+    if (ignoreCheck && (obj->Ignored || ScriptIgnore_Contains(obj->Serial)))
+    {
+        return false;
+    }
+    if (!ids.empty())
+    {
+        bool matchedId = false;
+        for (uint16_t id : ids)
+        {
+            if (id == 0xFFFF || obj->Graphic == id)
+            {
+                matchedId = true;
+                break;
+            }
+        }
+        if (!matchedId)
+        {
+            return false;
+        }
+    }
+    if (color >= 0 && color != 0xFFFF && obj->Color != (uint16_t)color)
+    {
+        return false;
+    }
+    return true;
+}
+
+void re_find_items_in_container(
+    CGameObject *root,
+    const vector<uint16_t> &ids,
+    int color,
+    bool recursive,
+    bool findAll,
+    bool ignoreCheck,
+    vector<ScriptItemSnapshot> &out)
+{
+    if (root == nullptr)
+    {
+        return;
+    }
+    for (CBaseQueueItem *child = root->m_Items; child != nullptr; child = child->m_Next)
+    {
+        auto *item = static_cast<CGameItem *>(child);
+        if (re_item_matches(item, ids, color, ignoreCheck))
+        {
+            out.push_back(re_snapshot_item(item, false));
+            if (!findAll)
+            {
+                return;
+            }
+        }
+        if (recursive && !item->Empty() && item->Layer != OL_BANK)
+        {
+            re_find_items_in_container(item, ids, color, recursive, findAll, ignoreCheck, out);
+            if (!findAll && !out.empty())
+            {
+                return;
+            }
+        }
+    }
+}
+
+int re_count_items_recursive(CGameObject *root, int itemId, int color)
+{
+    if (root == nullptr)
+    {
+        return 0;
+    }
+    int total = 0;
+    for (CBaseQueueItem *child = root->m_Items; child != nullptr; child = child->m_Next)
+    {
+        auto *item = static_cast<CGameItem *>(child);
+        const bool idOk = (itemId < 0 || itemId == 0xFFFF || item->Graphic == (uint16_t)itemId);
+        const bool colorOk = (color < 0 || color == 0xFFFF || item->Color == (uint16_t)color);
+        if (idOk && colorOk)
+        {
+            total += item->Count > 0 ? (int)item->Count : 1;
+        }
+        if (!item->Empty() && item->Layer != OL_BANK)
+        {
+            total += re_count_items_recursive(item, itemId, color);
+        }
+    }
+    return total;
+}
+
+CGameItem *re_find_first_in_container(CGameObject *root, int itemId, int color)
+{
+    if (root == nullptr)
+    {
+        return nullptr;
+    }
+    for (CBaseQueueItem *child = root->m_Items; child != nullptr; child = child->m_Next)
+    {
+        auto *item = static_cast<CGameItem *>(child);
+        const bool idOk = (itemId < 0 || itemId == 0xFFFF || item->Graphic == (uint16_t)itemId);
+        const bool colorOk = (color < 0 || color == 0xFFFF || item->Color == (uint16_t)color);
+        if (idOk && colorOk)
+        {
+            return item;
+        }
+        if (!item->Empty() && item->Layer != OL_BANK)
+        {
+            CGameItem *nested = re_find_first_in_container(item, itemId, color);
+            if (nested != nullptr)
+            {
+                return nested;
+            }
+        }
+    }
+    return nullptr;
+}
+
+GumpData *re_find_active_gump(uint32_t gumpId)
+{
+    if (gumpId == 0)
+    {
+        GumpData *last = g_GumpManager.GetLastGump();
+        return (last != nullptr && !last->Replayed) ? last : nullptr;
+    }
+    const int gumpCount = g_GumpManager.GetGumpCount();
+    for (int i = gumpCount - 1; i >= 0; i--)
+    {
+        GumpData *g = g_GumpManager.GetGump((uint32_t)i);
+        if (g != nullptr && !g->Replayed && g->ID == gumpId)
+        {
+            return g;
+        }
+    }
+    GumpData *last = g_GumpManager.GetLastGump();
+    if (last != nullptr && !last->Replayed && last->ID == gumpId)
+    {
+        return last;
+    }
+    return nullptr;
+}
+
+bool re_check_tristate(int filterVal, bool actual)
+{
+    if (filterVal == RE_TRI_ANY) return true;
+    return filterVal == RE_TRI_TRUE ? actual : !actual;
+}
+
+// Client-side line-of-sight approximation: same facet, visible (not hidden),
+// within view range, and within UO's +/-20 Z sight band.
+bool re_in_line_of_sight(CGameCharacter *mob)
+{
+    if (g_Player == nullptr || mob == nullptr)
+    {
+        return false;
+    }
+    if (mob->MapIndex != g_Player->MapIndex || mob->Hidden())
+    {
+        return false;
+    }
+    const int dz = abs((int)mob->GetZ() - (int)g_Player->GetZ());
+    if (dz > 20)
+    {
+        return false;
+    }
+    int viewRange = g_Game.ValueInt(VKI_VIEW_RANGE, 18);
+    if (viewRange <= 0)
+    {
+        viewRange = 18;
+    }
+    return Distance(g_Player->GetX(), g_Player->GetY(), mob->GetX(), mob->GetY()) <= viewRange;
+}
+
+bool re_run_inventory_preset(InventoryAgentMode mode, int slot, const astr_t &explicitName)
+{
+    const astr_t chosen = !explicitName.empty() ? explicitName : ScriptAgentList_Get(slot);
+    if (!chosen.empty())
+    {
+        return InventoryAgent_Run(chosen);
+    }
+    return InventoryAgent_RunIndexed(mode, 1);
 }
 
 // The SC_OBJECT_GET/SC_PLAYER_GET selector switch: one body per
@@ -4088,16 +7410,23 @@ void ScriptCommand_Execute(XA_SCRIPT_COMMAND *command)
     {
         case SC_OBJECT_GET:
         {
-            command->ResultBool = object_field(world_object(command->SerialA), command->SubTag,
-                command->ResultInt, command->ResultBool, command->ResultText);
+            bool boolResult = false;
+            if (object_field(world_object(command->SerialA), command->SubTag,
+                    command->ResultInt, boolResult, command->ResultText))
+            {
+                command->ResultBool = boolResult;
+            }
             break;
         }
         case SC_PLAYER_GET:
         {
             // the CPlayerObject getters read g_Player directly
-            command->ResultBool = object_field(
-                g_Player, command->SubTag, command->ResultInt, command->ResultBool,
-                command->ResultText);
+            bool boolResult = false;
+            if (object_field(g_Player, command->SubTag, command->ResultInt,
+                    boolResult, command->ResultText))
+            {
+                command->ResultBool = boolResult;
+            }
             break;
         }
         case SC_WAIT_PARSE:
@@ -4176,7 +7505,11 @@ void ScriptCommand_Execute(XA_SCRIPT_COMMAND *command)
                 case SAY_BROADCAST:
                 {
                     uint16_t color = 0;
-                    if (!g_AssistantConfig.GetFontColor(color))
+                    if (command->BoolA)
+                    {
+                        color = command->UshortA;
+                    }
+                    else if (!g_AssistantConfig.GetFontColor(color))
                     {
                         color = 0;
                     }
@@ -4189,7 +7522,11 @@ void ScriptCommand_Execute(XA_SCRIPT_COMMAND *command)
                 default: // Say + the prefix variants
                 {
                     uint16_t color = 0;
-                    if (!g_AssistantConfig.GetFontColor(color))
+                    if (command->BoolA)
+                    {
+                        color = command->UshortA;
+                    }
+                    else if (!g_AssistantConfig.GetFontColor(color))
                     {
                         color = 0;
                     }
@@ -4874,11 +8211,117 @@ void ScriptCommand_Execute(XA_SCRIPT_COMMAND *command)
                 case 346: // Screenshot() (the client's CScreenshotBuilder,
                     g_ScreenshotBuilder.SaveScreen();
                     break;
+                case 347: // SetLastTarget(serial)
+                {
+                    const uint32_t serial = CAssistant::TextToSerial(command->TextA);
+                    if (world_object(serial) != nullptr)
+                    {
+                        g_LastTargetObject = serial;
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
                 default:
                 {
                     break;
                 }
             }
+            break;
+        }
+        case SC_INVENTORY_AGENT:
+        {
+            if (!g_Connected)
+            {
+                break;
+            }
+            if (command->SubTag == 1)
+            {
+                command->ResultBool = InventoryAgent_Busy();
+                break;
+            }
+#if !defined(XUO_ASSISTANT_HARNESS)
+            if (command->SubTag == 2)
+            {
+                InventoryAgent_Stop();
+                command->ResultBool = true;
+                break;
+            }
+            if (command->SubTag == 3)
+            {
+                command->ResultBool = InventoryAgent_AutoLootOnce(command->TextA);
+                break;
+            }
+#endif
+            if (command->TextA.empty())
+            {
+                break;
+            }
+            if (!command->BoolA)
+            {
+                command->ResultBool = InventoryAgent_Run(command->TextA);
+                break;
+            }
+            const auto mode = str_lower(command->TextA);
+            if (mode == "organizer")
+                command->ResultBool = InventoryAgent_RunIndexed(InventoryAgentMode::Organizer, command->IntA);
+            else if (mode == "restock")
+                command->ResultBool = InventoryAgent_RunIndexed(InventoryAgentMode::Restock, command->IntA);
+            else if (mode == "scavenger")
+                command->ResultBool = InventoryAgent_RunIndexed(InventoryAgentMode::Scavenger, command->IntA);
+            else if (mode == "useonce")
+                command->ResultBool = InventoryAgent_RunIndexed(InventoryAgentMode::UseOnce, command->IntA);
+            else if (mode == "autoloot")
+                command->ResultBool = InventoryAgent_RunIndexed(InventoryAgentMode::AutoLoot, command->IntA);
+            break;
+        }
+        case SC_NATIVE_AGENT:
+        {
+#if !defined(XUO_ASSISTANT_HARNESS)
+            if (!g_Connected)
+            {
+                break;
+            }
+            switch (command->SubTag)
+            {
+                case NativeDamageStart:
+                    command->ResultBool = DamageMeter_Start();
+                    break;
+                case NativeDamagePause:
+                    DamageMeter_Pause();
+                    command->ResultBool = true;
+                    break;
+                case NativeDamageResume:
+                    DamageMeter_Resume();
+                    command->ResultBool = DamageMeter_Running();
+                    break;
+                case NativeDamageStop:
+                    DamageMeter_Stop();
+                    command->ResultBool = true;
+                    break;
+                case NativeDamageRunning:
+                    command->ResultBool = DamageMeter_Running();
+                    break;
+                case NativeDamageGet:
+                    command->ResultText = std::to_string(DamageMeter_GetDamage(CAssistant::TextToSerial(command->TextA)));
+                    break;
+                case NativeBandageStart:
+                    command->ResultBool = BandageHeal_Start();
+                    break;
+                case NativeBandageStop:
+                    BandageHeal_Stop();
+                    command->ResultBool = true;
+                    break;
+                case NativeBandageRunning:
+                    command->ResultBool = BandageHeal_Running();
+                    break;
+                case NativeRazorHotkey:
+                    command->ResultBool = RazorHotkeys_Execute(static_cast<unsigned>(command->IntA));
+                    break;
+                case NativeTargetPreset:
+                    command->ResultSerial = TargetAssist_RunPreset(command->TextA, command->BoolA);
+                    break;
+            }
+#endif
             break;
         }
         case SC_TERMINATE_SCRIPT:
@@ -5554,6 +8997,925 @@ void ScriptCommand_Execute(XA_SCRIPT_COMMAND *command)
                     break;
                 default:
                     command->ResultText = ScriptGlobal_Get(command->TextA);
+                    break;
+            }
+            break;
+        }
+        // --- Razor Enhanced shared game script API drain handlers -----------
+        case SC_RE_PLAYER_INFO:
+        {
+            if (g_World == nullptr || g_Player == nullptr)
+            {
+                break;
+            }
+            if (command->SubTag == 0) // Position
+            {
+                auto pos = std::make_shared<ScriptPlayerPosSnapshot>();
+                pos->X = g_Player->GetX();
+                pos->Y = g_Player->GetY();
+                pos->Z = g_Player->GetZ();
+                pos->Map = g_Player->MapIndex;
+                pos->Valid = true;
+                command->SharedResult = pos;
+                command->ResultBool = true;
+            }
+            else if (command->SubTag == 1) // Backpack
+            {
+                CGameObject *bp = re_backpack_object();
+                if (bp != nullptr)
+                {
+                    command->SharedResult =
+                        std::make_shared<ScriptItemSnapshot>(re_snapshot_item(bp, true));
+                    command->ResultBool = true;
+                }
+            }
+            else if (command->SubTag == 2) // GetLayerItem
+            {
+                const int layer = command->BoolA
+                    ? command->IntA
+                    : CAssistant::TextToLayer(command->TextA);
+                if (layer > 0)
+                {
+                    CGameItem *layerItem = g_Player->FindLayer(layer);
+                    if (layerItem != nullptr)
+                    {
+                        command->SharedResult = std::make_shared<ScriptItemSnapshot>(
+                            re_snapshot_item(layerItem, layer == OL_BACKPACK));
+                        command->ResultBool = true;
+                    }
+                }
+            }
+            break;
+        }
+        case SC_RE_ITEM_QUERY:
+        {
+            if (g_World == nullptr)
+            {
+                break;
+            }
+            switch (command->SubTag)
+            {
+                case 0: // FindBySerial
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(serial);
+                    if (obj != nullptr && !obj->NPC)
+                    {
+                        command->SharedResult =
+                            std::make_shared<ScriptItemSnapshot>(re_snapshot_item(obj, true));
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 1: // FindByID / FindAllByID
+                {
+                    vector<uint16_t> ids;
+                    for (const astr_t &idText : command->ListA)
+                    {
+                        ids.push_back(CAssistant::TextToGraphic(idText));
+                    }
+                    const int color = command->IntA;
+                    const bool recursive = command->BoolA;
+                    const int maxRange = command->IntB;
+                    const bool findAll = (command->IntC & 1) != 0;
+                    const bool ignoreCheck = (command->IntC & 2) != 0;
+
+                    auto matches = std::make_shared<vector<ScriptItemSnapshot>>();
+                    const astr_t containerKey = str_lower(command->TextA);
+                    if (containerKey == "ground" || containerKey == "world" ||
+                        containerKey == "0xffffffff")
+                    {
+                        for (CGameObject *obj = g_World->m_Items; obj != nullptr;
+                             obj = static_cast<CGameObject *>(obj->m_Next))
+                        {
+                            if (!re_item_matches(obj, ids, color, ignoreCheck))
+                            {
+                                continue;
+                            }
+                            if (maxRange >= 0 && g_Player != nullptr)
+                            {
+                                if (Distance(g_Player->GetX(), g_Player->GetY(),
+                                        obj->GetX(), obj->GetY()) > maxRange)
+                                {
+                                    continue;
+                                }
+                            }
+                            matches->push_back(re_snapshot_item(obj, false));
+                            if (!findAll)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        CGameObject *root = containerKey == "backpack"
+                            ? re_backpack_object()
+                            : world_object(re_resolve_serial(command->TextA));
+                        if (root != nullptr)
+                        {
+                            re_find_items_in_container(
+                                root, ids, color, recursive, findAll, ignoreCheck, *matches);
+                        }
+                    }
+                    command->SharedResult = matches;
+                    command->ResultBool = !matches->empty();
+                    break;
+                }
+                case 2: // BackpackCount
+                {
+                    command->ResultInt = re_count_items_recursive(
+                        re_backpack_object(), command->IntA, command->IntB);
+                    break;
+                }
+                case 3: // GetPropStringList
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    if (serial != 0)
+                    {
+                        command->ResultList =
+                            re_split_opl(::g_ObjectPropertiesManager.GetData(serial));
+                    }
+                    break;
+                }
+                case 4: // WaitForContents probe
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(serial);
+                    if (obj != nullptr && !obj->NPC)
+                    {
+                        command->IntA = 1; // exists
+                        auto *item = static_cast<CGameItem *>(obj);
+                        const bool ready = item->Opened || !item->Empty();
+                        if (!ready && command->BoolA)
+                        {
+                            g_Assistant.DoubleClick(item->Serial);
+                        }
+                        command->ResultBool = ready;
+                    }
+                    else
+                    {
+                        command->IntA = 0;
+                        command->ResultBool = false;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_ITEM_ACTION:
+        {
+            if (g_World == nullptr)
+            {
+                break;
+            }
+            switch (command->SubTag)
+            {
+                case 0: // UseItem
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    if (serial != 0)
+                    {
+                        if (!command->TextB.empty())
+                        {
+                            const uint32_t targetSerial = re_resolve_serial(command->TextB);
+                            if (targetSerial != 0)
+                            {
+                                ::CPacketTargetSelectedObject(
+                                    (int)serial, (int)targetSerial).Send();
+                                command->ResultBool = true;
+                            }
+                        }
+                        else
+                        {
+                            g_Assistant.DoubleClick(serial);
+                            command->ResultBool = true;
+                        }
+                    }
+                    break;
+                }
+                case 1: // UseItemByID
+                {
+                    CGameItem *found = re_find_first_in_container(
+                        re_backpack_object(), command->IntA, command->IntB);
+                    if (found != nullptr)
+                    {
+                        g_Assistant.DoubleClick(found->Serial);
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 2: // Move
+                {
+                    if (!EnabledCommandMoveItems())
+                    {
+                        break;
+                    }
+                    const uint32_t itemSerial = re_resolve_serial(command->TextA);
+                    const uint32_t destSerial = re_resolve_serial(command->TextB);
+                    CGameObject *obj = world_object(itemSerial);
+                    if (obj != nullptr && !obj->NPC && destSerial != 0)
+                    {
+                        g_MoveItemData.Reset();
+                        g_MoveItemData.Count = command->IntA > 0 ? command->IntA : 0;
+                        g_MoveItemData.Container = destSerial;
+                        g_MoveItemData.X = command->IntB >= 0 ? (uint16_t)command->IntB : 0xFFFF;
+                        g_MoveItemData.Y = command->IntC >= 0 ? (uint16_t)command->IntC : 0xFFFF;
+                        g_MoveItemData.Z = 0;
+                        g_Assistant.MoveItem(static_cast<CGameItem *>(obj));
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 3: // MoveOnGround
+                {
+                    if (!EnabledCommandMoveItems())
+                    {
+                        break;
+                    }
+                    const uint32_t itemSerial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(itemSerial);
+                    if (obj != nullptr && !obj->NPC)
+                    {
+                        g_MoveItemData.Reset();
+                        g_MoveItemData.Count = command->IntA > 0 ? command->IntA : 0;
+                        g_MoveItemData.Container = 0xFFFFFFFF;
+                        g_MoveItemData.X = (uint16_t)command->IntB;
+                        g_MoveItemData.Y = (uint16_t)command->IntC;
+                        g_MoveItemData.Z = command->BoolA
+                            ? (char)(int16_t)command->UshortA
+                            : (g_Player != nullptr ? g_Player->GetZ() : 0);
+                        g_Assistant.MoveItem(static_cast<CGameItem *>(obj));
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_MOBILE_QUERY:
+        {
+            if (g_World == nullptr)
+            {
+                break;
+            }
+            switch (command->SubTag)
+            {
+                case 0: // FindBySerial
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(serial);
+                    if (obj != nullptr && obj->NPC)
+                    {
+                        command->SharedResult = std::make_shared<ScriptMobileSnapshot>(
+                            re_snapshot_mobile(static_cast<CGameCharacter *>(obj)));
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 1: // ApplyFilter
+                {
+                    const int rangeMin = command->IntA;
+                    const int rangeMax = command->IntB;
+                    const int packed = command->IntC;
+                    const int poisoned = packed & 0x3;
+                    const int isHuman = (packed >> 2) & 0x3;
+                    const int isGhost = (packed >> 4) & 0x3;
+                    const int warmode = (packed >> 6) & 0x3;
+                    const bool checkLos = (packed & (1 << 8)) != 0;
+                    const bool checkIgnore = (packed & (1 << 9)) != 0;
+                    const int notorietyMask = (packed >> 10) & 0x7F;
+                    const astr_t &nameFilter = command->TextA;
+                    const astr_t &selector = command->TextB;
+
+                    vector<uint16_t> bodies;
+                    for (const astr_t &bText : command->ListA)
+                    {
+                        bodies.push_back(CAssistant::TextToGraphic(bText));
+                    }
+
+                    auto out = std::make_shared<vector<ScriptMobileSnapshot>>();
+                    for (CGameObject *obj = g_World->m_Items; obj != nullptr;
+                         obj = static_cast<CGameObject *>(obj->m_Next))
+                    {
+                        if (!obj->NPC || obj->Serial == g_PlayerSerial)
+                        {
+                            continue;
+                        }
+                        if (checkIgnore && (obj->Ignored || ScriptIgnore_Contains(obj->Serial)))
+                        {
+                            continue;
+                        }
+                        auto *mob = static_cast<CGameCharacter *>(obj);
+
+                        const int dist = g_Player != nullptr
+                            ? Distance(g_Player->GetX(), g_Player->GetY(), mob->GetX(), mob->GetY())
+                            : 0;
+                        if (rangeMin >= 0 && dist < rangeMin)
+                        {
+                            continue;
+                        }
+                        if (rangeMax >= 0 && dist > rangeMax)
+                        {
+                            continue;
+                        }
+                        if (notorietyMask != 0)
+                        {
+                            if (mob->Notoriety < 1 || mob->Notoriety > 7 ||
+                                (notorietyMask & (1 << (mob->Notoriety - 1))) == 0)
+                            {
+                                continue;
+                            }
+                        }
+                        if (!bodies.empty())
+                        {
+                            bool bodyHit = false;
+                            for (uint16_t b : bodies)
+                            {
+                                if (mob->Graphic == b)
+                                {
+                                    bodyHit = true;
+                                    break;
+                                }
+                            }
+                            if (!bodyHit)
+                            {
+                                continue;
+                            }
+                        }
+                        if (!re_check_tristate(poisoned, mob->IsPoisoned()) ||
+                            !re_check_tristate(isHuman, mob->IsHuman()) ||
+                            !re_check_tristate(isGhost, mob->IsDead()) ||
+                            !re_check_tristate(warmode, mob->InWarMode()))
+                        {
+                            continue;
+                        }
+                        if (checkLos && !re_in_line_of_sight(mob))
+                        {
+                            continue;
+                        }
+                        if (!nameFilter.empty() &&
+                            str_lower(mob->GetName()).find(nameFilter) == astr_t::npos)
+                        {
+                            continue;
+                        }
+                        out->push_back(re_snapshot_mobile(mob));
+                    }
+
+                    if (!selector.empty() && out->size() > 1)
+                    {
+                        if (selector == "nearest" || selector == "closest")
+                        {
+                            std::sort(out->begin(), out->end(),
+                                [](const ScriptMobileSnapshot &a, const ScriptMobileSnapshot &b) {
+                                    return a.Distance != b.Distance ? a.Distance < b.Distance
+                                                                    : a.Serial < b.Serial;
+                                });
+                        }
+                        else if (selector == "farthest" || selector == "furthest")
+                        {
+                            std::sort(out->begin(), out->end(),
+                                [](const ScriptMobileSnapshot &a, const ScriptMobileSnapshot &b) {
+                                    return a.Distance != b.Distance ? a.Distance > b.Distance
+                                                                    : a.Serial < b.Serial;
+                                });
+                        }
+                        else if (selector == "weakest" || selector == "lowest")
+                        {
+                            std::sort(out->begin(), out->end(),
+                                [](const ScriptMobileSnapshot &a, const ScriptMobileSnapshot &b) {
+                                    if (a.Hits != b.Hits) return a.Hits < b.Hits;
+                                    return a.Distance != b.Distance ? a.Distance < b.Distance
+                                                                    : a.Serial < b.Serial;
+                                });
+                        }
+                        else if (selector == "strongest")
+                        {
+                            std::sort(out->begin(), out->end(),
+                                [](const ScriptMobileSnapshot &a, const ScriptMobileSnapshot &b) {
+                                    if (a.Hits != b.Hits) return a.Hits > b.Hits;
+                                    return a.Distance != b.Distance ? a.Distance < b.Distance
+                                                                    : a.Serial < b.Serial;
+                                });
+                        }
+                        else if (selector == "random")
+                        {
+                            static std::mt19937 mobRng((unsigned)g_Ticks ^ 0xA511u);
+                            std::uniform_int_distribution<size_t> pick(0, out->size() - 1);
+                            const size_t chosenIdx = pick(mobRng);
+                            if (chosenIdx != 0)
+                            {
+                                std::swap((*out)[0], (*out)[chosenIdx]);
+                            }
+                        }
+                    }
+
+                    command->SharedResult = out;
+                    command->ResultBool = !out->empty();
+                    break;
+                }
+                case 2: // UseMobile
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(serial);
+                    if (obj != nullptr && obj->NPC)
+                    {
+                        g_Assistant.DoubleClick(obj->Serial);
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 3: // WaitForStats probe
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(serial);
+                    if (obj != nullptr && obj->NPC)
+                    {
+                        command->IntA = 1; // exists
+                        auto *mob = static_cast<CGameCharacter *>(obj);
+                        const bool ready = mob->MaxHits > 0;
+                        if (!ready && command->BoolA)
+                        {
+                            g_Assistant.GetStatus(mob->Serial);
+                        }
+                        command->ResultBool = ready;
+                    }
+                    else
+                    {
+                        command->IntA = 0;
+                        command->ResultBool = false;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_TARGET:
+        {
+            auto sendObjectTarget = [&](uint32_t targetSerial) -> bool {
+                if (g_World == nullptr || targetSerial == 0)
+                {
+                    return false;
+                }
+                if (g_Target.IsTargeting())
+                {
+                    g_Target.SendTargetObject((int)targetSerial);
+                    return true;
+                }
+                if (g_Target.HookTargeting())
+                {
+                    g_Target.SendHookTargetObject(targetSerial);
+                    return true;
+                }
+                return false;
+            };
+            switch (command->SubTag)
+            {
+                case 0: // TargetExecute(object)
+                    command->ResultBool = sendObjectTarget(re_resolve_serial(command->TextA));
+                    break;
+                case 1: // TargetExecute(x, y, z[, graphic])
+                {
+                    if (g_World == nullptr)
+                    {
+                        break;
+                    }
+                    if (g_Target.IsTargeting())
+                    {
+                        g_Target.SendTargetTile(command->UshortA, (short)command->IntA,
+                            (short)command->IntB, (char)command->IntC);
+                        command->ResultBool = true;
+                    }
+                    else if (g_Target.HookTargeting())
+                    {
+                        g_Target.SendHookTargetTile(command->UshortA, (short)command->IntA,
+                            (short)command->IntB, (short)command->IntC);
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 2: // Self
+                    command->ResultBool = sendObjectTarget(g_PlayerSerial);
+                    break;
+                case 3: // Last
+                    command->ResultBool = sendObjectTarget(g_LastTargetObject);
+                    break;
+                case 4: // Cancel
+                {
+                    if (g_World == nullptr)
+                    {
+                        break;
+                    }
+                    const bool hadCursor = g_Target.IsTargeting() || g_Target.HookTargeting();
+                    if (hadCursor)
+                    {
+                        g_Target.SendCancelTarget();
+                        ::g_Target.CancelCursor();
+                    }
+                    g_Target.ClearHooks();
+                    command->ResultBool = hadCursor;
+                    break;
+                }
+                case 5: // SetLast
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    if (serial != 0 && world_object(serial) != nullptr)
+                    {
+                        g_LastTargetObject = serial;
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 6: // GetLast
+                    command->ResultSerial = g_LastTargetObject;
+                    break;
+                case 7: // PromptTargetArm
+                {
+                    if (g_World == nullptr)
+                    {
+                        break;
+                    }
+                    command->ResultSerial = g_LastTargetObject;
+                    g_LastTargetObject = 0;
+                    ScriptPromptTarget_Begin();
+                    if (!command->TextA.empty())
+                    {
+                        g_Assistant.ClientPrint(command->TextA, command->UshortA);
+                    }
+                    g_Assistant.RequestTarget("");
+                    command->ResultBool = true;
+                    break;
+                }
+                case 8: // PromptTargetPoll
+                {
+                    uint32_t delivered = 0;
+                    if (ScriptPromptTarget_Consume(delivered))
+                    {
+                        g_Target.FromAssist = false;
+                        if (g_Target.IsTargeting())
+                        {
+                            ::g_Target.CancelCursor();
+                        }
+                        g_LastTargetObject = command->SerialA;
+                        command->ResultSerial = delivered;
+                        command->ResultBool = true;
+                        break;
+                    }
+                    if (!g_Target.IsTargeting())
+                    {
+                        const uint32_t picked = g_LastTargetObject;
+                        g_LastTargetObject = command->SerialA;
+                        g_Target.FromAssist = false;
+                        ScriptPromptTarget_Cancel();
+                        command->ResultSerial = picked;
+                        command->ResultBool = true;
+                    }
+                    break;
+                }
+                case 9: // PromptTargetCancel
+                {
+                    ScriptPromptTarget_Cancel();
+                    g_Target.FromAssist = false;
+                    if (g_Target.IsTargeting())
+                    {
+                        ::g_Target.CancelCursor();
+                    }
+                    g_LastTargetObject = command->SerialA;
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_JOURNAL:
+        {
+            switch (command->SubTag)
+            {
+                case 0: // Search
+                    command->ResultBool = ScriptJournal_Search(command->TextA);
+                    break;
+                case 1: // SearchByName
+                    command->ResultBool = ScriptJournal_SearchByName(
+                        command->TextA, command->TextB, re_resolve_name);
+                    break;
+                case 2: // Clear
+                    ScriptJournal_Clear();
+                    break;
+                case 3: // GetTextBySerial
+                    command->ResultList = ScriptJournal_GetTextBySerial(
+                        re_resolve_serial(command->TextA), command->BoolA, re_resolve_name);
+                    break;
+                case 4: // GetLineText
+                    command->ResultText = ScriptJournal_GetLineText(
+                        command->TextA, command->BoolA, re_resolve_name);
+                    break;
+                case 5: // GetTextByColor
+                    command->ResultList = ScriptJournal_GetTextByColor(
+                        command->UshortA, command->BoolA, re_resolve_name);
+                    break;
+                case 6: // GetTextByType
+                    command->ResultList = ScriptJournal_GetTextByType(
+                        CTextCommandManager::GetJournalFlags(command->TextA), command->BoolA,
+                        re_resolve_name);
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_GUMP:
+        {
+            if (g_World == nullptr || !EnabledCommandExtendedGump())
+            {
+                break;
+            }
+            switch (command->SubTag)
+            {
+                case 0: // HasGump
+                    command->ResultBool = (re_find_active_gump(command->SerialA) != nullptr);
+                    break;
+                case 1: // CurrentGump
+                {
+                    GumpData *active = re_find_active_gump(0);
+                    command->ResultSerial = active != nullptr ? active->ID : 0;
+                    break;
+                }
+                case 2: // SendAction
+                {
+                    GumpData *gump = re_find_active_gump(command->SerialA);
+                    if (gump == nullptr)
+                    {
+                        break;
+                    }
+                    CGumpHook hook;
+                    hook.Index = command->IntA;
+                    for (size_t i = 0; i + 1 < command->ListA.size(); i += 2)
+                    {
+                        hook.m_Entries.push_back(
+                            CGumpHookEntry(atoi(command->ListA[i].c_str()), command->ListA[i + 1]));
+                    }
+                    for (size_t i = 0; i + 1 < command->ListB.size(); i += 2)
+                    {
+                        hook.m_Checks.push_back(CGumpHookCheck(
+                            atoi(command->ListB[i].c_str()), command->ListB[i + 1] == "1"));
+                    }
+                    command->ResultBool = g_GumpManager.SendGumpChoice(gump, hook);
+                    break;
+                }
+                case 3: // LastGumpGetLineList
+                {
+                    GumpData *gump = g_GumpManager.GetLastGump();
+                    if (gump != nullptr)
+                    {
+                        command->ResultList = gump->m_Text;
+                    }
+                    break;
+                }
+                case 4: // CloseGump
+                {
+                    GumpData *gump = re_find_active_gump(command->SerialA);
+                    if (gump == nullptr)
+                    {
+                        break;
+                    }
+                    CGumpHook hook;
+                    hook.Index = 0;
+                    command->ResultBool = g_GumpManager.SendGumpChoice(gump, hook);
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_TIMER:
+        {
+            if (!EnabledCommandTimers())
+            {
+                break;
+            }
+            switch (command->SubTag)
+            {
+                case 0:
+                    ScriptCountdownTimer_Create(command->TextA, command->IntA);
+                    break;
+                case 1:
+                    command->ResultBool = ScriptCountdownTimer_Check(command->TextA);
+                    break;
+                case 2:
+                    command->ResultInt = ScriptCountdownTimer_Remaining(command->TextA);
+                    break;
+                case 3:
+                    command->ResultBool = ScriptCountdownTimer_Remove(command->TextA);
+                    break;
+                default:
+                    ScriptCountdownTimer_Clear();
+                    break;
+            }
+            break;
+        }
+        case SC_RE_SHARED:
+        {
+            switch (command->SubTag)
+            {
+                case 0:
+                    command->ResultBool =
+                        ScriptSharedValue_Get(command->TextA, command->ResultText);
+                    break;
+                case 1:
+                    ScriptSharedValue_Set(command->TextA, command->TextB);
+                    break;
+                case 2:
+                    command->ResultBool = ScriptSharedValue_Exists(command->TextA);
+                    break;
+                case 3:
+                    command->ResultBool = ScriptSharedValue_Remove(command->TextA);
+                    break;
+                case 4:
+                    command->ResultList = ScriptSharedValue_Keys();
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_IGNORE:
+        {
+            switch (command->SubTag)
+            {
+                case 0: // IgnoreObject
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    ScriptIgnore_Add(serial);
+                    if (CGameObject *obj = world_object(serial))
+                    {
+                        obj->Ignored = true;
+                    }
+                    break;
+                }
+                case 1: // UnIgnoreObject
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    ScriptIgnore_Remove(serial);
+                    if (CGameObject *obj = world_object(serial))
+                    {
+                        obj->Ignored = false;
+                    }
+                    break;
+                }
+                case 2: // CheckIgnoreObject
+                {
+                    const uint32_t serial = re_resolve_serial(command->TextA);
+                    CGameObject *obj = world_object(serial);
+                    command->ResultBool = ScriptIgnore_Contains(serial) ||
+                        (obj != nullptr && obj->Ignored);
+                    break;
+                }
+                case 3: // ClearIgnore
+                    ScriptIgnore_Clear();
+                    IgnoreReset();
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_AGENT:
+        {
+            switch (command->SubTag)
+            {
+                case RE_AG_AUTOLOOT_CHANGELIST:
+                    ScriptAgentList_Set(XA_AGENT_AUTOLOOT, command->TextA);
+                    break;
+                case RE_AG_ORGANIZER_CHANGELIST:
+                    ScriptAgentList_Set(XA_AGENT_ORGANIZER, command->TextA);
+                    break;
+                case RE_AG_RESTOCK_CHANGELIST:
+                    ScriptAgentList_Set(XA_AGENT_RESTOCK, command->TextA);
+                    break;
+                case RE_AG_SCAVENGER_CHANGELIST:
+                    ScriptAgentList_Set(XA_AGENT_SCAVENGER, command->TextA);
+                    break;
+                case RE_AG_SCAVENGER_RESETIGNORE:
+                    InventoryAgent_ClearScavengerCache();
+                    break;
+                case RE_AG_AUTOLOOT_START:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = re_run_inventory_preset(
+                            InventoryAgentMode::AutoLoot, XA_AGENT_AUTOLOOT, command->TextA);
+                    }
+                    break;
+                case RE_AG_AUTOLOOT_RUNONCE:
+                    if (g_Connected)
+                    {
+                        const astr_t chosen = !command->TextA.empty()
+                            ? command->TextA
+                            : ScriptAgentList_Get(XA_AGENT_AUTOLOOT);
+                        command->ResultBool = InventoryAgent_AutoLootOnce(chosen);
+                    }
+                    break;
+                case RE_AG_ORGANIZER_START:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = re_run_inventory_preset(
+                            InventoryAgentMode::Organizer, XA_AGENT_ORGANIZER, command->TextA);
+                    }
+                    break;
+                case RE_AG_RESTOCK_START:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = re_run_inventory_preset(
+                            InventoryAgentMode::Restock, XA_AGENT_RESTOCK, command->TextA);
+                    }
+                    break;
+                case RE_AG_SCAVENGER_START:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = re_run_inventory_preset(
+                            InventoryAgentMode::Scavenger, XA_AGENT_SCAVENGER, command->TextA);
+                    }
+                    break;
+                case RE_AG_INVENTORY_STOP:
+                    if (g_Connected)
+                    {
+                        InventoryAgent_Stop();
+                        command->ResultBool = true;
+                    }
+                    break;
+                case RE_AG_INVENTORY_STATUS:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = InventoryAgent_Busy();
+                    }
+                    break;
+                case RE_AG_BANDAGE_START:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = BandageHeal_Start();
+                    }
+                    break;
+                case RE_AG_BANDAGE_STOP:
+                    if (g_Connected)
+                    {
+                        BandageHeal_Stop();
+                        command->ResultBool = true;
+                    }
+                    break;
+                case RE_AG_BANDAGE_STATUS:
+                    if (g_Connected)
+                    {
+                        command->ResultBool = BandageHeal_Running();
+                    }
+                    break;
+                default:
+                    break;
+            }
+            break;
+        }
+        case SC_RE_WALK:
+        {
+            switch (command->SubTag)
+            {
+                case 0: // Walk / Run
+                    command->ResultBool = g_World != nullptr && EnabledCommandMoving() &&
+                        g_PathFinder.Walk(command->BoolA, (uint8_t)command->IntA);
+                    break;
+                case 1: // PathFindTo
+                {
+                    if (g_World == nullptr || !EnabledCommandMoving())
+                    {
+                        break;
+                    }
+                    const int z = command->BoolA
+                        ? command->IntC
+                        : (g_Player != nullptr ? g_Player->GetZ() : 0);
+                    command->ResultBool = g_PathFinder.WalkTo(
+                        command->IntA, command->IntB, z, (int)command->UshortA);
+                    break;
+                }
+                case 2: // CheckPosition
+                {
+                    command->ResultBool = g_PathFinder.AutoWalking;
+                    command->ResultInt = (g_World != nullptr && g_Player != nullptr)
+                        ? Distance(g_Player->GetX(), g_Player->GetY(), command->IntA, command->IntB)
+                        : 100500;
+                    break;
+                }
+                case 3: // Stop
+                    if (EnabledCommandMoving())
+                    {
+                        g_PathFinder.StopAutoWalk();
+                    }
+                    break;
+                default:
                     break;
             }
             break;

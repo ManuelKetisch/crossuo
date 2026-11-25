@@ -27,6 +27,8 @@
 #include "../scriptlist.h"
 #include "../scriptgump.h"
 #include "../scriptstate.h"
+#include "../engine.h"
+#include "../externalruntime.h"
 #include "../scripthandle.h" // the run/terminate lifecycle suite
 
 #include "../../config/configio.h" // AtomicFileWrite + CIniFile (the config/save primitives)
@@ -47,12 +49,17 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstring> // memcmp
+#include <errno.h>
+#include <map>
+#include <signal.h>
 #include <stdlib.h> // mkdtemp
 #include <sys/stat.h> // chmod
 #include <unistd.h> // rmdir, chdir
 #include <cstdlib> // mkdtemp
 #include <thread>
 #include <vector>
+#include "Target.h"
+#include "Walker/PathFinder.h"
 
 // the client normally provides g_Ticks (Globals.cpp)
 using ::astr_t;
@@ -102,6 +109,60 @@ namespace xuoassist {
 
 // the fake gump the executor deep-copies for GetGump (see harnessstubs.cpp)
 extern GumpData *g_HarnessGump;
+
+struct HarnessHookState
+{
+    uint32_t LastDoubleClickSerial = 0;
+    uint32_t LastStatusSerial = 0;
+    uint32_t LastMoveItemSerial = 0;
+    int LastMoveCount = 0;
+    uint32_t LastMoveContainer = 0;
+    uint16_t LastMoveX = 0;
+    uint16_t LastMoveY = 0;
+    char LastMoveZ = 0;
+    uint32_t LastTargetSentSerial = 0;
+    int LastTargetTileX = 0;
+    int LastTargetTileY = 0;
+    int LastTargetTileZ = 0;
+    uint16_t LastTargetTileGraphic = 0;
+    int TargetCancelledCount = 0;
+    int LastGumpChoiceButton = -1;
+    uint32_t LastGumpChoiceId = 0;
+    int LastGumpChoiceCheckCount = 0;
+    int LastGumpChoiceEntryCount = 0;
+    int LastWalkDir = -1;
+    bool LastWalkRun = false;
+    int WalkCallCount = 0;
+    int WalkToX = 0;
+    int WalkToY = 0;
+    int WalkToZ = 0;
+    int WalkToDistance = 0;
+    int WalkToCallCount = 0;
+    int StopAutoWalkCount = 0;
+    bool WalkToSucceeds = true;
+    bool WalkToAutoArrive = false;
+    int LastSkillIndex = -1;
+    astr_t LastSkillName;
+    astr_t LastPrintText;
+    uint16_t LastPrintColor = 0;
+    std::map<uint32_t, astr_t> OplProperties;
+    bool InventoryRunning = false;
+    astr_t LastInventoryPreset;
+    int LastInventoryMode = -1;
+    astr_t LastAutoLootOnce;
+    int ScavengerCacheCleared = 0;
+    bool BandageRunning = false;
+    int LastTargetSelectedItem = 0;
+    int LastTargetSelectedTarget = 0;
+    vector<GumpData *> HarnessGumps;
+
+    void Reset()
+    {
+        *this = HarnessHookState();
+    }
+};
+
+extern HarnessHookState g_HarnessHooks;
 
 } // namespace xuoassist
 
@@ -166,7 +227,6 @@ int main()
             message.substr(0, message.find('\n')).c_str());
         JS_FreeValue(ctx, errorResult);
         JS_FreeValue(ctx, errorFn);
-        JS_FreeValue(ctx, global);
 
         // the interrupt handler aborts a tight loop (the Terminate path)
         std::atomic<int> stop{ 0 };
@@ -437,8 +497,15 @@ int main()
         CHECK(ScriptBuffs_Exists("  MORTAL STRIKE ")); // trimmed
         CHECK(ScriptBuffs_Exists("0x7542"));           // icon-text lookup
         CHECK(!ScriptBuffs_Exists("night sight"));
+        ScriptBuffs_Add(0x7543, 0, "Night Sight");
+        CHECK(ScriptBuffs_List() == "Mortal Strike, Night Sight");
         ScriptBuffs_Remove(0x7542); // the event carries the icon only
         CHECK(!ScriptBuffs_Exists("mortal strike"));
+        CHECK(ScriptBuffs_GetName(0x7542).empty());
+        CHECK(ScriptBuffs_GetName(0x7543) == "Night Sight");
+        ScriptBuffs_Clear();
+        CHECK(ScriptBuffs_List().empty());
+        CHECK(!ScriptBuffs_Exists("0x7543"));
         printf("state: globals/timers/buffs mirrors ok\n");
     }
 
@@ -738,6 +805,66 @@ int main()
                 g_LoadedScripts.Clear();
             }
 
+            // Profile lifecycle uses the same disposable appdata override.
+            {
+                CAssistantConfig profile;
+                profile.SetCurrentProfile("Original");
+                profile.m_UseItemsDelay = 937;
+                const auto source = profile.GetProfilePath();
+                CHECK(fs_path_create(fs_path_join(source, "Scripts")));
+                const auto sourceScript = fs_path_str(fs_path_join(source, "Scripts", "pet-care.js"));
+                CHECK(ScriptList_WriteFile(sourceScript, "// disposable test script\n"));
+                g_LoadedScripts.SetPendingRestore({ sourceScript, "/elsewhere/shared.js" });
+                CHotkeyEntry scriptHotkey;
+                scriptHotkey.Type = HT_SCRIPT;
+                scriptHotkey.ScriptOrMacroName = sourceScript;
+                profile.m_Hotkeys.push_back(scriptHotkey);
+                const auto extra = fs_path_join(source, "Future.ini");
+                CIniFile extension;
+                extension.Set("test", "value", "preserve me");
+                CHECK(extension.Save(extra));
+                CHECK(profile.SaveProfile());
+
+                CHECK(!profile.CreateProfile("../escape", false));
+                CHECK(!profile.CreateProfile("original", false));
+                CHECK(profile.CreateProfile("Clone", true));
+                const auto clone = profile.GetProfilePath();
+                CHECK(profile.ProfileName == "Clone");
+                CHECK(profile.m_UseItemsDelay == 937);
+                CHECK(extension.Load(fs_path_join(clone, "Future.ini")));
+                CHECK(extension.Get("test", "value") == "preserve me");
+                const auto cloneScript = fs_path_str(fs_path_join(clone, "Scripts", "pet-care.js"));
+                CHECK(fs_path_exists(fs_path_from(cloneScript)));
+                CHECK(profile.m_LoadedScripts == vector<astr_t>({ cloneScript, "/elsewhere/shared.js" }));
+                CHECK(profile.m_Hotkeys.size() == 1 &&
+                    profile.m_Hotkeys[0].ScriptOrMacroName == cloneScript);
+
+                CHECK(profile.LoadProfileBySerial(123));
+                CHECK(profile.LoadProfileBySerial(124));
+                CHECK(profile.CreateProfile("Blank", false));
+                CHECK(profile.m_UseItemsDelay == 600);
+                CHECK(profile.m_Hotkeys.empty() && profile.m_LoadedScripts.empty());
+                CHECK(profile.LoadProfileBySerial(456));
+                CHECK(profile.SwitchProfile("Clone"));
+                astr_t archived;
+                CHECK(profile.ArchiveCurrentProfile(archived));
+                CHECK(!fs_path_exists(clone));
+                CHECK(profile.ProfileName == "Default");
+                CHECK(fs_path_exists(fs_path_join(archived, "Future.ini")));
+                CHECK(fs_path_exists(fs_path_join(archived, "Scripts", "pet-care.js")));
+                const auto map = profile.GetProfileMap();
+                CHECK(map.count(123) && map.at(123) == "Default");
+                CHECK(map.count(124) && map.at(124) == "Default");
+                CHECK(map.count(456) && map.at(456) == "Blank");
+                CIniFile assignments;
+                const auto archiveParent = archived.substr(0, archived.find_last_of("/\\"));
+                CHECK(assignments.Load(fs_path_join(archiveParent, "Assignments.ini")));
+                CHECK(assignments.Get("Profile0", "file") == "Clone");
+                CHECK(fs_path_exists(extra));
+                g_LoadedScripts.Clear();
+                printf("config: create, clone, archive and rebind profiles ok\n");
+            }
+
             // --- Hotkeys.ini: three records, all fields, order preserved ---
             {
                 CAssistantConfig saved;
@@ -756,11 +883,13 @@ int main()
                 b.Action = 7;
                 b.ScriptOrMacroName = "";
                 b.ExternalCode = "printf('x; y')"; // ';' survives (no inline comments)
+                b.PassMode = HotkeyPassMode::Pass;
                 CHotkeyEntry c;
                 c.Key = 27;
                 c.Modifiers = 0;
                 c.Type = HT_TOGGLE_HOTKEYS;
                 c.Action = 0;
+                c.PassMode = HotkeyPassMode::Consume;
                 saved.m_Hotkeys = { a, b, c };
                 saved.SaveHotkeys();
 
@@ -775,14 +904,42 @@ int main()
                     const CHotkeyEntry &lc = loaded.m_Hotkeys[2];
                     ok = la.Key == 65 && la.Modifiers == 2 && la.Type == HT_SCRIPT &&
                          la.ScriptOrMacroName == "mine.ini" && la.ExternalCode.empty() &&
-                         la.RunningMode;
+                         la.RunningMode && la.PassMode == HotkeyPassMode::Inherit &&
+                         la.PassesToGame(true) && !la.PassesToGame(false);
                     ok = ok && lb.Key == 67 && lb.Modifiers == 1 && lb.Type == HT_USE_OBJECT &&
                          lb.Action == 7 && lb.ScriptOrMacroName.empty() && !lb.RunningMode &&
-                         lb.ExternalCode == "printf('x; y')";
+                         lb.ExternalCode == "printf('x; y')" && lb.PassMode == HotkeyPassMode::Pass &&
+                         lb.PassesToGame(false);
                     ok = ok && lc.Key == 27 && lc.Modifiers == 0 && lc.Type == HT_TOGGLE_HOTKEYS &&
-                         lc.Action == 0;
+                         lc.Action == 0 && lc.PassMode == HotkeyPassMode::Consume && !lc.PassesToGame(true);
                 }
                 CHECK(ok);
+
+                CIniFile raw;
+                const auto path = fs_path_join(saved.GetProfilePath(), "Hotkeys.ini");
+                CHECK(raw.Load(path));
+                CHECK(!raw.Has("Hotkey0", "pass_mode")); // older persisted record
+                raw.SetInt("Hotkey2", "pass_mode", 99);
+                CHECK(raw.Save(path));
+                CHECK(loaded.LoadHotkeys());
+                CHECK(loaded.m_Hotkeys[2].PassMode == HotkeyPassMode::Inherit);
+
+                const auto current = saved.ProfileName;
+                CHECK(!saved.CreateImportedProfile("Failed Razor Import", [&](CAssistantConfig &staged) {
+                    staged.m_Hotkeys = { b };
+                    CHECK(staged.SaveHotkeys());
+                    return false;
+                }));
+                CHECK(!fs_path_exists(fs_path_join(saved.GetConfigPath(), "Failed Razor Import")));
+                CHECK(saved.CreateImportedProfile("Razor Hotkey Import", [&](CAssistantConfig &staged) {
+                    staged.m_Hotkeys = { b, c };
+                    return staged.SaveHotkeys();
+                }));
+                CHECK(saved.ProfileName == current);
+                loaded.ProfileName = "Razor Hotkey Import";
+                CHECK(loaded.LoadHotkeys() && loaded.m_Hotkeys.size() == 2);
+                CHECK(loaded.m_Hotkeys[0].PassMode == HotkeyPassMode::Pass &&
+                      loaded.m_Hotkeys[1].PassMode == HotkeyPassMode::Consume);
             }
 
             // --- Map.ini: every CMapSettings field, byte-identical ---
@@ -1089,7 +1246,7 @@ int main()
         CHECK(stoppedPure);
         if (!stoppedPure)
         {
-            asm volatile("int3"); // debugger stop: dump all threads here
+            std::abort(); // fail promptly if the script thread never stops
         }
         printf("lifecycle: pure JS loop terminate ok\n");
 
@@ -1131,6 +1288,1032 @@ int main()
         }
         CHECK(!listed);
         printf("lifecycle: run/terminate ok\n");
+    }
+
+    // --- 10. Razor Enhanced Shared Game Script API --------------------------
+    {
+        std::atomic<bool> draining{ true };
+        std::thread drainThread([&draining]() {
+            while (draining.load())
+            {
+                ScriptQueue_Drain();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
+
+        g_HarnessHooks.Reset();
+        ScriptJournal_Clear();
+        ScriptBuffs_Clear();
+        ScriptCountdownTimer_Clear();
+        ScriptSharedValue_Clear();
+        ScriptIgnore_Clear();
+        ScriptAgentList_Clear();
+
+        // Build a realistic in-memory world for Player/Items/Mobiles/Target/Gumps/PathFinding.
+        CGameWorld world;
+        CPlayer player;
+        player.Serial = 0x00000100;
+        player.NPC = true;
+        player.SetName("Avatar");
+        player.Graphic = 0x0190;
+        player.Hits = 80;
+        player.MaxHits = 100;
+        player.Mana = 30;
+        player.MaxMana = 60;
+        player.Stam = 45;
+        player.MaxStam = 90;
+        player.Weight = 150;
+        player.MaxWeight = 400;
+        player.Gold = 12345;
+        player.m_X = 100;
+        player.m_Y = 200;
+        player.m_Z = 5;
+        player.MapIndex = 1;
+        player.m_Flags = 0x04 | 0x08 | 0x01; // poisoned + yellowhits + paralyzed
+
+        CGameItem rightHand;
+        rightHand.Serial = 0x40000010;
+        rightHand.Graphic = 0x13B9;
+        rightHand.Color = 0x0482;
+        rightHand.Layer = 1; // RightHand
+        rightHand.Count = 1;
+        rightHand.Container = player.Serial;
+        rightHand.SetName("Viking Sword");
+
+        CGameItem backpack;
+        backpack.Serial = 0x40000020;
+        backpack.Graphic = 0x0E75;
+        backpack.Layer = OL_BACKPACK;
+        backpack.Container = player.Serial;
+        backpack.Opened = true;
+        backpack.SetName("Backpack");
+
+        CGameItem bandages1;
+        bandages1.Serial = 0x40000021;
+        bandages1.Graphic = 0x0E21;
+        bandages1.Color = 0;
+        bandages1.Count = 25;
+        bandages1.Container = backpack.Serial;
+        bandages1.SetName("Clean Bandage");
+
+        CGameItem pouch;
+        pouch.Serial = 0x40000022;
+        pouch.Graphic = 0x0E79;
+        pouch.Count = 1;
+        pouch.Container = backpack.Serial;
+        pouch.Opened = true;
+        pouch.SetName("Pouch");
+
+        CGameItem bandages2;
+        bandages2.Serial = 0x40000023;
+        bandages2.Graphic = 0x0E21;
+        bandages2.Color = 0;
+        bandages2.Count = 15;
+        bandages2.Container = pouch.Serial;
+        bandages2.SetName("Clean Bandage");
+
+        CGameItem dyedBandage;
+        dyedBandage.Serial = 0x40000024;
+        dyedBandage.Graphic = 0x0E21;
+        dyedBandage.Color = 0x0026;
+        dyedBandage.Count = 7;
+        dyedBandage.Container = pouch.Serial;
+        dyedBandage.SetName("Red Bandage");
+
+        CGameItem groundChest;
+        groundChest.Serial = 0x40000050;
+        groundChest.Graphic = 0x0E42;
+        groundChest.Color = 0;
+        groundChest.Count = 1;
+        groundChest.Container = 0xFFFFFFFF;
+        groundChest.m_X = 102;
+        groundChest.m_Y = 200;
+        groundChest.m_Z = 5;
+        groundChest.Opened = false;
+        groundChest.SetName("Wooden Chest");
+
+        CGameItem groundGold;
+        groundGold.Serial = 0x40000051;
+        groundGold.Graphic = 0x0EED;
+        groundGold.Color = 0;
+        groundGold.Count = 500;
+        groundGold.Container = 0xFFFFFFFF;
+        groundGold.m_X = 115;
+        groundGold.m_Y = 200;
+        groundGold.m_Z = 5;
+
+        pouch.Add(&bandages2);
+        pouch.Add(&dyedBandage);
+        backpack.Add(&bandages1);
+        backpack.Add(&pouch);
+        player.Add(&rightHand);
+        player.Add(&backpack);
+
+        CGameCharacter mobNearEnemy;
+        mobNearEnemy.Serial = 0x00000201;
+        mobNearEnemy.NPC = true;
+        mobNearEnemy.Graphic = 0x0190;
+        mobNearEnemy.Notoriety = 6; // Murderer
+        mobNearEnemy.Hits = 40;
+        mobNearEnemy.MaxHits = 100;
+        mobNearEnemy.m_X = 103;
+        mobNearEnemy.m_Y = 200;
+        mobNearEnemy.m_Z = 5;
+        mobNearEnemy.MapIndex = 1;
+        mobNearEnemy.m_Flags = 0x04; // Poisoned
+        mobNearEnemy.SetName("Red PK");
+
+        CGameCharacter mobFarWeak;
+        mobFarWeak.Serial = 0x00000202;
+        mobFarWeak.NPC = true;
+        mobFarWeak.Graphic = 0x0009; // Daemon
+        mobFarWeak.Notoriety = 4; // Criminal
+        mobFarWeak.Hits = 15;
+        mobFarWeak.MaxHits = 200;
+        mobFarWeak.m_X = 108;
+        mobFarWeak.m_Y = 200;
+        mobFarWeak.m_Z = 5;
+        mobFarWeak.MapIndex = 1;
+        mobFarWeak.SetName("Injured Daemon");
+
+        CGameCharacter mobHighZ;
+        mobHighZ.Serial = 0x00000203;
+        mobHighZ.NPC = true;
+        mobHighZ.Graphic = 0x0190;
+        mobHighZ.Notoriety = 6;
+        mobHighZ.Hits = 90;
+        mobHighZ.MaxHits = 100;
+        mobHighZ.m_X = 102;
+        mobHighZ.m_Y = 201;
+        mobHighZ.m_Z = 40; // dz = 35 > 20 -> fails CheckLineOfSight
+        mobHighZ.MapIndex = 1;
+        mobHighZ.SetName("Roof Camper");
+
+        CGameCharacter mobNoStats;
+        mobNoStats.Serial = 0x00000204;
+        mobNoStats.NPC = true;
+        mobNoStats.Graphic = 0x0191;
+        mobNoStats.Notoriety = 1; // Innocent
+        mobNoStats.Hits = 0;
+        mobNoStats.MaxHits = 0;
+        mobNoStats.m_X = 104;
+        mobNoStats.m_Y = 200;
+        mobNoStats.m_Z = 5;
+        mobNoStats.MapIndex = 1;
+        mobNoStats.SetName("Town Guard");
+
+        world.m_Items = &groundChest;
+        groundChest.m_Next = &groundGold;
+        groundGold.m_Next = &mobNearEnemy;
+        mobNearEnemy.m_Next = &mobFarWeak;
+        mobFarWeak.m_Next = &mobHighZ;
+        mobHighZ.m_Next = &mobNoStats;
+
+        g_World = &world;
+        g_Player = &player;
+        g_PlayerSerial = player.Serial;
+        g_Backpack = backpack.Serial;
+        g_Connected = true;
+        g_EnabledCommands = ~0ULL;
+
+        g_HarnessHooks.OplProperties[rightHand.Serial] =
+            "Viking Sword\nSpell Channeling\nLuck 125\nDamage Increase 35%\nWeight: 6 stones";
+        ScriptBuffs_Add(0x7542, 60000, "Mortal Strike");
+
+        // Prepare a helper to evaluate JS snippets inside a real CScriptEngine
+        auto runJsCheck = [](const char *code, const char *scriptPath = "/tmp/scripts/demo.js") -> bool {
+            CScriptEngine eng;
+            if (!eng.Setup(ScriptList_DisplayName(scriptPath), scriptPath))
+            {
+                return false;
+            }
+            JSValue val = JS_Eval(eng.Context(), code, strlen(code), "<test>", JS_EVAL_TYPE_GLOBAL);
+            if (JS_IsException(val))
+            {
+                astr_t line, msg;
+                Script_FormatException(eng.Context(), line, msg);
+                printf("JS FAIL (%s): %s\n", line.c_str(), msg.c_str());
+                JS_FreeValue(eng.Context(), val);
+                return false;
+            }
+            const bool ok = JS_ToBool(eng.Context(), val) != 0;
+            JS_FreeValue(eng.Context(), val);
+            return ok;
+        };
+
+        // 10a. Player namespace (backward compat + Razor Enhanced extensions)
+        CHECK(runJsCheck(
+            "Player.HP() === 80 && Player.Hits() === 80 && Player.Hits('%') === 80 &&"
+            " Player.HitsValue() === 80 && Player.HitsMax() === 100 && Player.MaxHits() === 100 &&"
+            " Player.Mana() === 30 && Player.Mana('%') === 50 && Player.ManaMax() === 60 &&"
+            " Player.Stam() === 45 && Player.Stam('%') === 50 && Player.StamMax() === 90 &&"
+            " Player.Poisoned() === true && Player.YellowHits() === true &&"
+            " Player.Mortaled() === true && Player.Paralyzed() === true &&"
+            " Player.Paralized() === true && Player.WarMode() === false &&"
+            " Player.Serial() === '0x100' && Player.Name() === 'Avatar' &&"
+            " Player.X() === 100 && Player.Y() === 200 && Player.Z() === 5 && Player.Map() === 1 &&"
+            " Player.Position().X === 100 && Player.Position().Y === 200 &&"
+            " Player.Position().Z === 5 && Player.Position().Map === 1 &&"
+            " Player.Weight() === 150 && Player.Weight('%') === 37 && Player.MaxWeight() === 400 &&"
+            " Player.Gold() === 12345 &&"
+            " Player.Backpack() !== null && Player.Backpack().Serial === 0x40000020 &&"
+            " Player.Backpack().Contains.length === 2 &&"
+            " Player.GetLayerItem('RightHand').Serial === 0x40000010 &&"
+            " Player.GetLayerItem(1).ItemID === 0x13B9 &&"
+            " Player.GetLayerItem('LeftHand') === null &&"
+            " Player.BuffsExist('mortal strike') === true &&"
+            " Player.BuffsExist('0x7542') === true &&"
+            " Player.BuffsExist('Night Sight') === false;"));
+
+        CHECK(runJsCheck(
+            "Player.UseSkill('Anatomy');"
+            " Player.Walk('North') && Player.Run('Southeast') &&"
+            " !Player.Walk('InvalidDir') && Player.PathFindTo(120, 230, 5);"));
+        CHECK(g_HarnessHooks.LastSkillName == "Anatomy");
+        CHECK(g_HarnessHooks.WalkCallCount == 2);
+        CHECK(g_HarnessHooks.LastWalkDir == 3 && g_HarnessHooks.LastWalkRun == true);
+        CHECK(g_HarnessHooks.WalkToX == 120 && g_HarnessHooks.WalkToY == 230 && g_HarnessHooks.WalkToZ == 5);
+        printf("re-api: Player namespace ok\n");
+
+        // 10b. Items namespace (Find, Count, Use, Move, MoveOnGround, OPL Props, WaitForContents)
+        CHECK(runJsCheck(
+            "var sw = Items.FindBySerial(0x40000010);"
+            " var bAll = Items.FindAllByID(0x0E21, -1, -1, true);"
+            " var bTop = Items.FindAllByID(0x0E21, -1, -1, false);"
+            " var bRed = Items.FindByID(0x0E21, 0x0026);"
+            " var gNear = Items.FindByID(0x0E42, -1, 0, 5);"
+            " var gTooFar = Items.FindByID(0x0EED, -1, 0, 5);"
+            " var props = Items.GetPropStringList(sw);"
+            " sw !== null && sw.ItemID === 0x13B9 && sw.Hue === 0x0482 &&"
+            " bAll.length === 3 && bTop.length === 1 &&"
+            " bRed !== null && bRed.Serial === 0x40000024 &&"
+            " gNear !== null && gNear.Serial === 0x40000050 && gTooFar === null &&"
+            " Items.BackpackCount(0x0E21) === 47 &&"
+            " Items.BackpackCount(0x0E21, 0) === 40 &&"
+            " Items.BackpackCount(0x0E21, 0x0026) === 7 &&"
+            " props.length === 5 &&"
+            " Items.GetPropValue(sw, 'Luck') === 125 &&"
+            " Items.GetPropValue(sw, 'Damage Increase') === 35 &&"
+            " Items.GetPropValue(sw, 'Weight') === 6 &&"
+            " Items.GetPropValue(sw, 'Spell Channeling') === 1 &&"
+            " Items.GetPropValue(sw, 'Nonexistent') === 0;"));
+
+        CHECK(runJsCheck(
+            "Items.UseItem(0x40000021) && Items.UseItemByID(0x0E21, 0x0026) &&"
+            " Items.Move(0x40000021, 0x40000022, 10, 44, 55);"));
+        CHECK(g_HarnessHooks.LastDoubleClickSerial == 0x40000024);
+        CHECK(g_HarnessHooks.LastMoveItemSerial == 0x40000021);
+        CHECK(g_HarnessHooks.LastMoveContainer == 0x40000022);
+        CHECK(g_HarnessHooks.LastMoveCount == 10 && g_HarnessHooks.LastMoveX == 44 && g_HarnessHooks.LastMoveY == 55);
+
+        CHECK(runJsCheck("Items.MoveOnGround(0x40000021, 5, 101, 202, 7);"));
+        CHECK(g_HarnessHooks.LastMoveContainer == 0xFFFFFFFF);
+        CHECK(g_HarnessHooks.LastMoveCount == 5 && g_HarnessHooks.LastMoveX == 101 &&
+              g_HarnessHooks.LastMoveY == 202 && g_HarnessHooks.LastMoveZ == 7);
+
+        // WaitForContents: async open after double-click
+        {
+            std::thread opener([&groundChest]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                groundChest.Opened = true;
+            });
+            CHECK(runJsCheck("Items.WaitForContents(0x40000050, 500) === true;"));
+            opener.join();
+            CHECK(g_HarnessHooks.LastDoubleClickSerial == 0x40000050);
+            CHECK(runJsCheck("Items.WaitForContents(0x40009999, 100) === false;"));
+        }
+        printf("re-api: Items namespace ok\n");
+
+        // 10c. Mobiles namespace (FindBySerial, ApplyFilter, Select, UseMobile, WaitForStats)
+        CHECK(runJsCheck(
+            "var m = Mobiles.FindBySerial(0x201);"
+            " var notMob = Mobiles.FindBySerial(0x40000010);"
+            " var fAll = Mobiles.ApplyFilter({ range: 10, notoriety: [4, 6], selector: 'nearest' });"
+            " var fLos = Mobiles.ApplyFilter({ range: 10, notoriety: [4, 6], checklineofsight: true, selector: 'nearest' });"
+            " var fWeak = Mobiles.ApplyFilter({ range: 10, notoriety: ['criminal', 'murderer'], checklineofsight: true, selector: 'weakest' });"
+            " var fPois = Mobiles.ApplyFilter({ poisoned: true, body: [0x0190] });"
+            " var selFar = Mobiles.Select(fLos, 'farthest');"
+            " m !== null && m.Name === 'Red PK' && m.Poisoned === true && m.Hits === 40 &&"
+            " notMob === null &&"
+            " fAll.length === 3 && fLos.length === 2 &&"
+            " fLos[0].Serial === 0x201 && fWeak[0].Serial === 0x202 &&"
+            " fPois.length === 1 && fPois[0].Serial === 0x201 &&"
+            " selFar !== null && selFar.Serial === 0x202 &&"
+            " Mobiles.UseMobile(0x201) === true;"));
+        CHECK(g_HarnessHooks.LastDoubleClickSerial == 0x201);
+
+        // WaitForStats: requests status and wakes when MaxHits arrives
+        {
+            std::thread statsFeed([&mobNoStats]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                mobNoStats.Hits = 100;
+                mobNoStats.MaxHits = 100;
+            });
+            CHECK(runJsCheck("Mobiles.WaitForStats(0x204, 500) === true;"));
+            statsFeed.join();
+            CHECK(g_HarnessHooks.LastStatusSerial == 0x204);
+        }
+        printf("re-api: Mobiles namespace ok\n");
+
+        // 10d. Target namespace (HasTarget, WaitForTarget, TargetExecute, Self, Last, Cancel, SetLast, PromptTarget)
+        g_Target.Targeting = false;
+        g_LastTargetObject = 0;
+        CHECK(runJsCheck("Target.HasTarget() === false && Target.WaitForTarget(30) === false;"));
+        {
+            std::thread targetArrive([]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                g_Target.Targeting = true;
+            });
+            CHECK(runJsCheck("Target.WaitForTarget(500) === true && Target.HasTarget() === true;"));
+            targetArrive.join();
+        }
+        CHECK(runJsCheck("Target.TargetExecute(0x201) === true && Target.HasTarget() === false;"));
+        CHECK(g_HarnessHooks.LastTargetSentSerial == 0x201);
+
+        g_Target.Targeting = true;
+        CHECK(runJsCheck("Target.TargetExecute(105, 205, 5, 0x051A) === true;"));
+        CHECK(g_HarnessHooks.LastTargetTileX == 105 && g_HarnessHooks.LastTargetTileY == 205 &&
+              g_HarnessHooks.LastTargetTileZ == 5 && g_HarnessHooks.LastTargetTileGraphic == 0x051A);
+
+        g_Target.Targeting = true;
+        CHECK(runJsCheck("Target.Self() === true;"));
+        CHECK(g_HarnessHooks.LastTargetSentSerial == player.Serial);
+
+        CHECK(runJsCheck("Target.SetLast(0x202) === true && Target.GetLast() === 0x202;"));
+        g_Target.Targeting = true;
+        CHECK(runJsCheck("Target.Last() === true;"));
+        CHECK(g_HarnessHooks.LastTargetSentSerial == 0x202);
+
+        g_Target.Targeting = true;
+        CHECK(runJsCheck("Target.Cancel() === true && Target.HasTarget() === false;"));
+        CHECK(g_HarnessHooks.TargetCancelledCount >= 1);
+
+        // PromptTarget delivers selected serial and restores previous g_LastTargetObject
+        {
+            std::thread deliverPrompt([]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                ScriptPromptTarget_Deliver(0x201);
+            });
+            CHECK(runJsCheck(
+                "var picked = Target.PromptTarget('Pick a mob', 0x35, 500);"
+                " picked === 0x201 && Target.GetLast() === 0x202;"));
+            deliverPrompt.join();
+        }
+        printf("re-api: Target namespace ok\n");
+
+        // 10e. Journal namespace
+        {
+            CJournalMessage m1(0x204, 0x0035, "Halt citizen!");
+            m1.Flags = JMT_NORMAL;
+            CJournalMessage m2(0xFFFFFFFF, 0x03B2, "Vendor: Welcome to my shop");
+            m2.Flags = JMT_SYSTEM;
+            ScriptJournal_Add(m1);
+            ScriptJournal_Add(m2);
+            CHECK(runJsCheck(
+                "Journal.Search('welcome') === true &&"
+                " Journal.Search('missing') === false &&"
+                " Journal.SearchByName('welcome', 'vendor') === true &&"
+                " Journal.SearchByName('halt', 'town guard') === true &&"
+                " Journal.SearchByName('halt', 'vendor') === false &&"
+                " Journal.GetTextBySerial(0x204).length === 1 &&"
+                " Journal.GetTextBySerial(0x204, true)[0] === 'Town Guard: Halt citizen!' &&"
+                " Journal.GetLineText('shop') === 'Vendor: Welcome to my shop' &&"
+                " Journal.GetTextByColor(0x0035).length === 1;"));
+
+            std::thread journalFeed([]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                ScriptJournal_Add(CJournalMessage(0xFFFFFFFF, 0x03B2, "You finish healing."));
+            });
+            CHECK(runJsCheck("Journal.WaitJournal('finish healing', 500) === true;"));
+            journalFeed.join();
+            CHECK(runJsCheck("Journal.Clear(); Journal.Search('finish healing') === false;"));
+        }
+        printf("re-api: Journal namespace ok\n");
+
+        // 10f. Gumps namespace
+        {
+            GumpData g1;
+            g1.Serial = 0x50000001;
+            g1.ID = 0x12345678;
+            g1.m_Text = { "Blacksmithing Menu", "Craft Katana", "Cancel" };
+            g_HarnessHooks.HarnessGumps = { &g1 };
+
+            CHECK(runJsCheck(
+                "Gumps.HasGump() === true &&"
+                " Gumps.HasGump(0x12345678) === true &&"
+                " Gumps.HasGump(0x99999999) === false &&"
+                " Gumps.CurrentGump() === 0x12345678 &&"
+                " Gumps.LastGumpGetLineList().length === 3 &&"
+                " Gumps.LastGumpGetLine(1) === 'Craft Katana' &&"
+                " Gumps.LastGumpTextExist('katana') === true &&"
+                " Gumps.SendAction(0x12345678, 7, [101, 102], { 1: 'hello' }) === true &&"
+                " Gumps.HasGump(0x12345678) === false;"));
+            CHECK(g_HarnessHooks.LastGumpChoiceButton == 7 &&
+                  g_HarnessHooks.LastGumpChoiceId == 0x12345678 &&
+                  g_HarnessHooks.LastGumpChoiceCheckCount == 2 &&
+                  g_HarnessHooks.LastGumpChoiceEntryCount == 1);
+
+            GumpData g2;
+            g2.Serial = 0x50000002;
+            g2.ID = 0xABCDEF01;
+            g_HarnessHooks.HarnessGumps.clear();
+            std::thread gumpArrive([&g2]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                g_HarnessHooks.HarnessGumps.push_back(&g2);
+            });
+            CHECK(runJsCheck(
+                "Gumps.WaitForGump(0xABCDEF01, 500) === true &&"
+                " Gumps.CloseGump(0xABCDEF01) === true &&"
+                " Gumps.HasGump(0xABCDEF01) === false;"));
+            gumpArrive.join();
+            CHECK(g_HarnessHooks.LastGumpChoiceButton == 0);
+            g_HarnessHooks.HarnessGumps.clear();
+        }
+        printf("re-api: Gumps namespace ok\n");
+
+        // 10g. Timer & Misc namespaces (countdown timers, shared values, ignore, script dir)
+        CHECK(runJsCheck(
+            "Timer.Create('HealCD', 60);"
+            " var active1 = Timer.Check('healcd');"
+            " var rem1 = Timer.Remaining('HEALCD');"
+            " Misc.Pause(80);"
+            " var active2 = Timer.Check('healcd');"
+            " var rem2 = Timer.Remaining('healcd');"
+            " Timer.Create('Keep', 5000);"
+            " var removed1 = Timer.Remove('keep');"
+            " var removed2 = Timer.Remove('keep');"
+            " active1 === true && rem1 > 0 && active2 === false && rem2 === 0 &&"
+            " removed1 === true && removed2 === false;"));
+
+        CHECK(runJsCheck(
+            "Misc.NoOperation();"
+            " Misc.SendMessage('Hello RE', 0x0044);"
+            " Misc.SetSharedValue('count', 42);"
+            " Misc.SetSharedValue('flag', true);"
+            " Misc.SetSharedValue('meta', { name: 'Britannia', ok: 1 });"
+            " var ok = Misc.CheckSharedValue('count') === true &&"
+            "   Misc.ReadSharedValue('count') === 42 &&"
+            "   Misc.ReadSharedValue('flag') === true &&"
+            "   Misc.ReadSharedValue('meta').name === 'Britannia' &&"
+            "   Misc.ReadSharedValue('missing') === null &&"
+            "   Misc.RemoveSharedValue('flag') === true &&"
+            "   Misc.CheckSharedValue('flag') === false &&"
+            "   Misc.CurrentScriptDirectory() === '/tmp/scripts';"
+            " ok;",
+            "/tmp/scripts/my_script.js"));
+        CHECK(g_HarnessHooks.LastPrintText == "Hello RE" && g_HarnessHooks.LastPrintColor == 0x0044);
+
+        // Shared values persist across separate JS runtimes/scripts
+        CHECK(runJsCheck("Misc.ReadSharedValue('count') === 42;"));
+
+        // Ignore list integrates with Mobiles.ApplyFilter
+        CHECK(runJsCheck(
+            "Misc.IgnoreObject(0x201);"
+            " var c1 = Misc.CheckIgnoreObject(0x201);"
+            " var f1 = Mobiles.ApplyFilter({ range: 10, notoriety: [6], checklineofsight: true });"
+            " var fNoIgn = Mobiles.ApplyFilter({ range: 10, notoriety: [6], checklineofsight: true, CheckIgnoreObject: false });"
+            " Misc.UnIgnoreObject(0x201);"
+            " var c2 = Misc.CheckIgnoreObject(0x201);"
+            " Misc.IgnoreObject(0x202);"
+            " Misc.ClearIgnore();"
+            " c1 === true && f1.length === 0 && fNoIgn.length === 1 &&"
+            " c2 === false && Misc.CheckIgnoreObject(0x202) === false;"));
+        printf("re-api: Timer & Misc namespaces ok\n");
+
+        // 10h. Agent facades (AutoLoot, BandageHeal, Organizer, Restock, Scavenger)
+        CHECK(runJsCheck(
+            "AutoLoot.ChangeList('Gold');"
+            " var a1 = AutoLoot.Start() && AutoLoot.Status() && AutoLoot.RunOnce() && AutoLoot.Stop() && !AutoLoot.Status();"
+            " var b1 = BandageHeal.Start() && BandageHeal.Status() && BandageHeal.Stop() && !BandageHeal.Status();"
+            " Organizer.ChangeList('Regs');"
+            " var o1 = Organizer.FStart() && Organizer.Status() && Organizer.FStop() && !Organizer.Status();"
+            " Restock.ChangeList('Potions');"
+            " var r1 = Restock.FStart() && Restock.Status() && Restock.FStop() && !Restock.Status();"
+            " Scavenger.ChangeList('Arrows');"
+            " Scavenger.ResetIgnore();"
+            " var s1 = Scavenger.Start() && Scavenger.Status() && Scavenger.Stop() && !Scavenger.Status();"
+            " a1 && b1 && o1 && r1 && s1;"));
+        CHECK(g_HarnessHooks.LastAutoLootOnce == "Gold");
+        CHECK(g_HarnessHooks.LastInventoryPreset == "Arrows");
+        CHECK(g_HarnessHooks.ScavengerCacheCleared == 1);
+        printf("re-api: Agent facades ok\n");
+
+        // 10i. PathFinding / Route helper
+        g_HarnessHooks.WalkToSucceeds = true;
+        g_HarnessHooks.WalkToAutoArrive = true;
+        g_HarnessHooks.WalkToCallCount = 0;
+        CHECK(runJsCheck(
+            "var r = PathFinding.Route([{ X: 110, Y: 210 }, { X: 125, Y: 225, Z: 5 }]);"
+            " var ok1 = PathFinding.Go(r);"
+            " var ok2 = PathFinding.RunRoute([[130, 230], { x: 135, y: 235 }]);"
+            " ok1 && ok2 && Player.X() === 135 && Player.Y() === 235;"));
+        CHECK(g_HarnessHooks.WalkToCallCount == 4);
+
+        // Failure case when pathfinder rejects destination
+        g_HarnessHooks.WalkToSucceeds = false;
+        g_HarnessHooks.WalkToAutoArrive = false;
+        CHECK(runJsCheck("PathFinding.Go(500, 500, 0, { StopIfStuck: true, Timeout: 100 }) === false;"));
+        printf("re-api: PathFinding & Route helper ok\n");
+
+        // 10j. Completion list exposes all new Razor Enhanced namespaces
+        {
+            const vector<XA_API_COMPLETION> &completions = ScriptAPI_CompletionList();
+            auto hasCompletion = [&](const char *scope, const char *name) {
+                for (const XA_API_COMPLETION &c : completions)
+                {
+                    if (strcmp(c.Scope, scope) == 0 && strcmp(c.Name, name) == 0)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            CHECK(hasCompletion("", "Items") && hasCompletion("Items", "FindByID"));
+            CHECK(hasCompletion("", "Mobiles") && hasCompletion("Mobiles", "ApplyFilter"));
+            CHECK(hasCompletion("", "Target") && hasCompletion("Target", "PromptTarget"));
+            CHECK(hasCompletion("", "Journal") && hasCompletion("Journal", "WaitJournal"));
+            CHECK(hasCompletion("", "Gumps") && hasCompletion("Gumps", "SendAction"));
+            CHECK(hasCompletion("", "Timer") && hasCompletion("Timer", "Create"));
+            CHECK(hasCompletion("", "Misc") && hasCompletion("Misc", "ReadSharedValue"));
+            CHECK(hasCompletion("", "AutoLoot") && hasCompletion("AutoLoot", "RunOnce"));
+            CHECK(hasCompletion("", "BandageHeal") && hasCompletion("BandageHeal", "Start"));
+            CHECK(hasCompletion("", "Organizer") && hasCompletion("Organizer", "FStart"));
+            CHECK(hasCompletion("", "Restock") && hasCompletion("Restock", "FStart"));
+            CHECK(hasCompletion("", "Scavenger") && hasCompletion("Scavenger", "ResetIgnore"));
+            CHECK(hasCompletion("", "PathFinding") && hasCompletion("PathFinding", "RunRoute"));
+        }
+
+        // 10k. Interrupt / termination safety on blocking Razor Enhanced waits
+        {
+            g_HarnessHooks.WalkToSucceeds = true;
+            g_HarnessHooks.WalkToAutoArrive = false; // stays AutoWalking until stopped
+            g_HarnessHooks.StopAutoWalkCount = 0;
+            g_Target.Targeting = false;
+            g_HarnessHooks.HarnessGumps.clear();
+            ScriptJournal_Clear();
+
+            CScriptManager &mgr = *ScriptManager_Get();
+            struct WaitStopCase
+            {
+                const char *path;
+                const char *source;
+            };
+            const WaitStopCase waitCases[] = {
+                { "re_stop_pause.js", "try { Misc.Pause(60000); } catch (e) {} while (true) { Misc.Pause(60000); }" },
+                { "re_stop_target.js", "Target.WaitForTarget(60000);" },
+                { "re_stop_journal.js", "Journal.WaitJournal('never_arrives', 60000);" },
+                { "re_stop_gump.js", "Gumps.WaitForGump(0xDEADBEEF, 60000);" },
+                { "re_stop_walk.js", "PathFinding.Go(999, 999, 0, { Timeout: 60000 });" },
+            };
+            for (const WaitStopCase &wc : waitCases)
+            {
+                mgr.RunFile(wc.path, wc.source);
+                std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                CHECK(mgr.RunningFile(wc.path));
+                mgr.TerminateFile(wc.path);
+                bool stopped = false;
+                for (int i = 0; i < 200 && !stopped; i++)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    stopped = !mgr.RunningFile(wc.path);
+                }
+                CHECK(stopped);
+                mgr.Tick();
+            }
+            CHECK(g_HarnessHooks.StopAutoWalkCount >= 1);
+            printf("re-api: interrupt/termination safety on all blocking waits ok\n");
+        }
+
+        draining = false;
+        drainThread.join();
+
+        g_World = nullptr;
+        g_Player = nullptr;
+        g_PlayerSerial = 0;
+        g_Backpack = 0;
+        g_Connected = false;
+        g_EnabledCommands = 0;
+        g_HarnessHooks.Reset();
+        ScriptJournal_Clear();
+        ScriptBuffs_Clear();
+        ScriptCountdownTimer_Clear();
+        ScriptSharedValue_Clear();
+        ScriptIgnore_Clear();
+        ScriptAgentList_Clear();
+    }
+
+    // --- 11. External script IPC bridge (.py / .cs out-of-process JSON-RPC) ---
+    {
+        // 11a. Extension detection & language labels
+        CHECK(ExternalScript_DetectKind("heal.py") == ExternalScriptKind::Python);
+        CHECK(ExternalScript_DetectKind("/tmp/dir.v1/HEAL.PY") == ExternalScriptKind::Python);
+        CHECK(ExternalScript_DetectKind("farm.cs") == ExternalScriptKind::CSharp);
+        CHECK(ExternalScript_DetectKind("C:\\scripts\\FARM.CS") == ExternalScriptKind::CSharp);
+        CHECK(ExternalScript_DetectKind("macro.js") == ExternalScriptKind::None);
+        CHECK(ExternalScript_DetectKind("/tmp/dir.py/notes.txt") == ExternalScriptKind::None);
+        CHECK(ExternalScript_DetectKind("/tmp/noext") == ExternalScriptKind::None);
+        CHECK(ExternalScript_IsExternal("a.py"));
+        CHECK(ExternalScript_IsExternal("b.cs"));
+        CHECK(!ExternalScript_IsExternal("c.js"));
+        CHECK(strcmp(ExternalScript_LanguageLabel("a.py"), "Python (.py)") == 0);
+        CHECK(strcmp(ExternalScript_LanguageLabel("a.cs"), "C# (.cs)") == 0);
+        CHECK(strcmp(ExternalScript_LanguageLabel("a.js"), "JavaScript (.js)") == 0);
+        printf("ipc-bridge: extension detection ok\n");
+
+        // Spin up mock world + drain thread for RPC & subprocess tests
+        std::atomic<bool> draining{ true };
+        std::thread drainThread([&draining]() {
+            while (draining.load())
+            {
+                g_Ticks += 5;
+                ScriptQueue_Drain();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
+
+        CGameWorld world;
+        CPlayer player;
+        player.Serial = 0x00000100;
+        player.Hits = 85;
+        player.MaxHits = 100;
+        player.Mana = 40;
+        player.MaxMana = 60;
+        player.Stam = 55;
+        player.MaxStam = 90;
+        player.m_X = 123;
+        player.m_Y = 456;
+        player.m_Z = 7;
+        player.MapIndex = 1;
+        player.Gold = 5000;
+        player.Weight = 120;
+        player.MaxWeight = 400;
+        player.SetName("IpcHero");
+
+        CGameItem backpack;
+        backpack.Serial = 0x40000020;
+        backpack.Graphic = 0x0E75;
+        backpack.Layer = 0x15;
+        backpack.Container = player.Serial;
+        backpack.Opened = true;
+
+        CGameItem bandages;
+        bandages.Serial = 0x40000021;
+        bandages.Graphic = 0x0E21;
+        bandages.Color = 0;
+        bandages.Count = 33;
+        bandages.Container = backpack.Serial;
+        backpack.Add(&bandages);
+        player.Add(&backpack);
+
+        g_World = &world;
+        g_Player = &player;
+        g_PlayerSerial = player.Serial;
+        g_Backpack = backpack.Serial;
+        g_Connected = true;
+        g_EnabledCommands = ~0ULL;
+        g_HarnessHooks.Reset();
+        ScriptSharedValue_Clear();
+        ScriptCountdownTimer_Clear();
+
+        // 11b. Direct JSON-RPC dispatch: allowlist rejection & valid calls
+        {
+            CScriptEngine eng;
+            CHECK(eng.Setup("ipc_unit.py", "/tmp/ipc_unit.py"));
+
+            auto checkRpc = [&](const char *req, bool wantOk, const char *mustContain) {
+                astr_t resp;
+                bool interrupted = false;
+                const bool ok = ExternalScript_DispatchRpcLine(eng, req, resp, interrupted);
+                CHECK(ok == wantOk);
+                CHECK(!interrupted);
+                CHECK(!resp.empty() && resp[resp.size() - 1] == '\n');
+                if (mustContain != nullptr)
+                {
+                    CHECK(resp.find(mustContain) != astr_t::npos);
+                }
+            };
+
+            // Disallowed namespaces & prototype escape attempts
+            checkRpc("{\"id\":1,\"ns\":\"eval\",\"fn\":\"call\",\"args\":[\"1+1\"]}", false, "\"ok\":false");
+            checkRpc("{\"id\":2,\"ns\":\"Object\",\"fn\":\"keys\",\"args\":[{}]}", false, "Disallowed namespace");
+            checkRpc("{\"id\":3,\"ns\":\"Function\",\"fn\":\"constructor\",\"args\":[]}", false, "Disallowed namespace");
+            checkRpc("{\"id\":4,\"ns\":\"TextWindow\",\"fn\":\"Open\",\"args\":[]}", false, "Disallowed namespace");
+            checkRpc("{\"id\":5,\"ns\":\"Player\",\"fn\":\"constructor\",\"args\":[]}", false, "Unknown API method");
+            checkRpc("{\"id\":6,\"ns\":\"Player\",\"fn\":\"__proto__\",\"args\":[]}", false, "Unknown API method");
+            checkRpc("{\"id\":7,\"ns\":\"Player\",\"fn\":\"toString\",\"args\":[]}", false, "Unknown API method");
+            checkRpc("{\"id\":8,\"ns\":\"Player\",\"fn\":\"DoesNotExist\",\"args\":[]}", false, "Unknown API method");
+            checkRpc("not valid json", false, "Invalid JSON-RPC");
+            checkRpc("{\"id\":9,\"ns\":\"Player\",\"fn\":\"Hits\",\"args\":\"bad\"}", false, "'args' must be an array");
+
+            // Valid RPC calls across Player / Items / Misc / Timer / Client
+            checkRpc("{\"id\":10,\"ns\":\"Player\",\"fn\":\"Hits\",\"args\":[]}", true, "\"result\":85");
+            checkRpc("{\"id\":11,\"ns\":\"Player\",\"fn\":\"Position\",\"args\":[]}", true, "\"X\":123");
+            checkRpc("{\"id\":12,\"ns\":\"Items\",\"fn\":\"BackpackCount\",\"args\":[3617]}", true, "\"result\":33");
+            checkRpc("{\"id\":13,\"ns\":\"Items\",\"fn\":\"FindBySerial\",\"args\":[1073741857]}", true, "\"Amount\":33");
+            checkRpc("{\"id\":14,\"ns\":\"Misc\",\"fn\":\"SetSharedValue\",\"args\":[\"ipc_k\",\"hello\"]}", true, "\"ok\":true");
+            checkRpc("{\"id\":15,\"ns\":\"Misc\",\"fn\":\"ReadSharedValue\",\"args\":[\"ipc_k\"]}", true, "\"result\":\"hello\"");
+            checkRpc("{\"id\":16,\"ns\":\"Timer\",\"fn\":\"Create\",\"args\":[\"ipc_t\",5000]}", true, "\"ok\":true");
+            checkRpc("{\"id\":17,\"ns\":\"Timer\",\"fn\":\"Check\",\"args\":[\"ipc_t\"]}", true, "\"result\":true");
+            checkRpc("{\"id\":18,\"ns\":\"Client\",\"fn\":\"Info\",\"args\":[\"hi\"]}", true, "\"result\":null");
+            printf("ipc-bridge: direct RPC allowlist + dispatch ok\n");
+        }
+
+        // 11c. Out-of-process subprocess tests with a controlled mock python_host.py
+        {
+            char tmpDirTpl[] = "/tmp/xuo_ipc_test_XXXXXX";
+            char *tmpDirPtr = mkdtemp(tmpDirTpl);
+            CHECK(tmpDirPtr != nullptr);
+            if (tmpDirPtr != nullptr)
+            {
+                const astr_t tmpDir(tmpDirPtr);
+                const astr_t mockHost = tmpDir + "/python_host.py";
+                const astr_t pyRpcScript = tmpDir + "/rpc_check.py";
+                const astr_t pyPauseScript = tmpDir + "/pause_check.py";
+                const astr_t pyLoopScript = tmpDir + "/loop_kill.py";
+                const astr_t pidFile = tmpDir + "/loop.pid";
+                const astr_t envOutFile = tmpDir + "/env_dump.json";
+
+                // Save original XUO_RUNTIME_DIR
+                const char *origRuntimeEnv = getenv("XUO_RUNTIME_DIR");
+                const bool hadOrigRuntime = origRuntimeEnv != nullptr;
+                const astr_t origRuntimeVal = hadOrigRuntime ? astr_t(origRuntimeEnv) : astr_t();
+
+                // Write mock python_host.py that executes the script file with an rpc() helper
+                const char *mockHostCode =
+                    "import json, os, sys\n"
+                    "raw_out = os.fdopen(os.dup(1), 'w', encoding='utf-8', buffering=1)\n"
+                    "sys.stdout = sys.stderr\n"
+                    "req_id = 0\n"
+                    "def rpc(ns, fn, args=None):\n"
+                    "    global req_id\n"
+                    "    req_id += 1\n"
+                    "    payload = json.dumps({'id': req_id, 'ns': ns, 'fn': fn, 'args': args or []})\n"
+                    "    raw_out.write(payload + '\\n')\n"
+                    "    raw_out.flush()\n"
+                    "    line = sys.stdin.readline()\n"
+                    "    if not line:\n"
+                    "        raise SystemExit(0)\n"
+                    "    return json.loads(line)\n"
+                    "script_path = os.environ['XUO_SCRIPT_PATH']\n"
+                    "with open(script_path, 'r', encoding='utf-8') as f:\n"
+                    "    code = f.read()\n"
+                    "exec(compile(code, script_path, 'exec'), {'rpc': rpc, '__file__': script_path})\n";
+
+                CHECK(ScriptList_WriteFile(mockHost, mockHostCode));
+
+                // 1) RPC + env vars + >100 KiB stderr (deadlock check)
+                const astr_t rpcScriptCode =
+                    "import json, os, sys\n"
+                    "env_info = {\n"
+                    "    'path': os.environ.get('XUO_SCRIPT_PATH', ''),\n"
+                    "    'dir': os.environ.get('XUO_SCRIPT_DIR', ''),\n"
+                    "    'name': os.environ.get('XUO_SCRIPT_NAME', ''),\n"
+                    "    'args': json.loads(os.environ.get('XUO_SCRIPT_ARGS_JSON', '[]')),\n"
+                    "    'runtime': os.environ.get('XUO_RUNTIME_DIR', ''),\n"
+                    "    'dotnet': os.environ.get('XUO_DOTNET_BIN', ''),\n"
+                    "    'cache': os.environ.get('XUO_CACHE_DIR', ''),\n"
+                    "}\n"
+                    "with open('" + envOutFile + "', 'w', encoding='utf-8') as f:\n"
+                    "    json.dump(env_info, f)\n"
+                    "for i in range(1200):\n"
+                    "    sys.stderr.write(('stderr-burst-' + ('x' * 90) + '\\n'))\n"
+                    "sys.stderr.write('stderr-sentinel-line\\n')\n"
+                    "sys.stderr.flush()\n"
+                    "r_bad = rpc('eval', 'call', ['1'])\n"
+                    "assert not r_bad['ok']\n"
+                    "r_hits = rpc('Player', 'Hits')\n"
+                    "assert r_hits['ok'] and r_hits['result'] == 85\n"
+                    "r_cnt = rpc('Items', 'BackpackCount', [0x0E21])\n"
+                    "assert r_cnt['ok'] and r_cnt['result'] == 33\n"
+                    "r_set = rpc('Misc', 'SetSharedValue', ['py_bridge_val', r_hits['result'] + r_cnt['result']])\n"
+                    "assert r_set['ok']\n";
+                CHECK(ScriptList_WriteFile(pyRpcScript, rpcScriptCode));
+
+                // 2) Pause/Resume gating script
+                const astr_t pauseScriptCode =
+                    "r1 = rpc('Misc', 'SetSharedValue', ['pause_stage', 1])\n"
+                    "assert r1['ok']\n"
+                    "import time\n"
+                    "time.sleep(0.08)\n"
+                    "r2 = rpc('Misc', 'SetSharedValue', ['pause_stage', 2])\n"
+                    "assert r2['ok']\n";
+                CHECK(ScriptList_WriteFile(pyPauseScript, pauseScriptCode));
+
+                // 3) Infinite loop ignoring SIGTERM (verifies SIGTERM -> SIGKILL escalation & no zombies)
+                const astr_t loopScriptCode =
+                    "import os, signal, time\n"
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    "with open('" + pidFile + "', 'w', encoding='utf-8') as f:\n"
+                    "    f.write(str(os.getpid()))\n"
+                    "while True:\n"
+                    "    time.sleep(0.05)\n";
+                CHECK(ScriptList_WriteFile(pyLoopScript, loopScriptCode));
+
+                setenv("XUO_RUNTIME_DIR", tmpDir.c_str(), 1);
+                CScriptManager &mgr = *ScriptManager_Get();
+
+                // Run 1: RPC + env + stderr
+                {
+                    vector<astr_t> runArgs;
+                    runArgs.push_back("arg1");
+                    runArgs.push_back("two words");
+                    CScriptHandle *h = mgr.RunFile(pyRpcScript, "", runArgs);
+                    CHECK(h != nullptr);
+                    bool finished = false;
+                    for (int i = 0; i < 400 && !finished; i++)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        finished = !mgr.RunningFile(pyRpcScript);
+                    }
+                    CHECK(finished);
+                    CHECK(h != nullptr && h->State() == SS_FINISHED);
+                    mgr.Tick();
+
+                    astr_t sharedOut;
+                    CHECK(ScriptSharedValue_Get("py_bridge_val", sharedOut) && sharedOut == "118");
+                    CHECK(g_HarnessHooks.LastPrintColor == 0x0021);
+                    CHECK(g_HarnessHooks.LastPrintText.find("stderr-sentinel-line") != astr_t::npos);
+
+                    astr_t envDump;
+                    CHECK(ScriptList_ReadFile(envOutFile, envDump));
+                    CHECK(envDump.find("rpc_check.py") != astr_t::npos);
+                    CHECK(envDump.find("two words") != astr_t::npos);
+                    CHECK(envDump.find(tmpDir) != astr_t::npos);
+                    printf("ipc-bridge: subprocess RPC + env + stderr non-deadlock ok\n");
+                }
+
+                // Run 2: Pause & Resume
+                {
+                    ScriptSharedValue_Remove("pause_stage");
+                    CScriptHandle *h = mgr.RunFile(pyPauseScript, "");
+                    CHECK(h != nullptr);
+                    // Wait until stage 1 is written, then pause before stage 2 RPC
+                    bool reachedStage1 = false;
+                    for (int i = 0; i < 200 && !reachedStage1; i++)
+                    {
+                        astr_t v;
+                        if (ScriptSharedValue_Get("pause_stage", v) && v == "1")
+                        {
+                            reachedStage1 = true;
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                    CHECK(reachedStage1);
+                    CHECK(mgr.TogglePauseFile(pyPauseScript));
+                    CHECK(mgr.PausedFile(pyPauseScript));
+                    // Give child time past its 80ms sleep; it must stay blocked on stage 2 RPC while paused
+                    std::this_thread::sleep_for(std::chrono::milliseconds(180));
+                    astr_t pausedVal;
+                    CHECK(ScriptSharedValue_Get("pause_stage", pausedVal) && pausedVal == "1");
+                    CHECK(mgr.RunningFile(pyPauseScript));
+                    // Resume and verify it completes stage 2
+                    CHECK(mgr.TogglePauseFile(pyPauseScript));
+                    CHECK(!mgr.PausedFile(pyPauseScript));
+                    bool finished = false;
+                    for (int i = 0; i < 300 && !finished; i++)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        finished = !mgr.RunningFile(pyPauseScript);
+                    }
+                    CHECK(finished);
+                    astr_t resumedVal;
+                    CHECK(ScriptSharedValue_Get("pause_stage", resumedVal) && resumedVal == "2");
+                    mgr.Tick();
+                    printf("ipc-bridge: subprocess pause/resume ok\n");
+                }
+
+                // Run 3: Terminate infinite-loop child (SIG_IGN SIGTERM -> SIGKILL + zero zombies)
+                {
+                    CScriptHandle *h = mgr.RunFile(pyLoopScript, "");
+                    CHECK(h != nullptr);
+                    int childPid = 0;
+                    for (int i = 0; i < 200 && childPid == 0; i++)
+                    {
+                        astr_t pidText;
+                        if (ScriptList_ReadFile(pidFile, pidText) && !pidText.empty())
+                        {
+                            childPid = atoi(pidText.c_str());
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    }
+                    CHECK(childPid > 0);
+                    CHECK(mgr.RunningFile(pyLoopScript));
+
+                    mgr.TerminateFile(pyLoopScript);
+                    bool stopped = false;
+                    for (int i = 0; i < 300 && !stopped; i++)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        stopped = !mgr.RunningFile(pyLoopScript);
+                    }
+                    CHECK(stopped);
+                    // Child must be dead and reaped (ESRCH, not a zombie)
+                    CHECK(childPid > 0 && ::kill((pid_t)childPid, 0) == -1 && errno == ESRCH);
+                    mgr.Tick();
+                    printf("ipc-bridge: subprocess SIGTERM/SIGKILL terminate + reap ok\n");
+                }
+
+                // Restore XUO_RUNTIME_DIR
+                if (hadOrigRuntime)
+                {
+                    setenv("XUO_RUNTIME_DIR", origRuntimeVal.c_str(), 1);
+                }
+                else
+                {
+                    unsetenv("XUO_RUNTIME_DIR");
+                }
+
+                // 11d. Optional real .py and .cs end-to-end smoke checks when runtime hosts exist
+                const astr_t realRuntimeDir = ExternalScript_ResolveRuntimeDir();
+                const astr_t realPyHost = realRuntimeDir + "/python_host.py";
+                const astr_t realCsHost = realRuntimeDir + "/csharp/run_csharp_script.py";
+                if (::access(realPyHost.c_str(), R_OK) == 0)
+                {
+                    const astr_t realPyScript = tmpDir + "/real_smoke.py";
+                    const char *realPyCode =
+                        "hits = Player.Hits\n"
+                        "cnt = Items.BackpackCount(0x0E21)\n"
+                        "Misc.SetSharedValue('real_py_smoke', hits + cnt)\n";
+                    CHECK(ScriptList_WriteFile(realPyScript, realPyCode));
+                    ScriptSharedValue_Remove("real_py_smoke");
+                    CScriptHandle *h = mgr.RunFile(realPyScript, "");
+                    CHECK(h != nullptr);
+                    bool finished = false;
+                    for (int i = 0; i < 500 && !finished; i++)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        finished = !mgr.RunningFile(realPyScript);
+                    }
+                    CHECK(finished);
+                    astr_t outVal;
+                    CHECK(ScriptSharedValue_Get("real_py_smoke", outVal) && outVal == "118");
+                    mgr.Tick();
+                    unlink(realPyScript.c_str());
+                    printf("ipc-bridge: real python_host.py end-to-end smoke ok\n");
+                }
+                else
+                {
+                    printf("ipc-bridge: real python_host.py not present yet (skipped optional smoke)\n");
+                }
+
+                if (::access(realCsHost.c_str(), R_OK) == 0)
+                {
+                    const astr_t realCsScript = tmpDir + "/real_smoke.cs";
+                    const char *realCsCode =
+                        "namespace RazorEnhanced {\n"
+                        "  public class Script {\n"
+                        "    public void Run() {\n"
+                        "      int total = Player.Hits + Items.BackpackCount(0x0E21);\n"
+                        "      Misc.SetSharedValue(\"real_cs_smoke\", total);\n"
+                        "    }\n"
+                        "  }\n"
+                        "}\n";
+                    CHECK(ScriptList_WriteFile(realCsScript, realCsCode));
+                    ScriptSharedValue_Remove("real_cs_smoke");
+                    CScriptHandle *h = mgr.RunFile(realCsScript, "");
+                    CHECK(h != nullptr);
+                    bool finished = false;
+                    for (int i = 0; i < 1500 && !finished; i++)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        finished = !mgr.RunningFile(realCsScript);
+                    }
+                    CHECK(finished);
+                    astr_t outVal;
+                    CHECK(ScriptSharedValue_Get("real_cs_smoke", outVal) && outVal == "118");
+                    mgr.Tick();
+                    unlink(realCsScript.c_str());
+                    printf("ipc-bridge: real run_csharp_script.py end-to-end smoke ok\n");
+                }
+                else
+                {
+                    printf("ipc-bridge: real run_csharp_script.py not present yet (skipped optional smoke)\n");
+                }
+
+                unlink(mockHost.c_str());
+                unlink(pyRpcScript.c_str());
+                unlink(pyPauseScript.c_str());
+                unlink(pyLoopScript.c_str());
+                unlink(pidFile.c_str());
+                unlink(envOutFile.c_str());
+                rmdir(tmpDir.c_str());
+            }
+        }
+
+        draining = false;
+        drainThread.join();
+
+        g_World = nullptr;
+        g_Player = nullptr;
+        g_PlayerSerial = 0;
+        g_Backpack = 0;
+        g_Connected = false;
+        g_EnabledCommands = 0;
+        g_HarnessHooks.Reset();
+        ScriptSharedValue_Clear();
+        ScriptCountdownTimer_Clear();
     }
 
     if (failures == 0)
