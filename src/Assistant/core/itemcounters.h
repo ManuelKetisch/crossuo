@@ -38,6 +38,9 @@ struct SupplyCounter
     uint16_t Graphic = 0;
     uint16_t Hue = 0;
     int Count = 0;
+    int WeightStones = -1;
+    bool WeightEstimated = false;
+    uint16_t UnitWeightMilliStones = 0;
     bool Icon = false;
     bool Low = false;
     int Warning = 0;
@@ -47,7 +50,10 @@ struct SupplyCounter
     bool operator==(const SupplyCounter &other) const
     {
         return Name == other.Name && Key == other.Key && Graphic == other.Graphic &&
-               Hue == other.Hue && Count == other.Count && Icon == other.Icon && Low == other.Low &&
+               Hue == other.Hue && Count == other.Count && WeightStones == other.WeightStones &&
+               WeightEstimated == other.WeightEstimated &&
+               UnitWeightMilliStones == other.UnitWeightMilliStones &&
+               Icon == other.Icon && Low == other.Low &&
                Warning == other.Warning && Highlighted == other.Highlighted &&
                Category == other.Category;
     }
@@ -59,6 +65,11 @@ struct SuppliesSnapshot
     SuppliesCoverage Coverage = SuppliesCoverage::Unknown;
     bool Recounting = false;
     bool CanRecount = false;
+    int TotalSupplyWeightStones = 0;
+    bool HasSupplyWeight = false;
+    bool TotalSupplyWeightEstimated = false;
+    std::array<int, ItemCounters_CategoryCount> CategoryWeightStones{};
+    std::array<bool, ItemCounters_CategoryCount> CategoryWeightEstimated{};
     astr_t BandageText;
     astr_t GoldText;
     astr_t GateText;
@@ -73,7 +84,13 @@ struct SuppliesSnapshot
     bool operator==(const SuppliesSnapshot &other) const
     {
         return Coverage == other.Coverage && Recounting == other.Recounting &&
-               CanRecount == other.CanRecount && BandageText == other.BandageText &&
+               CanRecount == other.CanRecount &&
+               TotalSupplyWeightStones == other.TotalSupplyWeightStones &&
+               HasSupplyWeight == other.HasSupplyWeight &&
+               TotalSupplyWeightEstimated == other.TotalSupplyWeightEstimated &&
+               CategoryWeightStones == other.CategoryWeightStones &&
+               CategoryWeightEstimated == other.CategoryWeightEstimated &&
+               BandageText == other.BandageText &&
                GoldText == other.GoldText && GateText == other.GateText &&
                CriminalText == other.CriminalText && CastSpellName == other.CastSpellName &&
                AutoRecount == other.AutoRecount && SkipPouches == other.SkipPouches &&
@@ -84,6 +101,7 @@ struct SuppliesSnapshot
 };
 
 SuppliesSnapshot ItemCounters_GetSupplies();
+SupplyWeightSummary ItemCounters_GetSupplyWeightSummary();
 bool ItemCounters_StartRecount();
 void ItemCounters_CancelRecount();
 bool ItemCounters_StatusExpanded();

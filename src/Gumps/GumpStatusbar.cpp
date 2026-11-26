@@ -127,6 +127,44 @@ static const wstr_t tooltip[] = {
 
 static_assert(countof(tooltip) == ID_GSB_COUNT, "Wrong amount of entries in tooltip table");
 
+namespace
+{
+constexpr uint16_t kStatusWeightNormalHue = 0x0386;
+constexpr uint16_t kStatusWeightWarnHue = 0x002B;
+constexpr uint16_t kStatusWeightOverloadHue = 0x0021;
+
+uint16_t ResolvePlayerWeightHue()
+{
+    if (g_Player == nullptr)
+    {
+        return kStatusWeightNormalHue;
+    }
+#if defined(XUO_ASSISTANT)
+    return xuoassist::ItemCounters_WeightStatusHue(
+        g_Player->Weight,
+        g_Player->MaxWeight,
+        kStatusWeightNormalHue,
+        kStatusWeightWarnHue,
+        kStatusWeightOverloadHue);
+#else
+    if (g_Player->MaxWeight == 0)
+    {
+        return kStatusWeightNormalHue;
+    }
+    const int pct = static_cast<int>((static_cast<int64_t>(g_Player->Weight) * 100) / g_Player->MaxWeight);
+    if (g_Player->Weight >= g_Player->MaxWeight || pct >= 90)
+    {
+        return kStatusWeightOverloadHue;
+    }
+    if (pct >= 75)
+    {
+        return kStatusWeightWarnHue;
+    }
+    return kStatusWeightNormalHue;
+#endif
+}
+} // namespace
+
 #if defined(XUO_ASSISTANT)
 enum
 {
@@ -251,6 +289,25 @@ void CGumpStatusbar::InitToolTip()
         {
             tip += ": --";
         }
+        const std::string unitWeight = xuoassist::ItemCounters_FormatUnitWeight(counter.UnitWeightMilliStones);
+        if (counter.Count > 0 && counter.WeightStones >= 0)
+        {
+            tip += "\nWeight: ";
+            if (counter.WeightEstimated)
+            {
+                tip += "~";
+            }
+            tip += str_from(counter.WeightStones);
+            tip += (counter.WeightStones == 1 ? " stone" : " stones");
+            if (!unitWeight.empty())
+            {
+                tip += " (" + unitWeight + ")";
+            }
+        }
+        else if (!unitWeight.empty())
+        {
+            tip += "\nUnit weight: " + unitWeight;
+        }
         if (counter.Warning > 0)
         {
             tip += "\nLow-stock alert below " + str_from(counter.Warning) + ".";
@@ -296,9 +353,21 @@ void CGumpStatusbar::InitToolTip()
             const auto category = static_cast<xuoassist::SupplyCategory>(cat);
             const bool collapsed =
                 xuoassist::ItemCounters_IsCategoryCollapsed(m_Supplies.CollapsedCategories, category);
-            const astr_t tip = astr_t(collapsed ? "Expand " : "Collapse ") +
+            astr_t tip = astr_t(collapsed ? "Expand " : "Collapse ") +
                 xuoassist::ItemCounters_CategoryLabel(category) + ".";
-            g_ToolTip.Set(wstr_from_utf8(tip), 180);
+            const size_t catIdx = static_cast<size_t>(cat);
+            if (m_Supplies.HasSupplyWeight && catIdx < xuoassist::ItemCounters_CategoryCount &&
+                m_Supplies.CategoryWeightStones[catIdx] > 0)
+            {
+                const int stones = m_Supplies.CategoryWeightStones[catIdx];
+                tip += "\nCarried weight: ";
+                if (m_Supplies.CategoryWeightEstimated[catIdx])
+                {
+                    tip += "~";
+                }
+                tip += str_from(stones) + (stones == 1 ? " stone." : " stones.");
+            }
+            g_ToolTip.Set(wstr_from_utf8(tip), 190);
         }
         return;
     }
@@ -362,6 +431,72 @@ void CGumpStatusbar::InitToolTip()
 #endif
     if (id == ID_GSB_NONE || id >= ID_GSB_COUNT)
     {
+        return;
+    }
+
+    if (id == ID_GSB_TEXT_WEIGHT && Serial == g_PlayerSerial && g_Player != nullptr)
+    {
+        const int curWeight = static_cast<int>(g_Player->Weight);
+        const int maxWeight = static_cast<int>(g_Player->MaxWeight);
+        astr_t tip = "Weight: " + str_from(curWeight);
+        if (maxWeight > 0)
+        {
+            const int pct = static_cast<int>((static_cast<int64_t>(curWeight) * 100) / maxWeight);
+            tip += " / " + str_from(maxWeight) + " stones (" + str_from(pct) + "%)";
+            const int diff = maxWeight - curWeight;
+            if (diff >= 0)
+            {
+                tip += "\n" + str_from(diff) + (diff == 1 ? " stone free" : " stones free");
+            }
+            else
+            {
+                const int excess = -diff;
+                tip += "\nOverloaded by " + str_from(excess) +
+                    (excess == 1 ? " stone!" : " stones!");
+            }
+        }
+        else
+        {
+            tip += (curWeight == 1 ? " stone" : " stones");
+        }
+#if defined(XUO_ASSISTANT)
+        if (g_Config.AssistantEnabled)
+        {
+            const auto summary = xuoassist::ItemCounters_GetSupplyWeightSummary();
+            if (summary.HasKnownWeight && summary.TotalWeightStones > 0)
+            {
+                tip += "\nTracked supplies: ";
+                if (summary.AnyEstimated)
+                {
+                    tip += "~";
+                }
+                tip += str_from(summary.TotalWeightStones) +
+                    (summary.TotalWeightStones == 1 ? " stone" : " stones");
+                if (!summary.HeavyCategories.empty())
+                {
+                    astr_t breakdown;
+                    const size_t limit = std::min<size_t>(summary.HeavyCategories.size(), 4u);
+                    for (size_t i = 0; i < limit; ++i)
+                    {
+                        const auto &cat = summary.HeavyCategories[i];
+                        if (i > 0)
+                        {
+                            breakdown += ", ";
+                        }
+                        breakdown += xuoassist::ItemCounters_CategoryShortLabel(cat.Category);
+                        breakdown += " ";
+                        if (cat.Estimated)
+                        {
+                            breakdown += "~";
+                        }
+                        breakdown += str_from(cat.WeightStones) + "st";
+                    }
+                    tip += "\n" + breakdown;
+                }
+            }
+        }
+#endif
+        g_ToolTip.Set(wstr_from_utf8(tip), 230);
         return;
     }
 
@@ -856,7 +991,14 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
             {
                 hasCustom = true;
             }
-            layoutInputs.push_back({ i, entry.Category, entry.Count, entry.Highlighted });
+            layoutInputs.push_back({
+                i,
+                entry.Category,
+                entry.Count,
+                entry.Highlighted,
+                entry.WeightStones,
+                entry.WeightEstimated,
+            });
         }
         if (effectiveCategory == static_cast<int>(xuoassist::SupplyCategory::Custom) && !hasCustom)
         {
@@ -1015,10 +1157,19 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
             addFill(Padding + 1, cursorY + 1, innerWidth - 2, GroupHeaderHeight - 2, GroupFill);
             const astr_t title = astr_t(section.Collapsed ? "+ " : "- ") +
                 xuoassist::ItemCounters_CategoryLabel(section.Category);
-            const astr_t summary = section.HasKnownCounts
+            astr_t summary = section.HasKnownCounts
                 ? (str_from(section.StockedEntries) + "/" + str_from(section.TotalEntries))
                 : str_from(section.TotalEntries);
-            const int summaryW = 48;
+            if (section.HasKnownWeight && section.WeightStones > 0)
+            {
+                summary += " | ";
+                if (section.WeightEstimated)
+                {
+                    summary += "~";
+                }
+                summary += str_from(section.WeightStones) + "st";
+            }
+            const int summaryW = 84;
             addText(title, Padding + 5, cursorY + 1, Ink, std::max(1, innerWidth - summaryW - 10), TS_LEFT);
             addText(
                 summary,
@@ -1410,7 +1561,7 @@ void CGumpStatusbar::UpdateContent()
                     ID_GSB_TEXT_ARMOR, COLUMN_3_X, ROW_2_Y, COLUMN_3_WIDTH, ROW_HEIGHT));
 
                 text = (CGUIText *)Add(new CGUIText(
-                    0x0386,
+                    ResolvePlayerWeightHue(),
                     COLUMN_3_X + COLUMN_3_ICON_WIDTH,
                     ROW_3_Y + (ROW_HEIGHT / 2) - ROW_PADDING));
                 text->CreateTextureA(1, str_from(g_Player->Weight), 40, TS_CENTER);
@@ -1655,7 +1806,7 @@ void CGumpStatusbar::UpdateContent()
                 text->CreateTextureA(1, str_from(g_Player->Luck));
 
                 //Weights
-                text = (CGUIText *)Add(new CGUIText(0x0386, xOffset, 126));
+                text = (CGUIText *)Add(new CGUIText(ResolvePlayerWeightHue(), xOffset, 126));
                 text->CreateTextureA(1, str_from(g_Player->Weight), textWidth, TS_CENTER);
 
                 Add(new CGUILine(
@@ -1828,7 +1979,7 @@ void CGumpStatusbar::UpdateContent()
                 text = (CGUIText *)Add(new CGUIText(0x0386, 171, 97));
                 text->CreateTextureA(1, str_from(g_Player->Gold));
 
-                text = (CGUIText *)Add(new CGUIText(0x0386, 171, 109));
+                text = (CGUIText *)Add(new CGUIText(ResolvePlayerWeightHue(), 171, 109));
                 text->CreateTextureA(1, str_from(g_Player->Weight));
 
                 Add(new CGUIHitBox(ID_GSB_TEXT_STR, 86, 61, 34, 12));

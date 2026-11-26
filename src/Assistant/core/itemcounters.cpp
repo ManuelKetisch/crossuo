@@ -10,6 +10,7 @@
 #include "../model/commonitems/journalmessage.h"
 #include "Managers/ClilocManager.h"
 #include "Managers/GumpManager.h"
+#include "Managers/ObjectPropertiesManager.h"
 #include "Managers/PacketManager.h"
 #include "UseItemsList.h"
 #include "AssetViewer/AssetGrid.h"
@@ -61,6 +62,8 @@ struct ItemCounter
     bool Visible = true;
     bool Icon = true;
     int Count = -1;
+    int WeightStones = -1;
+    bool WeightEstimated = false;
     SupplyCategory Category = SupplyCategory::Custom;
 };
 
@@ -795,6 +798,64 @@ void mark_unopened_bags_attempted(const CGameItem &root, std::set<uint32_t> &att
     }
 }
 
+int count_and_weigh_items(
+    const CGameObject *root,
+    uint16_t graphic,
+    uint16_t hue,
+    uint16_t unitWeightMilliStones,
+    int &outWeightStones,
+    bool &outEstimated)
+{
+    if (root == nullptr)
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (auto *item = static_cast<CGameItem *>(root->m_Items);
+         item != nullptr;
+         item = static_cast<CGameItem *>(item->m_Next))
+    {
+        if ((graphic == ItemCounters_AnyHue || graphic == item->Graphic) &&
+            ItemCounters_HueMatches(hue, item->Color))
+        {
+            count += item->Count;
+
+            int stackWeight = -1;
+            if (const CObjectProperty *prop = g_ObjectPropertiesManager.Find(item->Serial);
+                prop != nullptr && !prop->Properties.empty())
+            {
+                stackWeight = ItemCounters_ParseOplWeightStones(prop->Properties);
+            }
+
+            if (stackWeight >= 0)
+            {
+                outWeightStones += stackWeight;
+            }
+            else if (unitWeightMilliStones > 0)
+            {
+                outWeightStones += ItemCounters_EstimateStackWeightStones(
+                    item->Count, unitWeightMilliStones);
+                outEstimated = true;
+            }
+            else if (const auto *td = item->GetStaticData();
+                     td != nullptr && td->Weight > 0 && td->Weight < 255)
+            {
+                outWeightStones += item->Count * static_cast<int>(td->Weight);
+                outEstimated = true;
+            }
+        }
+
+        if (!item->Empty() && item->Layer != OL_BANK)
+        {
+            count += count_and_weigh_items(
+                item, graphic, hue, unitWeightMilliStones, outWeightStones, outEstimated);
+        }
+    }
+
+    return count;
+}
+
 void refresh_counts()
 {
     switch_profile();
@@ -812,6 +873,8 @@ void refresh_counts()
         for (auto &counter : s_Counters)
         {
             counter.Count = -1;
+            counter.WeightStones = -1;
+            counter.WeightEstimated = false;
         }
     }
 
@@ -827,9 +890,11 @@ void refresh_counts()
         bool changed = false;
         for (auto &counter : s_Counters)
         {
-            if (counter.Count != -1)
+            if (counter.Count != -1 || counter.WeightStones != -1 || counter.WeightEstimated)
             {
                 counter.Count = -1;
+                counter.WeightStones = -1;
+                counter.WeightEstimated = false;
                 changed = true;
             }
         }
@@ -844,8 +909,21 @@ void refresh_counts()
     for (auto &counter : s_Counters)
     {
         const int previous = counter.Count;
-        counter.Count = CountItems(pack, (uint16_t)counter.Graphic, (uint16_t)counter.Hue, true);
-        if (counter.Count != previous)
+        const int previousWeight = counter.WeightStones;
+        const bool previousEstimated = counter.WeightEstimated;
+        const uint16_t graphic = static_cast<uint16_t>(counter.Graphic);
+        const uint16_t hue = static_cast<uint16_t>(counter.Hue);
+        const uint16_t unitWeight = ItemCounters_DefaultUnitWeightMilliStones(graphic, hue);
+
+        int weightStones = 0;
+        bool weightEstimated = false;
+        counter.Count = count_and_weigh_items(
+            pack, graphic, hue, unitWeight, weightStones, weightEstimated);
+        counter.WeightStones = weightStones;
+        counter.WeightEstimated = weightEstimated;
+
+        if (counter.Count != previous || counter.WeightStones != previousWeight ||
+            counter.WeightEstimated != previousEstimated)
         {
             changed = true;
         }
@@ -1749,6 +1827,8 @@ SuppliesSnapshot ItemCounters_GetSupplies()
         result.CastSpellName = cast->Name;
     }
 
+    std::vector<SupplyWeightInput> weightInputs;
+    weightInputs.reserve(s_Counters.size());
     for (const auto &counter : s_Counters)
     {
         if (counter.Visible)
@@ -1759,6 +1839,10 @@ SuppliesSnapshot ItemCounters_GetSupplies()
             entry.Graphic = static_cast<uint16_t>(counter.Graphic);
             entry.Hue = static_cast<uint16_t>(counter.Hue);
             entry.Count = counter.Count;
+            entry.WeightStones = counter.WeightStones;
+            entry.WeightEstimated = counter.WeightEstimated;
+            entry.UnitWeightMilliStones =
+                ItemCounters_DefaultUnitWeightMilliStones(entry.Graphic, entry.Hue);
             entry.Icon = counter.Icon;
             entry.Low = result.Coverage == SuppliesCoverage::Complete && counter.Warning > 0 &&
                 counter.Count >= 0 && counter.Count < counter.Warning;
@@ -1766,10 +1850,45 @@ SuppliesSnapshot ItemCounters_GetSupplies()
             entry.Highlighted = cast != nullptr &&
                 std::find(s_CastReagents.begin(), s_CastReagents.end(), counter.Graphic) != s_CastReagents.end();
             entry.Category = counter.Category;
+            weightInputs.push_back({
+                entry.Category,
+                entry.Count,
+                entry.WeightStones,
+                entry.WeightEstimated,
+            });
             result.Entries.push_back(std::move(entry));
         }
     }
+    const auto summary = ItemCounters_SummarizeSupplyWeights(weightInputs);
+    result.TotalSupplyWeightStones = summary.TotalWeightStones;
+    result.HasSupplyWeight = summary.HasKnownWeight;
+    result.TotalSupplyWeightEstimated = summary.AnyEstimated;
+    result.CategoryWeightStones = summary.CategoryWeightStones;
+    result.CategoryWeightEstimated = summary.CategoryEstimated;
     return result;
+}
+
+SupplyWeightSummary ItemCounters_GetSupplyWeightSummary()
+{
+    switch_profile();
+    refresh_counts();
+
+    std::vector<SupplyWeightInput> inputs;
+    inputs.reserve(s_Counters.size());
+    for (const auto &counter : s_Counters)
+    {
+        if (!counter.Visible)
+        {
+            continue;
+        }
+        inputs.push_back({
+            counter.Category,
+            counter.Count,
+            counter.WeightStones,
+            counter.WeightEstimated,
+        });
+    }
+    return ItemCounters_SummarizeSupplyWeights(inputs);
 }
 
 bool ItemCounters_StartRecount()

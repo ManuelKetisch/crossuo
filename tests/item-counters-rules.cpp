@@ -566,5 +566,141 @@ int main()
         assert(totalTiles == catalog.size());
     }
 
+    // 13. Supply unit weight catalog parity with ModernUO ItemWeights, OPL parsing,
+    // stack weight estimation, statusbar weight hues, and category weight breakdowns.
+    {
+        const auto &catalog = ItemCounters_GetDefaultCatalog();
+        for (const auto &spec : catalog)
+        {
+            assert(spec.UnitWeightMilliStones > 0);
+            if (spec.Category == SupplyCategory::Magery ||
+                spec.Category == SupplyCategory::Necromancy ||
+                spec.Category == SupplyCategory::Mysticism)
+            {
+                assert(spec.UnitWeightMilliStones == 10);
+            }
+            else if (spec.Category == SupplyCategory::Potions)
+            {
+                assert(spec.UnitWeightMilliStones == 200);
+            }
+        }
+
+        // Exact graphic/hue lookups & custom potion fallback.
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0F7A, ItemCounters_AnyHue) == 10); // Black pearl
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0F81, ItemCounters_AnyHue) == 10); // Fertile dirt
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0E21, ItemCounters_AnyHue) == 10); // Bandages
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0F3F, ItemCounters_AnyHue) == 10); // Arrows
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0EF3, 0x0000) == 20);              // Blank scrolls
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x1F4C, 0x0000) == 20);              // Recall scrolls
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0F0E, 0x0000) == 50);              // Empty bottles
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x14FC, 0x0000) == 50);              // Lockpicks
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0E24, 0x048E) == 50);              // Pet ointment
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0F0C, 0x0000) == 200);             // Heal potion
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x0F0D, 0x0999) == 200);             // Custom hued potion
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x26AC, 0x0000) == 4000);            // Bolas
+        assert(ItemCounters_DefaultUnitWeightMilliStones(0x1234, 0x0000) == 0);               // Unknown item
+
+        // Exact ceiling stack estimation matching ModernUO Item.PileWeight.
+        assert(ItemCounters_EstimateStackWeightStones(0, 10) == 0);
+        assert(ItemCounters_EstimateStackWeightStones(-5, 10) == 0);
+        assert(ItemCounters_EstimateStackWeightStones(50, 0) == 0);
+        assert(ItemCounters_EstimateStackWeightStones(1, 10) == 1);
+        assert(ItemCounters_EstimateStackWeightStones(100, 10) == 1);
+        assert(ItemCounters_EstimateStackWeightStones(101, 10) == 2);
+        assert(ItemCounters_EstimateStackWeightStones(500, 10) == 5);
+        assert(ItemCounters_EstimateStackWeightStones(60000, 10) == 600);
+        assert(ItemCounters_EstimateStackWeightStones(50, 20) == 1);
+        assert(ItemCounters_EstimateStackWeightStones(51, 20) == 2);
+        assert(ItemCounters_EstimateStackWeightStones(20, 50) == 1);
+        assert(ItemCounters_EstimateStackWeightStones(25, 200) == 5);
+        assert(ItemCounters_EstimateStackWeightStones(3, 4000) == 12);
+
+        // OPL weight cliloc parsing (1072788 singular / 1072789 plural).
+        const std::vector<std::pair<uint32_t, std::wstring>> singleStone = {
+            { 1042971u, L"Black Pearl" },
+            { 1072788u, L"1" },
+        };
+        assert(ItemCounters_ParseOplWeightStones(singleStone) == 1);
+
+        const std::vector<std::pair<uint32_t, std::wstring>> multiStone = {
+            { 1072789u, L" 1,250 " },
+        };
+        assert(ItemCounters_ParseOplWeightStones(multiStone) == 1250);
+
+        const std::vector<std::pair<uint32_t, std::wstring>> zeroStone = {
+            { 1072789u, L"0" },
+        };
+        assert(ItemCounters_ParseOplWeightStones(zeroStone) == 0);
+
+        const std::vector<std::pair<uint32_t, std::wstring>> noWeight = {
+            { 1042971u, L"Blessed" },
+            { 1072789u, L"invalid" },
+        };
+        assert(ItemCounters_ParseOplWeightStones(noWeight) == -1);
+
+        // Human-readable unit weight strings.
+        assert(ItemCounters_FormatUnitWeight(0).empty());
+        assert(ItemCounters_FormatUnitWeight(10) == "0.01 st/ea (100/st)");
+        assert(ItemCounters_FormatUnitWeight(20) == "0.02 st/ea (50/st)");
+        assert(ItemCounters_FormatUnitWeight(50) == "0.05 st/ea (20/st)");
+        assert(ItemCounters_FormatUnitWeight(200) == "0.2 st/ea (5/st)");
+        assert(ItemCounters_FormatUnitWeight(4000) == "4 st/ea");
+
+        // Statusbar weight hue thresholds (75% warn, 90%/overloaded alert).
+        constexpr uint16_t kNorm = 0x0386;
+        constexpr uint16_t kWarn = 0x002B;
+        constexpr uint16_t kCrit = 0x0021;
+        assert(ItemCounters_WeightStatusHue(200, 400, kNorm, kWarn, kCrit) == kNorm);
+        assert(ItemCounters_WeightStatusHue(299, 400, kNorm, kWarn, kCrit) == kNorm);
+        assert(ItemCounters_WeightStatusHue(300, 400, kNorm, kWarn, kCrit) == kWarn);
+        assert(ItemCounters_WeightStatusHue(359, 400, kNorm, kWarn, kCrit) == kWarn);
+        assert(ItemCounters_WeightStatusHue(360, 400, kNorm, kWarn, kCrit) == kCrit);
+        assert(ItemCounters_WeightStatusHue(400, 400, kNorm, kWarn, kCrit) == kCrit);
+        assert(ItemCounters_WeightStatusHue(450, 400, kNorm, kWarn, kCrit) == kCrit);
+        assert(ItemCounters_WeightStatusHue(450, 0, kNorm, kWarn, kCrit) == kNorm);
+
+        // Supply weight summary aggregation & descending heavy-category sort.
+        const std::vector<SupplyWeightInput> weightInputs = {
+            { SupplyCategory::Magery, 200, 2, false },
+            { SupplyCategory::Magery, 300, 3, false },
+            { SupplyCategory::Potions, 40, 8, true },
+            { SupplyCategory::Combat, 500, 5, false },
+            { SupplyCategory::Utility, 0, 0, false },
+            { SupplyCategory::Necromancy, -1, -1, false },
+        };
+        const auto summary = ItemCounters_SummarizeSupplyWeights(weightInputs);
+        assert(summary.HasKnownWeight);
+        assert(summary.AnyEstimated);
+        assert(summary.TotalWeightStones == 18);
+        assert(summary.CategoryWeightStones[static_cast<size_t>(SupplyCategory::Magery)] == 5);
+        assert(!summary.CategoryEstimated[static_cast<size_t>(SupplyCategory::Magery)]);
+        assert(summary.CategoryWeightStones[static_cast<size_t>(SupplyCategory::Potions)] == 8);
+        assert(summary.CategoryEstimated[static_cast<size_t>(SupplyCategory::Potions)]);
+        assert(summary.HeavyCategories.size() == 3);
+        assert(summary.HeavyCategories[0].Category == SupplyCategory::Potions);
+        assert(summary.HeavyCategories[0].WeightStones == 8);
+        assert(summary.HeavyCategories[1].Category == SupplyCategory::Magery);
+        assert(summary.HeavyCategories[1].WeightStones == 5);
+        assert(summary.HeavyCategories[2].Category == SupplyCategory::Combat);
+        assert(summary.HeavyCategories[2].WeightStones == 5);
+
+        // Grouped layout propagates category weight totals to section headers.
+        const std::vector<SupplyLayoutEntryInput> weightedEntries = {
+            { 0, SupplyCategory::Magery, 200, false, 2, false },
+            { 1, SupplyCategory::Magery, 300, false, 3, true },
+            { 2, SupplyCategory::Combat, 500, false, 5, false },
+        };
+        const auto weightedLayout = ItemCounters_BuildGroupedSupplyLayout(
+            weightedEntries, -1, false, 0u, 8, 44, 17, 4, 460);
+        assert(weightedLayout.Pages.size() == 1);
+        assert(weightedLayout.Pages[0].Sections.size() == 2);
+        assert(weightedLayout.Pages[0].Sections[0].HasKnownWeight);
+        assert(weightedLayout.Pages[0].Sections[0].WeightStones == 5);
+        assert(weightedLayout.Pages[0].Sections[0].WeightEstimated);
+        assert(weightedLayout.Pages[0].Sections[1].HasKnownWeight);
+        assert(weightedLayout.Pages[0].Sections[1].WeightStones == 5);
+        assert(!weightedLayout.Pages[0].Sections[1].WeightEstimated);
+    }
+
     return 0;
 }

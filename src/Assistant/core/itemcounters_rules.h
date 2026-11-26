@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace xuoassist {
@@ -224,6 +226,9 @@ inline bool ItemCounters_ShouldDisplaySupply(int count, bool highlighted, bool h
     return !hideZero || count != 0 || highlighted;
 }
 
+constexpr uint32_t ItemCounters_OplWeightSingularCliloc = 1072788u;
+constexpr uint32_t ItemCounters_OplWeightPluralCliloc = 1072789u;
+
 struct DefaultSupplySpec
 {
     const char *Name;
@@ -232,75 +237,188 @@ struct DefaultSupplySpec
     uint16_t Hue;
     int Warning;
     SupplyCategory Category;
+    // Unit weight in milli-stones (10 = 0.01 st, 20 = 0.02 st, 50 = 0.05 st, 200 = 0.2 st),
+    // matched to ModernUO's Server.Items.ItemWeights taxonomy for pre-OPL estimates.
+    uint16_t UnitWeightMilliStones = 0;
 };
 
 // Complete built-in supply catalog matched to ModernUO reagent, potion, and
-// consumable item IDs and hues, organized into logical gameplay groups.
+// consumable item IDs, hues, and ItemWeights unit weights, organized into logical gameplay groups.
 inline const std::array<DefaultSupplySpec, 47> &ItemCounters_GetDefaultCatalog()
 {
     static constexpr std::array<DefaultSupplySpec, 47> catalog = {{
-    // Magery reagents (8)
-    { "Black pearl", "bp", 0x0F7A, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Blood moss", "bm", 0x0F7B, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Garlic", "gl", 0x0F84, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Ginseng", "gs", 0x0F85, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Mandrake root", "mr", 0x0F86, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Nightshade", "ns", 0x0F88, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Spider's silk", "ss", 0x0F8D, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
-    { "Sulfurous ash", "sa", 0x0F8C, ItemCounters_AnyHue, 5, SupplyCategory::Magery },
+    // Magery reagents (8) - 0.01 st/ea (100 per stone)
+    { "Black pearl", "bp", 0x0F7A, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Blood moss", "bm", 0x0F7B, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Garlic", "gl", 0x0F84, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Ginseng", "gs", 0x0F85, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Mandrake root", "mr", 0x0F86, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Nightshade", "ns", 0x0F88, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Spider's silk", "ss", 0x0F8D, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
+    { "Sulfurous ash", "sa", 0x0F8C, ItemCounters_AnyHue, 5, SupplyCategory::Magery, 10 },
 
-    // Necromancy reagents (5)
-    { "Bat wing", "bw", 0x0F78, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy },
-    { "Daemon blood", "db", 0x0F7D, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy },
-    { "Grave dust", "gd", 0x0F8F, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy },
-    { "Nox crystal", "nc", 0x0F8E, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy },
-    { "Pig iron", "pi", 0x0F8A, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy },
+    // Necromancy reagents (5) - 0.01 st/ea (100 per stone)
+    { "Bat wing", "bw", 0x0F78, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy, 10 },
+    { "Daemon blood", "db", 0x0F7D, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy, 10 },
+    { "Grave dust", "gd", 0x0F8F, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy, 10 },
+    { "Nox crystal", "nc", 0x0F8E, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy, 10 },
+    { "Pig iron", "pi", 0x0F8A, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy, 10 },
 
-    // Mysticism & rare reagents (5)
-    { "Bone", "bone", 0x0F7E, 0x0000, 0, SupplyCategory::Mysticism },
-    { "Daemon bone", "dbone", 0x0F80, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism },
-    { "Dragon's blood", "drb", 0x4077, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism },
-    { "Fertile dirt", "fd", 0x0F81, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism },
-    { "Dead wood", "dw", 0x0F90, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism },
+    // Mysticism & rare reagents (5) - 0.01 st/ea (100 per stone)
+    { "Bone", "bone", 0x0F7E, 0x0000, 0, SupplyCategory::Mysticism, 10 },
+    { "Daemon bone", "dbone", 0x0F80, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism, 10 },
+    { "Dragon's blood", "drb", 0x4077, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism, 10 },
+    { "Fertile dirt", "fd", 0x0F81, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism, 10 },
+    { "Dead wood", "dw", 0x0F90, ItemCounters_AnyHue, 0, SupplyCategory::Mysticism, 10 },
 
-    // Potions: core combat (8) + specialty alchemy (5) = 13
+    // Potions: core combat (8) + specialty alchemy (5) = 13 - 0.2 st/ea (5 per stone)
     // Exact hues are required for 0x0F06 (Night Sight / Conflagration / Confusion Blast)
     // and 0x0F0A (Poison / Invisibility / Darkglow / Parasitic).
-    { "Heal potion", "heal_pot", 0x0F0C, 0x0000, 2, SupplyCategory::Potions },
-    { "Cure potion", "cure_pot", 0x0F07, 0x0000, 2, SupplyCategory::Potions },
-    { "Refresh potion", "refresh_pot", 0x0F0B, 0x0000, 2, SupplyCategory::Potions },
-    { "Agility potion", "agil_pot", 0x0F08, 0x0000, 0, SupplyCategory::Potions },
-    { "Strength potion", "str_pot", 0x0F09, 0x0000, 0, SupplyCategory::Potions },
-    { "Explosion potion", "explo_pot", 0x0F0D, 0x0000, 0, SupplyCategory::Potions },
-    { "Poison potion", "poison_pot", 0x0F0A, 0x0000, 0, SupplyCategory::Potions },
-    { "Night sight potion", "nsight_pot", 0x0F06, 0x0000, 0, SupplyCategory::Potions },
-    { "Invisibility potion", "invis_pot", 0x0F0A, 0x048D, 0, SupplyCategory::Potions },
-    { "Conflagration potion", "conflag_pot", 0x0F06, 0x0489, 0, SupplyCategory::Potions },
-    { "Confusion blast", "confuse_pot", 0x0F06, 0x048D, 0, SupplyCategory::Potions },
-    { "Darkglow poison", "darkglow_pot", 0x0F0A, 0x0096, 0, SupplyCategory::Potions },
-    { "Parasitic poison", "parasitic_pot", 0x0F0A, 0x017C, 0, SupplyCategory::Potions },
+    { "Heal potion", "heal_pot", 0x0F0C, 0x0000, 2, SupplyCategory::Potions, 200 },
+    { "Cure potion", "cure_pot", 0x0F07, 0x0000, 2, SupplyCategory::Potions, 200 },
+    { "Refresh potion", "refresh_pot", 0x0F0B, 0x0000, 2, SupplyCategory::Potions, 200 },
+    { "Agility potion", "agil_pot", 0x0F08, 0x0000, 0, SupplyCategory::Potions, 200 },
+    { "Strength potion", "str_pot", 0x0F09, 0x0000, 0, SupplyCategory::Potions, 200 },
+    { "Explosion potion", "explo_pot", 0x0F0D, 0x0000, 0, SupplyCategory::Potions, 200 },
+    { "Poison potion", "poison_pot", 0x0F0A, 0x0000, 0, SupplyCategory::Potions, 200 },
+    { "Night sight potion", "nsight_pot", 0x0F06, 0x0000, 0, SupplyCategory::Potions, 200 },
+    { "Invisibility potion", "invis_pot", 0x0F0A, 0x048D, 0, SupplyCategory::Potions, 200 },
+    { "Conflagration potion", "conflag_pot", 0x0F06, 0x0489, 0, SupplyCategory::Potions, 200 },
+    { "Confusion blast", "confuse_pot", 0x0F06, 0x048D, 0, SupplyCategory::Potions, 200 },
+    { "Darkglow poison", "darkglow_pot", 0x0F0A, 0x0096, 0, SupplyCategory::Potions, 200 },
+    { "Parasitic poison", "parasitic_pot", 0x0F0A, 0x017C, 0, SupplyCategory::Potions, 200 },
 
     // Combat supplies & ammo (8)
-    { "Bandages", "bandages", 0x0E21, ItemCounters_AnyHue, 10, SupplyCategory::Combat },
-    { "Arrows", "arrows", 0x0F3F, ItemCounters_AnyHue, 0, SupplyCategory::Combat },
-    { "Crossbow bolts", "bolts", 0x1BFB, ItemCounters_AnyHue, 0, SupplyCategory::Combat },
-    { "Orange petals", "opetals", 0x1021, 0x002B, 0, SupplyCategory::Combat },
-    { "Smoke bombs", "smoke", 0x2808, 0x0000, 0, SupplyCategory::Combat },
-    { "Shuriken", "shuriken", 0x27AC, ItemCounters_AnyHue, 0, SupplyCategory::Combat },
-    { "Fukiya darts", "darts", 0x2806, ItemCounters_AnyHue, 0, SupplyCategory::Combat },
-    { "Bolas", "bolas", 0x26AC, 0x0000, 0, SupplyCategory::Combat },
+    { "Bandages", "bandages", 0x0E21, ItemCounters_AnyHue, 10, SupplyCategory::Combat, 10 },
+    { "Arrows", "arrows", 0x0F3F, ItemCounters_AnyHue, 0, SupplyCategory::Combat, 10 },
+    { "Crossbow bolts", "bolts", 0x1BFB, ItemCounters_AnyHue, 0, SupplyCategory::Combat, 10 },
+    { "Orange petals", "opetals", 0x1021, 0x002B, 0, SupplyCategory::Combat, 10 },
+    { "Smoke bombs", "smoke", 0x2808, 0x0000, 0, SupplyCategory::Combat, 50 },
+    { "Shuriken", "shuriken", 0x27AC, ItemCounters_AnyHue, 0, SupplyCategory::Combat, 50 },
+    { "Fukiya darts", "darts", 0x2806, ItemCounters_AnyHue, 0, SupplyCategory::Combat, 50 },
+    { "Bolas", "bolas", 0x26AC, 0x0000, 0, SupplyCategory::Combat, 4000 },
 
     // Tools & utility supplies (8)
-    { "Empty bottles", "bottles", 0x0F0E, 0x0000, 0, SupplyCategory::Utility },
-    { "Blank scrolls", "bscrolls", 0x0EF3, 0x0000, 0, SupplyCategory::Utility },
-    { "Recall scrolls", "recalls", 0x1F4C, 0x0000, 0, SupplyCategory::Utility },
-    { "Lockpicks", "lockpicks", 0x14FC, 0x0000, 0, SupplyCategory::Utility },
-    { "Oil cloth", "oilcloth", 0x175D, 0x07D1, 0, SupplyCategory::Utility },
-    { "Pet ointment", "ointment", 0x0E24, 0x048E, 0, SupplyCategory::Utility },
-    { "Powder of translocation", "transloc", 0x26B8, 0x0000, 0, SupplyCategory::Utility },
-    { "Zoogi fungus", "zoogi", 0x26B7, 0x0000, 0, SupplyCategory::Utility },
+    { "Empty bottles", "bottles", 0x0F0E, 0x0000, 0, SupplyCategory::Utility, 50 },
+    { "Blank scrolls", "bscrolls", 0x0EF3, 0x0000, 0, SupplyCategory::Utility, 20 },
+    { "Recall scrolls", "recalls", 0x1F4C, 0x0000, 0, SupplyCategory::Utility, 20 },
+    { "Lockpicks", "lockpicks", 0x14FC, 0x0000, 0, SupplyCategory::Utility, 50 },
+    { "Oil cloth", "oilcloth", 0x175D, 0x07D1, 0, SupplyCategory::Utility, 50 },
+    { "Pet ointment", "ointment", 0x0E24, 0x048E, 0, SupplyCategory::Utility, 50 },
+    { "Powder of translocation", "transloc", 0x26B8, 0x0000, 0, SupplyCategory::Utility, 10 },
+    { "Zoogi fungus", "zoogi", 0x26B7, 0x0000, 0, SupplyCategory::Utility, 10 },
     }};
     return catalog;
+}
+
+inline uint16_t ItemCounters_DefaultUnitWeightMilliStones(uint16_t graphic, uint16_t hue)
+{
+    const uint16_t maskedHue = hue == ItemCounters_AnyHue ? ItemCounters_AnyHue : static_cast<uint16_t>(hue & 0x3FFFu);
+    for (const auto &spec : ItemCounters_GetDefaultCatalog())
+    {
+        if (spec.Graphic != graphic)
+        {
+            continue;
+        }
+        if (spec.Hue == ItemCounters_AnyHue || spec.Hue == maskedHue ||
+            (maskedHue == ItemCounters_AnyHue && spec.Hue == 0))
+        {
+            return spec.UnitWeightMilliStones;
+        }
+    }
+    if (graphic >= 0x0F06 && graphic <= 0x0F0D)
+    {
+        return 200;
+    }
+    return 0;
+}
+
+inline int ItemCounters_EstimateStackWeightStones(int count, uint16_t unitWeightMilliStones)
+{
+    if (count <= 0 || unitWeightMilliStones == 0)
+    {
+        return 0;
+    }
+    const int64_t milliStones = static_cast<int64_t>(count) * static_cast<int64_t>(unitWeightMilliStones);
+    return static_cast<int>((milliStones + 999) / 1000);
+}
+
+inline int ItemCounters_ParseWeightArgumentStones(const std::wstring &arg)
+{
+    int64_t value = 0;
+    bool foundDigit = false;
+    for (wchar_t ch : arg)
+    {
+        if (ch >= L'0' && ch <= L'9')
+        {
+            foundDigit = true;
+            value = value * 10 + (ch - L'0');
+            if (value > 10000000)
+            {
+                return 10000000;
+            }
+        }
+        else if (foundDigit)
+        {
+            if (ch == L',' || ch == L'_')
+            {
+                continue;
+            }
+            break;
+        }
+    }
+    return foundDigit ? static_cast<int>(value) : -1;
+}
+
+inline int ItemCounters_ParseOplWeightStones(
+    const std::vector<std::pair<uint32_t, std::wstring>> &properties)
+{
+    for (const auto &entry : properties)
+    {
+        if (entry.first == ItemCounters_OplWeightSingularCliloc ||
+            entry.first == ItemCounters_OplWeightPluralCliloc)
+        {
+            const int parsed = ItemCounters_ParseWeightArgumentStones(entry.second);
+            if (parsed >= 0)
+            {
+                return parsed;
+            }
+        }
+    }
+    return -1;
+}
+
+inline std::string ItemCounters_FormatUnitWeight(uint16_t unitWeightMilliStones)
+{
+    if (unitWeightMilliStones == 0)
+    {
+        return {};
+    }
+    const int whole = unitWeightMilliStones / 1000;
+    const int frac = unitWeightMilliStones % 1000;
+    std::string out = std::to_string(whole);
+    if (frac != 0)
+    {
+        char buf[8];
+        buf[0] = '.';
+        buf[1] = static_cast<char>('0' + (frac / 100) % 10);
+        buf[2] = static_cast<char>('0' + (frac / 10) % 10);
+        buf[3] = static_cast<char>('0' + frac % 10);
+        int len = 4;
+        while (len > 1 && buf[len - 1] == '0')
+        {
+            --len;
+        }
+        out.append(buf, static_cast<size_t>(len));
+    }
+    out += " st/ea";
+    if (unitWeightMilliStones < 1000 && (1000 % unitWeightMilliStones) == 0)
+    {
+        out += " (";
+        out += std::to_string(1000 / unitWeightMilliStones);
+        out += "/st)";
+    }
+    return out;
 }
 
 inline SupplyCategory ItemCounters_InferCategory(uint16_t graphic, uint16_t hue)
@@ -363,6 +481,8 @@ struct SupplyLayoutEntryInput
     SupplyCategory Category = SupplyCategory::Custom;
     int Count = 0;
     bool Highlighted = false;
+    int WeightStones = -1;
+    bool WeightEstimated = false;
 };
 
 struct SupplyLayoutGroup
@@ -371,6 +491,9 @@ struct SupplyLayoutGroup
     int TotalEntries = 0;
     int StockedEntries = 0;
     bool HasKnownCounts = false;
+    int WeightStones = 0;
+    bool HasKnownWeight = false;
+    bool WeightEstimated = false;
     bool Collapsed = false;
     std::vector<size_t> SourceIndices;
 };
@@ -381,6 +504,9 @@ struct SupplyLayoutSectionSlice
     int TotalEntries = 0;
     int StockedEntries = 0;
     bool HasKnownCounts = false;
+    int WeightStones = 0;
+    bool HasKnownWeight = false;
+    bool WeightEstimated = false;
     bool Collapsed = false;
     bool ShowHeader = false;
     std::vector<size_t> SourceIndices;
@@ -446,6 +572,15 @@ inline SupplyLayoutResult ItemCounters_BuildGroupedSupplyLayout(
                 group.StockedEntries += 1;
             }
         }
+        if (entry.WeightStones >= 0)
+        {
+            group.HasKnownWeight = true;
+            group.WeightStones += entry.WeightStones;
+            if (entry.WeightEstimated && entry.WeightStones > 0)
+            {
+                group.WeightEstimated = true;
+            }
+        }
         if (ItemCounters_ShouldDisplaySupply(entry.Count, entry.Highlighted, hideZero))
         {
             group.SourceIndices.push_back(entry.SourceIndex);
@@ -487,6 +622,9 @@ inline SupplyLayoutResult ItemCounters_BuildGroupedSupplyLayout(
             slice.TotalEntries = group.TotalEntries;
             slice.StockedEntries = group.StockedEntries;
             slice.HasKnownCounts = group.HasKnownCounts;
+            slice.WeightStones = group.WeightStones;
+            slice.HasKnownWeight = group.HasKnownWeight;
+            slice.WeightEstimated = group.WeightEstimated;
             slice.Collapsed = true;
             slice.ShowHeader = showHeader;
             current.Height += (current.Sections.empty() ? 0 : safeGap) + (showHeader ? safeHeaderH : 0);
@@ -517,6 +655,9 @@ inline SupplyLayoutResult ItemCounters_BuildGroupedSupplyLayout(
             slice.TotalEntries = group.TotalEntries;
             slice.StockedEntries = group.StockedEntries;
             slice.HasKnownCounts = group.HasKnownCounts;
+            slice.WeightStones = group.WeightStones;
+            slice.HasKnownWeight = group.HasKnownWeight;
+            slice.WeightEstimated = group.WeightEstimated;
             slice.Collapsed = false;
             slice.ShowHeader = showHeader;
             slice.SourceIndices.assign(
@@ -885,6 +1026,105 @@ inline uint32_t ItemCounters_ThresholdColor(StatThresholdBand band)
         default:
             return 0u;
     }
+}
+
+inline uint16_t ItemCounters_WeightStatusHue(
+    int weight,
+    int maxWeight,
+    uint16_t normalHue,
+    uint16_t warnHue,
+    uint16_t overloadHue)
+{
+    if (maxWeight <= 0)
+    {
+        return normalHue;
+    }
+    const auto band = ItemCounters_EvaluateThreshold(
+        weight, maxWeight, 75, 90, StatThresholdPolarity::LowerIsBetter);
+    switch (band)
+    {
+        case StatThresholdBand::Low:
+            return overloadHue;
+        case StatThresholdBand::Mid:
+            return warnHue;
+        case StatThresholdBand::Good:
+        case StatThresholdBand::Default:
+        default:
+            return normalHue;
+    }
+}
+
+struct SupplyWeightInput
+{
+    SupplyCategory Category = SupplyCategory::Custom;
+    int Count = -1;
+    int WeightStones = -1;
+    bool WeightEstimated = false;
+};
+
+struct SupplyCategoryWeight
+{
+    SupplyCategory Category = SupplyCategory::Custom;
+    int WeightStones = 0;
+    bool Estimated = false;
+};
+
+struct SupplyWeightSummary
+{
+    int TotalWeightStones = 0;
+    bool HasKnownWeight = false;
+    bool AnyEstimated = false;
+    std::array<int, ItemCounters_CategoryCount> CategoryWeightStones{};
+    std::array<bool, ItemCounters_CategoryCount> CategoryEstimated{};
+    std::vector<SupplyCategoryWeight> HeavyCategories;
+};
+
+inline SupplyWeightSummary ItemCounters_SummarizeSupplyWeights(
+    const std::vector<SupplyWeightInput> &inputs)
+{
+    SupplyWeightSummary summary;
+    for (const auto &entry : inputs)
+    {
+        if (entry.WeightStones < 0)
+        {
+            continue;
+        }
+        summary.HasKnownWeight = true;
+        if (entry.WeightStones == 0)
+        {
+            continue;
+        }
+        const size_t idx = static_cast<size_t>(entry.Category) < ItemCounters_CategoryCount
+            ? static_cast<size_t>(entry.Category)
+            : static_cast<size_t>(SupplyCategory::Custom);
+        summary.TotalWeightStones += entry.WeightStones;
+        summary.CategoryWeightStones[idx] += entry.WeightStones;
+        if (entry.WeightEstimated)
+        {
+            summary.AnyEstimated = true;
+            summary.CategoryEstimated[idx] = true;
+        }
+    }
+
+    for (size_t c = 0; c < ItemCounters_CategoryCount; ++c)
+    {
+        if (summary.CategoryWeightStones[c] > 0)
+        {
+            summary.HeavyCategories.push_back({
+                static_cast<SupplyCategory>(c),
+                summary.CategoryWeightStones[c],
+                summary.CategoryEstimated[c],
+            });
+        }
+    }
+
+    std::stable_sort(
+        summary.HeavyCategories.begin(),
+        summary.HeavyCategories.end(),
+        [](const SupplyCategoryWeight &a, const SupplyCategoryWeight &b) {
+            return a.WeightStones > b.WeightStones;
+        });
+    return summary;
 }
 
 } // namespace xuoassist
