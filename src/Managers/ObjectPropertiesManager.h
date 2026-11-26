@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include <common/str.h>
 #include <map>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 class CRenderObject;
 
@@ -16,9 +19,15 @@ public:
     uint32_t Revision = 0;
     wstr_t Name = {};
     wstr_t Data = {};
+    std::vector<std::pair<uint32_t, wstr_t>> Properties = {};
 
     CObjectProperty() = default;
-    CObjectProperty(int serial, int revision, const wstr_t &name, const wstr_t &data);
+    CObjectProperty(
+        int serial,
+        int revision,
+        const wstr_t &name,
+        const wstr_t &data,
+        std::vector<std::pair<uint32_t, wstr_t>> properties = {});
     bool Empty() const;
     wstr_t CreateTextData(bool extended) const;
 };
@@ -31,6 +40,7 @@ class CObjectPropertiesManager
 
 private:
     ObjectPropertyMap m_Map;
+    std::unordered_map<uint32_t, uint32_t> m_PendingCompareRequests;
     CRenderObject *m_Object = nullptr;
 
 public:
@@ -39,6 +49,7 @@ public:
 
     void Reset();
     bool RevisionCheck(int serial, int revision) const;
+    const CObjectProperty *Find(uint32_t serial) const;
     void OnItemClicked(int serial);
     void Display(int serial);
     astr_t GetData(const uint32_t &serial);

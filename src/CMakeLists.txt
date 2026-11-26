@@ -244,6 +244,8 @@ set(crossuo_src
   Container.cpp
   ContainerStack.cpp
   DateTimeStamp.cpp
+  EquipmentCompare.cpp
+  EquipmentCompare.h
   Globals.cpp
   ImageBounds.cpp
   Macro.cpp

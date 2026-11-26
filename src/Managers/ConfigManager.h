@@ -71,6 +71,7 @@ public:
     uint16_t ToolTipsTextColor = 0;
     uint16_t ToolTipsTextFont = 1; // As per client 7.0.47.0
     uint16_t ToolTipsDelay = 0;
+    bool CompareEquipmentOnCtrl = true;
 
     uint16_t ChatColorInputText = 0;
     uint16_t ChatColorMenuOption = 0;

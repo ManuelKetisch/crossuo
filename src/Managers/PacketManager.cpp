@@ -5890,9 +5890,7 @@ PACKET_HANDLER(MegaCliloc)
 
     uint8_t *end = Start + Size;
     std::vector<wstr_t> list;
-#if defined(XUO_ASSISTANT)
     std::vector<std::pair<uint32_t, wstr_t>> properties;
-#endif
     bool terminated = false;
     while (end - Ptr >= 4)
     {
@@ -5912,9 +5910,7 @@ PACKET_HANDLER(MegaCliloc)
             return;
         }
         const auto argument = length != 0 ? ReadWStringLE(length / 2) : wstr_t{};
-#if defined(XUO_ASSISTANT)
         properties.emplace_back(cliloc, argument);
-#endif
         DEBUG(Network, "Cliloc: 0x%08X len=%i arg=%s", cliloc,
             static_cast<int>(length), str_from(argument).c_str());
         auto str = g_ClilocManager.ParseArgumentsToClilocString(cliloc, true, argument);
@@ -6000,10 +5996,15 @@ PACKET_HANDLER(MegaCliloc)
         str_from(data.length() != 0u ? name + L"\n" + data : name));
 #endif
 
-    g_ObjectPropertiesManager.Add(serial, CObjectProperty(serial, clilocRevision, name, data));
+    g_ObjectPropertiesManager.Add(
+        serial, CObjectProperty(serial, clilocRevision, name, data, std::move(properties)));
     if (obj != nullptr && g_ToolTip.m_Object == obj)
     {
         g_ObjectPropertiesManager.Reset();
+    }
+    if (g_ToolTip.IsComparingSerial(serial))
+    {
+        g_ToolTip.InvalidateComparison();
     }
 
     if (inBuyList && container->Serial != 0u)

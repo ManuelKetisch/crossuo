@@ -123,6 +123,7 @@ enum
     ID_GO_P3_TEXT_COLOR,
     ID_GO_P3_TEXT_FONT,
     ID_GO_P3_DELAY_BEFORE_TOOLTIP,
+    ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL,
 
     // Chat Page
     ID_GO_P4_TEXT_FONT,
@@ -744,6 +745,11 @@ void CGumpOptions::InitToolTip()
         case ID_GO_P3_DELAY_BEFORE_TOOLTIP:
         {
             g_ToolTip.Set(L"Delay before tooltip shown");
+            break;
+        }
+        case ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL:
+        {
+            g_ToolTip.Set(L"Hold Ctrl while hovering equipment to compare against equipped items");
             break;
         }
         case ID_GO_P4_TEXT_FONT:
@@ -1551,6 +1557,11 @@ void CGumpOptions::DrawPage3()
 
     text = (CGUIText *)Add(new CGUIText(g_OptionsTextColor, 88, 173));
     text->CreateTextureW(0, L"Font for Tool-tips");
+
+    checkbox = (CGUICheckbox *)Add(new CGUICheckbox(
+        ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL, 0x00D2, 0x00D3, 0x00D2, 64, 198));
+    checkbox->Checked = g_OptionsConfig.CompareEquipmentOnCtrl;
+    checkbox->SetTextParameters(0, L"Hold Ctrl to compare equipment", g_OptionsTextColor);
 }
 
 void CGumpOptions::DrawPage4()
@@ -3333,6 +3344,10 @@ void CGumpOptions::GUMP_CHECKBOX_EVENT_C
             { //Use Tool-tips
                 g_OptionsConfig.UseToolTips = state;
             }
+            else if (serial == ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL)
+            { //Hold Ctrl to compare equipment
+                g_OptionsConfig.CompareEquipmentOnCtrl = state;
+            }
 
             break;
         }
@@ -4097,6 +4112,7 @@ void CGumpOptions::ApplyPageChanges()
             g_ConfigManager.ToolTipsTextColor = g_OptionsConfig.ToolTipsTextColor;
             g_ConfigManager.ToolTipsTextFont = g_OptionsConfig.ToolTipsTextFont;
             g_ConfigManager.ToolTipsDelay = g_OptionsConfig.ToolTipsDelay;
+            g_ConfigManager.CompareEquipmentOnCtrl = g_OptionsConfig.CompareEquipmentOnCtrl;
 
             break;
         }
