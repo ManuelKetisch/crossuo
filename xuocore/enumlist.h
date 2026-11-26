@@ -760,7 +760,8 @@ enum OBJECT_LAYERS
     OL_RING_5,      //33 (0x21)
     OL_RING_6,      //34 (0x22)
     OL_EARRINGS_2,  //35 (0x23)
-    OL_EXTENDED_COUNT //36
+    OL_BRACELET_2,  //36 (0x24)
+    OL_EXTENDED_COUNT //37
 };
 
 enum SPEECH_TYPE

@@ -28,31 +28,38 @@ constexpr std::array<int, 2> kPaperdollEarringLayers = {
     OL_EARRINGS_2,
 };
 
+constexpr std::array<int, 2> kPaperdollBraceletLayers = {
+    OL_BRACELET,
+    OL_BRACELET_2,
+};
+
 // Integrated jewelry dock geometry centered beneath the 262px paperdoll frame.
-constexpr int kPaperdollJewelryDockX = 25;
+constexpr int kPaperdollJewelryDockX = 3;
 constexpr int kPaperdollJewelryDockY = 322;
-constexpr int kPaperdollJewelryDockWidth = 212;
+constexpr int kPaperdollJewelryDockWidth = 256;
 constexpr int kPaperdollJewelryDockHeight = 42;
 constexpr int kPaperdollJewelrySlotY = 338;
-constexpr int kPaperdollJewelryDividerX = 88;
+constexpr int kPaperdollJewelryDivider1X = 61;
+constexpr int kPaperdollJewelryDivider2X = 118;
 constexpr int kPaperdollJewelryLabelY = 325;
 
-constexpr std::array<PaperdollSlotSpec, 4> kPaperdollLeftEquipSlots = { {
+constexpr std::array<PaperdollSlotSpec, 3> kPaperdollLeftEquipSlots = { {
     { 1, 75, OL_HELMET, L"Helmet slot" },
     { 1, 96, OL_NECKLACE, L"Necklace slot" },
-    { 1, 117, OL_BRACELET, L"Bracelet slot" },
-    { 1, 138, OL_TUNIC, L"Tunic slot" },
+    { 1, 117, OL_TUNIC, L"Tunic slot" },
 } };
 
-constexpr std::array<PaperdollSlotSpec, 8> kPaperdollJewelryDockSlots = { {
-    { 41, kPaperdollJewelrySlotY, OL_EARRINGS, L"Left earring slot" },
-    { 62, kPaperdollJewelrySlotY, OL_EARRINGS_2, L"Right earring slot" },
-    { 95, kPaperdollJewelrySlotY, OL_RING, L"Ring slot 1" },
-    { 116, kPaperdollJewelrySlotY, OL_RING_2, L"Ring slot 2" },
-    { 137, kPaperdollJewelrySlotY, OL_RING_3, L"Ring slot 3" },
-    { 158, kPaperdollJewelrySlotY, OL_RING_4, L"Ring slot 4" },
-    { 179, kPaperdollJewelrySlotY, OL_RING_5, L"Ring slot 5" },
-    { 200, kPaperdollJewelrySlotY, OL_RING_6, L"Ring slot 6" },
+constexpr std::array<PaperdollSlotSpec, 10> kPaperdollJewelryDockSlots = { {
+    { 12, kPaperdollJewelrySlotY, OL_BRACELET, L"Left bracelet slot" },
+    { 33, kPaperdollJewelrySlotY, OL_BRACELET_2, L"Right bracelet slot" },
+    { 69, kPaperdollJewelrySlotY, OL_EARRINGS, L"Left earring slot" },
+    { 90, kPaperdollJewelrySlotY, OL_EARRINGS_2, L"Right earring slot" },
+    { 125, kPaperdollJewelrySlotY, OL_RING, L"Ring slot 1" },
+    { 146, kPaperdollJewelrySlotY, OL_RING_2, L"Ring slot 2" },
+    { 167, kPaperdollJewelrySlotY, OL_RING_3, L"Ring slot 3" },
+    { 188, kPaperdollJewelrySlotY, OL_RING_4, L"Ring slot 4" },
+    { 209, kPaperdollJewelrySlotY, OL_RING_5, L"Ring slot 5" },
+    { 230, kPaperdollJewelrySlotY, OL_RING_6, L"Ring slot 6" },
 } };
 
 inline bool IsRingLayer(int layer)
@@ -79,9 +86,21 @@ inline bool IsEarringsLayer(int layer)
     return false;
 }
 
+inline bool IsBraceletLayer(int layer)
+{
+    for (int candidate : kPaperdollBraceletLayers)
+    {
+        if (layer == candidate)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline bool IsExtendedJewelryLayer(int layer)
 {
-    return layer >= OL_RING_2 && layer <= OL_EARRINGS_2;
+    return layer >= OL_RING_2 && layer <= OL_BRACELET_2;
 }
 
 inline bool IsPaperdollEquipmentLayer(int layer)
@@ -98,6 +117,10 @@ inline int CanonicalJewelryLayer(int layer)
     if (IsEarringsLayer(layer))
     {
         return OL_EARRINGS;
+    }
+    if (IsBraceletLayer(layer))
+    {
+        return OL_BRACELET;
     }
     return layer;
 }
@@ -176,6 +199,26 @@ inline int ResolvePaperdollDropLayer(
             return droppedOnLayer;
         }
         for (int layer : kPaperdollEarringLayers)
+        {
+            if (!isOccupied(layer))
+            {
+                return layer;
+            }
+        }
+        return OL_NONE;
+    }
+
+    if (IsBraceletLayer(itemTileLayer))
+    {
+        if (!isPlayer)
+        {
+            return !isOccupied(OL_BRACELET) ? OL_BRACELET : OL_NONE;
+        }
+        if (IsBraceletLayer(droppedOnLayer) && !isOccupied(droppedOnLayer))
+        {
+            return droppedOnLayer;
+        }
+        for (int layer : kPaperdollBraceletLayers)
         {
             if (!isOccupied(layer))
             {

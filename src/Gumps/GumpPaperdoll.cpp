@@ -784,7 +784,7 @@ void CGumpPaperdoll::UpdateContent()
 
         if (dualWield)
         {
-            const int handStartY = useSlots ? 159 : 201;
+            const int handStartY = useSlots ? 138 : 201;
             addEquipmentSlot(1, handStartY, OL_1_HAND, obj->FindLayer(OL_1_HAND));
             addEquipmentSlot(1, handStartY + 21, OL_2_HAND, offHand);
         }
@@ -870,19 +870,32 @@ void CGumpPaperdoll::UpdateContent()
         m_DataBox->Add(new CGUIColoredPolygone(
             0,
             0,
-            kPaperdollJewelryDividerX,
+            kPaperdollJewelryDivider1X,
+            kPaperdollJewelryDockY + 4,
+            1,
+            kPaperdollJewelryDockHeight - 8,
+            0xFF565E66));
+        m_DataBox->Add(new CGUIColoredPolygone(
+            0,
+            0,
+            kPaperdollJewelryDivider2X,
             kPaperdollJewelryDockY + 4,
             1,
             kPaperdollJewelryDockHeight - 8,
             0xFF565E66));
 
+        auto *braceletsLabel = (CGUIText *)m_DataBox->Add(
+            new CGUIText(0x03B2, 6, kPaperdollJewelryLabelY));
+        braceletsLabel->CreateTextureA(9, "Bracelets", 54, TS_CENTER);
+        braceletsLabel->DrawOnly = true;
+
         auto *earringsLabel = (CGUIText *)m_DataBox->Add(
-            new CGUIText(0x03B2, 34, kPaperdollJewelryLabelY));
+            new CGUIText(0x03B2, 63, kPaperdollJewelryLabelY));
         earringsLabel->CreateTextureA(9, "Earrings", 54, TS_CENTER);
         earringsLabel->DrawOnly = true;
 
         auto *ringsLabel = (CGUIText *)m_DataBox->Add(
-            new CGUIText(0x03B2, 95, kPaperdollJewelryLabelY));
+            new CGUIText(0x03B2, 125, kPaperdollJewelryLabelY));
         ringsLabel->CreateTextureA(9, "Rings", 125, TS_CENTER);
         ringsLabel->DrawOnly = true;
 

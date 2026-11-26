@@ -463,7 +463,7 @@ static const bool g_LayerSafe[OL_EXTENDED_COUNT] = {
     true,  true,  false, false, true,  true,  true,  true,
     false, // 0x15
     true,  true,  true,  false, false, false, false, false,
-    true,  true,  true,  true,  true,  true // 0x1E..0x23 (Ring2..Ring6, Earrings2)
+    true,  true,  true,  true,  true,  true,  true // 0x1E..0x24 (Ring2..Ring6, Earrings2, Bracelet2)
 };
 
 // MAX_ABILITIES_COUNT, MAX_STATIC_DATA_INDEX_COUNT and MAX_GUMP_DATA_INDEX_COUNT
@@ -480,7 +480,7 @@ const astr_t g_LayerName[OL_EXTENDED_COUNT] = {
     "MidTorso",  "Earrings", "Arms",  "Cloak",
     "Backpack", // 0x15
     "Robe",      "Eggs",     "Legs",  "Mount", "Buy",        "Resale",   "Sell",   "Bank",
-    "Ring2",     "Ring3",    "Ring4", "Ring5", "Ring6",      "Earrings2"
+    "Ring2",     "Ring3",    "Ring4", "Ring5", "Ring6",      "Earrings2", "Bracelet2"
 };
 
 } // namespace xuoassist
