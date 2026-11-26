@@ -61,6 +61,7 @@ struct ItemCounter
     bool Visible = true;
     bool Icon = true;
     int Count = -1;
+    SupplyCategory Category = SupplyCategory::Custom;
 };
 
 struct CounterEditor
@@ -73,6 +74,7 @@ struct CounterEditor
     bool AnyColor = true;
     bool Visible = true;
     bool Icon = true;
+    SupplyCategory Category = SupplyCategory::Custom;
 };
 
 vector<ItemCounter> s_Counters;
@@ -84,6 +86,9 @@ bool s_Warnings = false;
 bool s_AutoRecount = true;
 bool s_SkipPouches = true;
 bool s_StatusExpanded = false;
+int s_StatusCategory = -1;
+bool s_StatusHideZero = false;
+uint32_t s_StatusCollapsedCategories = 0;
 bool s_BandageEnabled = false;
 int s_BandageSeconds = 5;
 bool s_Bandaging = false;
@@ -165,17 +170,63 @@ std::array<char, 64> s_LabelText{};
 
 vector<ItemCounter> default_counters()
 {
-    return {
-        { "Bandages", "bandages", 0x0E21, AnyHue, 10 },
-        { "Black pearl", "bp", 0x0F7A, AnyHue, 5 },
-        { "Blood moss", "bm", 0x0F7B, AnyHue, 5 },
-        { "Garlic", "gl", 0x0F84, AnyHue, 5 },
-        { "Ginseng", "gs", 0x0F85, AnyHue, 5 },
-        { "Mandrake root", "mr", 0x0F86, AnyHue, 5 },
-        { "Nightshade", "ns", 0x0F88, AnyHue, 5 },
-        { "Spider silk", "ss", 0x0F8D, AnyHue, 5 },
-        { "Sulfurous ash", "sa", 0x0F8C, AnyHue, 5 }
-    };
+    const auto &catalog = ItemCounters_GetDefaultCatalog();
+    vector<ItemCounter> result;
+    result.reserve(catalog.size());
+    for (const auto &spec : catalog)
+    {
+        ItemCounter counter;
+        counter.Name = spec.Name;
+        counter.Key = spec.Key;
+        counter.Graphic = spec.Graphic;
+        counter.Hue = spec.Hue;
+        counter.Warning = spec.Warning;
+        counter.Visible = true;
+        counter.Icon = true;
+        counter.Category = spec.Category;
+        result.push_back(std::move(counter));
+    }
+    return result;
+}
+
+int merge_missing_defaults(vector<ItemCounter> &counters)
+{
+    int added = 0;
+    for (const auto &spec : ItemCounters_GetDefaultCatalog())
+    {
+        if (static_cast<int>(counters.size()) >= MaxCounters)
+        {
+            break;
+        }
+        const bool exists = std::any_of(counters.begin(), counters.end(), [&](const ItemCounter &existing) {
+            return ItemCounters_DefaultMatchesExisting(
+                existing.Key.c_str(),
+                static_cast<uint16_t>(existing.Graphic),
+                static_cast<uint16_t>(existing.Hue),
+                spec);
+        });
+        if (!exists)
+        {
+            ItemCounter counter;
+            counter.Name = spec.Name;
+            counter.Key = spec.Key;
+            counter.Graphic = spec.Graphic;
+            counter.Hue = spec.Hue;
+            counter.Warning = spec.Warning;
+            counter.Visible = true;
+            counter.Icon = true;
+            counter.Category = spec.Category;
+            counters.push_back(std::move(counter));
+            ++added;
+        }
+    }
+    if (added > 0)
+    {
+        std::stable_sort(counters.begin(), counters.end(), [](const ItemCounter &a, const ItemCounter &b) {
+            return static_cast<uint8_t>(a.Category) < static_cast<uint8_t>(b.Category);
+        });
+    }
+    return added;
 }
 
 bool valid_key(const astr_t &key)
@@ -189,6 +240,7 @@ bool valid_key(const astr_t &key)
 bool save_file(const vector<ItemCounter> &counters, bool show, bool warnings)
 {
     CIniFile ini;
+    ini.SetInt("Meta", "catalog_version", ItemCounters_CurrentCatalogVersion);
     ini.SetInt("Meta", "count", (int)counters.size());
     ini.SetBool("Meta", "show", show);
     ini.SetBool("Meta", "icons", s_ShowIcons);
@@ -196,6 +248,9 @@ bool save_file(const vector<ItemCounter> &counters, bool show, bool warnings)
     ini.SetBool("Meta", "auto_recount", s_AutoRecount);
     ini.SetBool("Meta", "skip_pouches", s_SkipPouches);
     ini.SetBool("Meta", "status_expanded", s_StatusExpanded);
+    ini.Set("Meta", "status_category", ItemCounters_CategoryFilterId(s_StatusCategory));
+    ini.SetBool("Meta", "status_hide_zero", s_StatusHideZero);
+    ini.SetInt("Meta", "status_collapsed", static_cast<int>(s_StatusCollapsedCategories));
     ini.SetBool("Meta", "bandage", s_BandageEnabled);
     ini.SetInt("Meta", "bandage_seconds", s_BandageSeconds);
     ini.SetBool("Meta", "gold", s_GoldEnabled);
@@ -236,6 +291,7 @@ bool save_file(const vector<ItemCounter> &counters, bool show, bool warnings)
         const auto section = IniSectionName("Counter", i);
         ini.Set(section, "name", counter.Name);
         ini.Set(section, "key", counter.Key);
+        ini.Set(section, "category", ItemCounters_CategoryId(counter.Category));
         ini.SetInt(section, "graphic", counter.Graphic);
         ini.SetInt(section, "hue", counter.Hue);
         ini.SetInt(section, "warning", counter.Warning);
@@ -266,6 +322,9 @@ void switch_profile()
     s_AutoRecount = true;
     s_SkipPouches = true;
     s_StatusExpanded = false;
+    s_StatusCategory = -1;
+    s_StatusHideZero = false;
+    s_StatusCollapsedCategories = 0;
     s_BandageEnabled = false;
     s_BandageSeconds = 5;
     s_GoldEnabled = false;
@@ -301,6 +360,9 @@ void switch_profile()
     s_AutoRecount = ini.GetBool("Meta", "auto_recount", true);
     s_SkipPouches = ini.GetBool("Meta", "skip_pouches", true);
     s_StatusExpanded = ini.GetBool("Meta", "status_expanded", false);
+    s_StatusCategory = ItemCounters_ParseCategoryFilter(ini.Get("Meta", "status_category", "all").c_str());
+    s_StatusHideZero = ini.GetBool("Meta", "status_hide_zero", false);
+    s_StatusCollapsedCategories = static_cast<uint32_t>(std::max(0, ini.GetInt("Meta", "status_collapsed", 0)));
     s_BandageEnabled = ini.GetBool("Meta", "bandage");
     s_BandageSeconds = std::max(1, std::min(ini.GetInt("Meta", "bandage_seconds", 5), 60));
     s_GoldEnabled = ini.GetBool("Meta", "gold");
@@ -343,9 +405,11 @@ void switch_profile()
             s_OverheadRules.push_back(rule);
         }
     }
-    if (!ini.Has("Meta", "count"))
+    const bool hasSavedCount = ini.Has("Meta", "count");
+    if (!hasSavedCount)
     {
         s_Counters = default_counters();
+        return;
     }
     const int count = std::max(0, std::min(ini.GetInt("Meta", "count"), MaxCounters));
     for (int i = 0; i < count; ++i)
@@ -359,6 +423,17 @@ void switch_profile()
         counter.Warning = std::max(0, ini.GetInt(section, "warning"));
         counter.Visible = ini.GetBool(section, "visible", true);
         counter.Icon = ini.GetBool(section, "icon", true);
+        SupplyCategory parsedCategory = SupplyCategory::Custom;
+        if (ItemCounters_ParseCategory(ini.Get(section, "category").c_str(), parsedCategory))
+        {
+            counter.Category = parsedCategory;
+        }
+        else
+        {
+            counter.Category = ItemCounters_InferCategory(
+                static_cast<uint16_t>(counter.Graphic),
+                static_cast<uint16_t>(counter.Hue));
+        }
         if (!counter.Name.empty() && valid_key(counter.Key) &&
             counter.Graphic > 0 && counter.Graphic < AnyHue &&
             (counter.Hue == AnyHue || (counter.Hue >= 0 && counter.Hue <= 0x3FFF)) &&
@@ -368,6 +443,13 @@ void switch_profile()
         {
             s_Counters.push_back(counter);
         }
+    }
+
+    const int catalogVersion = ini.GetInt("Meta", "catalog_version", 1);
+    if (catalogVersion < ItemCounters_CurrentCatalogVersion)
+    {
+        merge_missing_defaults(s_Counters);
+        save_file(s_Counters, s_ShowHUD, s_Warnings);
     }
 }
 
@@ -550,7 +632,7 @@ vector<uint16_t> spell_reagents(const char *reagents)
     static const KnownReagent known[] = {
         { "bat wing", Batwing }, { "black pearl", BlackPearl }, { "bloodmoss", Bloodmoss },
         { "blood moss", Bloodmoss }, { "daemon blood", DemonBlood }, { "bone", 0x0F7E },
-        { "demon bone", 0x0F80 }, { "dragon's blood", 0x4077 }, { "fertile dirt", 0x0F81 },
+        { "daemon bone", 0x0F80 }, { "demon bone", 0x0F80 }, { "dragon's blood", 0x4077 }, { "fertile dirt", 0x0F81 },
         { "garlic", Garlic }, { "ginseng", Ginseng }, { "grave dust", GraveDust },
         { "mandrake root", MandrakeRoot }, { "nightshade", Nightshade }, { "nox crystal", 0x0F8E },
         { "pig iron", PigIron }, { "spider silk", SpidersSilk }, { "spiders' silk", SpidersSilk },
@@ -1006,6 +1088,7 @@ void edit(const ItemCounter *counter)
     s_Editor.Warning = counter->Warning;
     s_Editor.Visible = counter->Visible;
     s_Editor.Icon = counter->Icon;
+    s_Editor.Category = counter->Category;
 }
 
 void commit_counter()
@@ -1030,10 +1113,15 @@ void commit_counter()
     }
 
     auto updated = s_Counters;
-    ItemCounter counter{
-        s_Editor.Name.data(), key, s_Editor.Graphic, s_Editor.AnyColor ? AnyHue : s_Editor.Hue,
-        s_Editor.Warning, s_Editor.Visible, s_Editor.Icon
-    };
+    ItemCounter counter;
+    counter.Name = s_Editor.Name.data();
+    counter.Key = key;
+    counter.Graphic = s_Editor.Graphic;
+    counter.Hue = s_Editor.AnyColor ? AnyHue : s_Editor.Hue;
+    counter.Warning = s_Editor.Warning;
+    counter.Visible = s_Editor.Visible;
+    counter.Icon = s_Editor.Icon;
+    counter.Category = s_Editor.Category;
     if (s_Selected >= 0 && s_Selected < (int)updated.size())
     {
         updated[s_Selected] = counter;
@@ -1588,6 +1676,10 @@ void CAssistant::HandleTargetCounterItem(uint8_t *packet) const
     s_Editor.Graphic = item->Graphic;
     s_Editor.Hue = item->Color & 0x3FFF;
     s_Editor.AnyColor = false;
+    if (s_Selected < 0)
+    {
+        s_Editor.Category = ItemCounters_InferCategory(item->Graphic, static_cast<uint16_t>(s_Editor.Hue));
+    }
     s_Feedback.clear();
 }
 
@@ -1620,6 +1712,9 @@ SuppliesSnapshot ItemCounters_GetSupplies()
     result.CanRecount = g_Connected && pack != nullptr && g_World != nullptr && !g_Player->IsDead();
     result.AutoRecount = s_AutoRecount;
     result.SkipPouches = s_SkipPouches;
+    result.ActiveCategory = s_StatusCategory;
+    result.HideZero = s_StatusHideZero;
+    result.CollapsedCategories = s_StatusCollapsedCategories;
     if (pack != nullptr && (pack->Opened || !pack->Empty()))
     {
         bool partial = result.Recounting;
@@ -1670,6 +1765,7 @@ SuppliesSnapshot ItemCounters_GetSupplies()
             entry.Warning = counter.Warning;
             entry.Highlighted = cast != nullptr &&
                 std::find(s_CastReagents.begin(), s_CastReagents.end(), counter.Graphic) != s_CastReagents.end();
+            entry.Category = counter.Category;
             result.Entries.push_back(std::move(entry));
         }
     }
@@ -1738,6 +1834,80 @@ void ItemCounters_SetStatusExpanded(bool expanded)
     if (!save_file(s_Counters, s_ShowHUD, s_Warnings))
     {
         s_StatusExpanded = previous;
+        s_Feedback = "Could not save display options.";
+        return;
+    }
+    ++s_Revision;
+}
+
+int ItemCounters_StatusCategory()
+{
+    switch_profile();
+    return s_StatusCategory;
+}
+
+void ItemCounters_SetStatusCategory(int category)
+{
+    switch_profile();
+    const int normalized = ItemCounters_IsValidCategory(category) ? category : -1;
+    if (s_StatusCategory == normalized)
+    {
+        return;
+    }
+    const int previous = s_StatusCategory;
+    s_StatusCategory = normalized;
+    if (!save_file(s_Counters, s_ShowHUD, s_Warnings))
+    {
+        s_StatusCategory = previous;
+        s_Feedback = "Could not save display options.";
+        return;
+    }
+    ++s_Revision;
+}
+
+bool ItemCounters_StatusHideZero()
+{
+    switch_profile();
+    return s_StatusHideZero;
+}
+
+void ItemCounters_SetStatusHideZero(bool hideZero)
+{
+    switch_profile();
+    if (s_StatusHideZero == hideZero)
+    {
+        return;
+    }
+    const bool previous = s_StatusHideZero;
+    s_StatusHideZero = hideZero;
+    if (!save_file(s_Counters, s_ShowHUD, s_Warnings))
+    {
+        s_StatusHideZero = previous;
+        s_Feedback = "Could not save display options.";
+        return;
+    }
+    ++s_Revision;
+}
+
+uint32_t ItemCounters_StatusCollapsedCategories()
+{
+    switch_profile();
+    return s_StatusCollapsedCategories;
+}
+
+void ItemCounters_ToggleStatusCategoryCollapsed(SupplyCategory category)
+{
+    switch_profile();
+    const uint32_t previous = s_StatusCollapsedCategories;
+    const uint32_t updated = ItemCounters_ToggleCategoryCollapsed(s_StatusCollapsedCategories, category);
+    if (updated == previous)
+    {
+        return;
+    }
+    s_StatusCollapsedCategories = updated;
+    if (!save_file(s_Counters, s_ShowHUD, s_Warnings))
+    {
+        s_StatusCollapsedCategories = previous;
         s_Feedback = "Could not save display options.";
         return;
     }
@@ -2011,22 +2181,57 @@ void ItemCounters_DrawEditor()
         display_checkbox("Color the character name by notoriety", s_Options.Notoriety);
     }
     draw_container_labels();
-    if (ImGui::BeginChild("##item_counter_rows", ImVec2(0.0f, 132.0f), ImGuiChildFlags_Borders))
+    if (ImGui::BeginChild("##item_counter_rows", ImVec2(0.0f, 180.0f), ImGuiChildFlags_Borders))
     {
-        for (int i = 0; i < (int)s_Counters.size(); ++i)
+        bool firstCategory = true;
+        for (size_t c = 0; c < ItemCounters_CategoryCount; ++c)
         {
-            const auto &counter = s_Counters[i];
-            const auto count = counter.Count >= 0 ? str_from(counter.Count) : astr_t("-");
-            char label[164]{};
-            snprintf(label, sizeof(label), "%s (%s)   %s", counter.Name.c_str(), counter.Key.c_str(), count.c_str());
-            ImGui::PushID(i);
-            if (ImGui::Selectable(label, s_Selected == i))
+            const auto category = static_cast<SupplyCategory>(c);
+            bool hasItems = false;
+            for (const auto &counter : s_Counters)
             {
-                s_Selected = i;
-                edit(&counter);
-                s_Feedback.clear();
+                if (counter.Category == category)
+                {
+                    hasItems = true;
+                    break;
+                }
             }
-            ImGui::PopID();
+            if (!hasItems)
+            {
+                continue;
+            }
+            if (!firstCategory)
+            {
+                ImGui::Separator();
+            }
+            firstCategory = false;
+            ImGui::TextDisabled("%s", ItemCounters_CategoryLabel(category));
+            for (int i = 0; i < (int)s_Counters.size(); ++i)
+            {
+                const auto &counter = s_Counters[i];
+                if (counter.Category != category)
+                {
+                    continue;
+                }
+                const auto count = counter.Count >= 0 ? str_from(counter.Count) : astr_t("-");
+                char label[164]{};
+                snprintf(
+                    label,
+                    sizeof(label),
+                    "%s (%s)%s   %s",
+                    counter.Name.c_str(),
+                    counter.Key.c_str(),
+                    counter.Visible ? "" : " [hidden]",
+                    count.c_str());
+                ImGui::PushID(i);
+                if (ImGui::Selectable(label, s_Selected == i))
+                {
+                    s_Selected = i;
+                    edit(&counter);
+                    s_Feedback.clear();
+                }
+                ImGui::PopID();
+            }
         }
     }
     ImGui::EndChild();
@@ -2036,6 +2241,29 @@ void ItemCounters_DrawEditor()
         s_Selected = -1;
         edit(nullptr);
         s_Feedback.clear();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add missing defaults"))
+    {
+        auto updated = s_Counters;
+        const int added = merge_missing_defaults(updated);
+        if (added == 0)
+        {
+            s_Feedback = "All built-in reagents, potions, and supplies are already listed.";
+        }
+        else if (save_file(updated, s_ShowHUD, s_Warnings))
+        {
+            s_Counters = std::move(updated);
+            s_Selected = -1;
+            edit(nullptr);
+            s_NeedsRefresh = true;
+            ++s_Revision;
+            s_Feedback = "Added " + str_from(added) + " missing default counters.";
+        }
+        else
+        {
+            s_Feedback = "Could not save counters.";
+        }
     }
     ImGui::SameLine();
     if (s_Recount.Backpack != 0)
@@ -2057,6 +2285,23 @@ void ItemCounters_DrawEditor()
 
     ImGui::InputText("Name", s_Editor.Name.data(), s_Editor.Name.size());
     ImGui::InputText("Title tag", s_Editor.Key.data(), s_Editor.Key.size());
+    if (ImGui::BeginCombo("Group", ItemCounters_CategoryLabel(s_Editor.Category)))
+    {
+        for (size_t c = 0; c < ItemCounters_CategoryCount; ++c)
+        {
+            const auto cat = static_cast<SupplyCategory>(c);
+            const bool selected = s_Editor.Category == cat;
+            if (ImGui::Selectable(ItemCounters_CategoryLabel(cat), selected))
+            {
+                s_Editor.Category = cat;
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
     ImGui::InputScalar("Graphic", ImGuiDataType_S32, &s_Editor.Graphic, nullptr, nullptr, "%04X",
                        ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::SameLine();
@@ -2177,54 +2422,88 @@ void ItemCounters_DrawHUD()
         // by +WindowPadding.x every frame until they span the whole viewport.
         if (counters)
         {
-            int column = 0;
-            for (const auto &entry : s_Counters)
+            bool anyGroupDrawn = false;
+            for (size_t c = 0; c < ItemCounters_CategoryCount; ++c)
             {
-                if (!entry.Visible)
+                const auto category = static_cast<SupplyCategory>(c);
+                vector<const ItemCounter *> groupEntries;
+                for (const auto &entry : s_Counters)
+                {
+                    if (!entry.Visible || entry.Category != category)
+                    {
+                        continue;
+                    }
+                    const bool highlighted = cast != nullptr &&
+                        std::find(s_CastReagents.begin(), s_CastReagents.end(), entry.Graphic) != s_CastReagents.end();
+                    if (!ItemCounters_ShouldDisplaySupply(entry.Count, highlighted, s_StatusHideZero))
+                    {
+                        continue;
+                    }
+                    groupEntries.push_back(&entry);
+                }
+                if (groupEntries.empty())
                 {
                     continue;
                 }
-
-                if (column++ % 3 != 0)
+                if (anyGroupDrawn)
                 {
-                    ImGui::SameLine();
+                    ImGui::Separator();
                 }
-
-                if (s_ShowIcons && entry.Icon)
+                anyGroupDrawn = true;
+                ImGui::TextDisabled("%s", ItemCounters_CategoryShortLabel(category));
+                int column = 0;
+                for (const auto *entryPtr : groupEntries)
                 {
-                    constexpr int IconSize = 16;
-                    const auto image = AssetGrid_AcquireThumb(AssetTextureKind::Static, (uint16_t)entry.Graphic, IconSize);
-                    if (AssetTextureCache_IsReady(image))
+                    const auto &entry = *entryPtr;
+                    if (column++ % 4 != 0)
                     {
-                        ImGui::Image(image, ImVec2(IconSize, IconSize));
                         ImGui::SameLine();
                     }
-                }
 
-                const bool highlighted = cast != nullptr &&
-                    std::find(s_CastReagents.begin(), s_CastReagents.end(), entry.Graphic) != s_CastReagents.end();
-                if (highlighted)
-                {
-                    const auto label = entry.Key + " " + (entry.Count >= 0 ? str_from(entry.Count) : astr_t("-"));
-                    const auto start = ImGui::GetCursorScreenPos();
-                    const auto size = ImGui::CalcTextSize(label.c_str());
-                    ImGui::GetWindowDrawList()->AddRectFilled(
-                        ImVec2(start.x - 2.0f, start.y), ImVec2(start.x + size.x + 2.0f, start.y + size.y),
-                        IM_COL32(135, 30, 29, 255), 2.0f);
-                    ImGui::TextUnformatted(label.c_str());
+                    if (s_ShowIcons && entry.Icon)
+                    {
+                        constexpr int IconSize = 16;
+                        const auto image = AssetGrid_AcquireThumb(AssetTextureKind::Static, (uint16_t)entry.Graphic, IconSize);
+                        if (AssetTextureCache_IsReady(image))
+                        {
+                            ImGui::Image(image, ImVec2(IconSize, IconSize));
+                            ImGui::SameLine();
+                        }
+                    }
+
+                    const bool highlighted = cast != nullptr &&
+                        std::find(s_CastReagents.begin(), s_CastReagents.end(), entry.Graphic) != s_CastReagents.end();
+                    if (highlighted)
+                    {
+                        const auto label = entry.Key + " " + (entry.Count >= 0 ? str_from(entry.Count) : astr_t("-"));
+                        const auto start = ImGui::GetCursorScreenPos();
+                        const auto size = ImGui::CalcTextSize(label.c_str());
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            ImVec2(start.x - 2.0f, start.y), ImVec2(start.x + size.x + 2.0f, start.y + size.y),
+                            IM_COL32(135, 30, 29, 255), 2.0f);
+                        ImGui::TextUnformatted(label.c_str());
+                    }
+                    else if (entry.Count < 0)
+                    {
+                        ImGui::TextDisabled("%s —", entry.Key.c_str());
+                    }
+                    else if (entry.Warning > 0 && entry.Count < entry.Warning)
+                    {
+                        ImGui::TextColored(LowColor, "%s %d", entry.Key.c_str(), entry.Count);
+                    }
+                    else if (entry.Count == 0)
+                    {
+                        ImGui::TextDisabled("%s 0", entry.Key.c_str());
+                    }
+                    else
+                    {
+                        ImGui::Text("%s %d", entry.Key.c_str(), entry.Count);
+                    }
                 }
-                else if (entry.Count < 0)
-                {
-                    ImGui::TextDisabled("%s —", entry.Key.c_str());
-                }
-                else if (entry.Warning > 0 && entry.Count < entry.Warning)
-                {
-                    ImGui::TextColored(LowColor, "%s %d", entry.Key.c_str(), entry.Count);
-                }
-                else
-                {
-                    ImGui::Text("%s %d", entry.Key.c_str(), entry.Count);
-                }
+            }
+            if (!anyGroupDrawn)
+            {
+                ImGui::TextDisabled("No carried supplies.");
             }
         }
         if (cast != nullptr)

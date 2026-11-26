@@ -137,11 +137,29 @@ enum
     ID_GSB_SUPPLIES_NEXT,
     ID_GSB_SUPPLIES_COVERAGE,
     ID_GSB_SUPPLIES_STATUS,
+    ID_GSB_SUPPLIES_HIDE_ZERO,
+    ID_GSB_SUPPLIES_TAB_ALL,
+    ID_GSB_SUPPLIES_TAB_FIRST,
+    ID_GSB_SUPPLIES_TAB_LAST = ID_GSB_SUPPLIES_TAB_FIRST + 15,
+    ID_GSB_SUPPLIES_GROUP_FIRST,
+    ID_GSB_SUPPLIES_GROUP_LAST = ID_GSB_SUPPLIES_GROUP_FIRST + 15,
     ID_GSB_SUPPLY_FIRST,
 };
 
 namespace
 {
+bool IsSuppliesInteractiveControl(uint32_t serial)
+{
+    return serial == ID_GSB_SUPPLIES_TOGGLE ||
+           serial == ID_GSB_SUPPLIES_COUNTERS ||
+           serial == ID_GSB_SUPPLIES_RECOUNT ||
+           serial == ID_GSB_SUPPLIES_PREVIOUS ||
+           serial == ID_GSB_SUPPLIES_NEXT ||
+           serial == ID_GSB_SUPPLIES_HIDE_ZERO ||
+           serial == ID_GSB_SUPPLIES_TAB_ALL ||
+           (serial >= ID_GSB_SUPPLIES_TAB_FIRST && serial <= ID_GSB_SUPPLIES_TAB_LAST) ||
+           (serial >= ID_GSB_SUPPLIES_GROUP_FIRST && serial <= ID_GSB_SUPPLIES_GROUP_LAST);
+}
 void AppendStatusSegment(
     astr_t &out,
     const char *separator,
@@ -224,7 +242,7 @@ void CGumpStatusbar::InitToolTip()
     if (id >= ID_GSB_SUPPLY_FIRST && id - ID_GSB_SUPPLY_FIRST < m_Supplies.Entries.size())
     {
         const auto &counter = m_Supplies.Entries[id - ID_GSB_SUPPLY_FIRST];
-        astr_t tip = counter.Name;
+        astr_t tip = counter.Name + " (" + xuoassist::ItemCounters_CategoryLabel(counter.Category) + ")";
         if (counter.Count >= 0)
         {
             tip += ": " + str_from(counter.Count);
@@ -242,7 +260,46 @@ void CGumpStatusbar::InitToolTip()
             tip += "\nUsed by active spell.";
         }
         tip += "\nDouble-click to use.";
-        g_ToolTip.Set(wstr_from_utf8(tip), 180);
+        g_ToolTip.Set(wstr_from_utf8(tip), 190);
+        return;
+    }
+    if (id == ID_GSB_SUPPLIES_HIDE_ZERO)
+    {
+        g_ToolTip.Set(
+            m_Supplies.HideZero
+                ? L"Showing carried items only. Click to show zero-count items."
+                : L"Hide zero-count items and show only carried supplies.",
+            190);
+        return;
+    }
+    if (id == ID_GSB_SUPPLIES_TAB_ALL)
+    {
+        g_ToolTip.Set(L"Show all supply groups.", 180);
+        return;
+    }
+    if (id >= ID_GSB_SUPPLIES_TAB_FIRST && id <= ID_GSB_SUPPLIES_TAB_LAST)
+    {
+        const int cat = static_cast<int>(id - ID_GSB_SUPPLIES_TAB_FIRST);
+        if (xuoassist::ItemCounters_IsValidCategory(cat))
+        {
+            const astr_t tip = astr_t("Show only ") +
+                xuoassist::ItemCounters_CategoryLabel(static_cast<xuoassist::SupplyCategory>(cat)) + ".";
+            g_ToolTip.Set(wstr_from_utf8(tip), 180);
+        }
+        return;
+    }
+    if (id >= ID_GSB_SUPPLIES_GROUP_FIRST && id <= ID_GSB_SUPPLIES_GROUP_LAST)
+    {
+        const int cat = static_cast<int>(id - ID_GSB_SUPPLIES_GROUP_FIRST);
+        if (xuoassist::ItemCounters_IsValidCategory(cat))
+        {
+            const auto category = static_cast<xuoassist::SupplyCategory>(cat);
+            const bool collapsed =
+                xuoassist::ItemCounters_IsCategoryCollapsed(m_Supplies.CollapsedCategories, category);
+            const astr_t tip = astr_t(collapsed ? "Expand " : "Collapse ") +
+                xuoassist::ItemCounters_CategoryLabel(category) + ".";
+            g_ToolTip.Set(wstr_from_utf8(tip), 180);
+        }
         return;
     }
     if (id == ID_GSB_SUPPLIES_COUNTERS)
@@ -708,10 +765,17 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
     constexpr int Padding = 10;
     constexpr int HeaderHeight = 31;
     constexpr int StatusHeight = 20;
-    constexpr int CellWidth = 62;
-    constexpr int CellHeight = 52;
-    constexpr int IconBoxWidth = 44;
-    constexpr int IconBoxHeight = 32;
+    constexpr int TabHeight = 17;
+    constexpr int TabGapX = 3;
+    constexpr int TabGapY = 3;
+    constexpr int TabBarBottomGap = 5;
+    constexpr int GroupHeaderHeight = 17;
+    constexpr int GroupGap = 4;
+    constexpr int CellWidth = 48;
+    constexpr int CellHeight = 44;
+    constexpr int IconBoxWidth = 40;
+    constexpr int IconBoxHeight = 28;
+    constexpr int MaxBodyHeight = 460;
     constexpr int ToggleWidth = 74;
     constexpr uint16_t Ink = 0x0386;
     constexpr uint16_t Muted = 0x03B2;
@@ -720,6 +784,10 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
     constexpr uint16_t HighlightLowHue = 0x0035;
     constexpr uint32_t HighlightBorder = 0xFF1D1E87;
     constexpr uint32_t HighlightFill = 0xFF3336A6;
+    constexpr uint32_t ActiveTabBorder = 0xFF284857;
+    constexpr uint32_t ActiveTabFill = 0xFF3D687A;
+    constexpr uint32_t GroupBorder = 0xFF7B939D;
+    constexpr uint32_t GroupFill = 0xFFB5C4CA;
 
     const auto addFill = [this, x](int left, int top, int w, int h, uint32_t color) {
         Add(new CGUIColoredPolygone(0, 0, x + left, top, w, h, color));
@@ -729,10 +797,16 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
         auto *text = static_cast<CGUIText *>(Add(new CGUIText(hue, x + left, top)));
         text->CreateTextureA(9, label, textWidth, align, textWidth > 0 ? UOFONT_CROPPED : 0);
     };
-    const auto addControl = [this, x, &addFill, &addText](int id, const char *label, int left, int top, int w) {
-        addFill(left, top, w, 17, 0xFF627B89);
-        addFill(left + 1, top + 1, w - 2, 15, 0xFFD5E1E6);
-        addText(label, left, top + 2, Ink, w, TS_CENTER);
+    const auto addControl = [this, x, &addFill, &addText](
+                                int id,
+                                const char *label,
+                                int left,
+                                int top,
+                                int w,
+                                bool active = false) {
+        addFill(left, top, w, 17, active ? ActiveTabBorder : 0xFF627B89);
+        addFill(left + 1, top + 1, w - 2, 15, active ? ActiveTabFill : 0xFFD5E1E6);
+        addText(label, left, top + 2, active ? HighlightTextHue : Ink, w, TS_CENTER);
         Add(new CGUIHitBox(id, x + left, top, w, 17, true));
     };
 
@@ -749,20 +823,99 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
         m_SuppliesSampleAt = g_Ticks;
     }
 
+    const int innerWidth = std::max(1, width - 2 * Padding);
     const astr_t statusLine = m_SuppliesExpanded ? FormatSuppliesStatusText(m_Supplies, " | ") : astr_t{};
     const int statusStripHeight = statusLine.empty() ? 0 : StatusHeight;
-    const int columns = std::max(1, (width - 2 * Padding) / CellWidth);
-    const int step = (width - 2 * Padding) / columns;
-    const size_t pageSize = static_cast<size_t>(columns) * 2;
-    const size_t count = m_Supplies.Entries.size();
-    const size_t pages = std::max(size_t{ 1 }, (count + pageSize - 1) / pageSize);
+    const int columns = std::max(1, innerWidth / CellWidth);
+    const int step = innerWidth / columns;
+
+    struct TabButtonSpec
+    {
+        int Id = 0;
+        const char *Label = "";
+        bool Active = false;
+        int Left = 0;
+        int TopOffset = 0;
+        int Width = 0;
+    };
+
+    std::vector<TabButtonSpec> tabs;
+    int tabBarHeight = 0;
+    int effectiveCategory = m_Supplies.ActiveCategory;
+    xuoassist::SupplyLayoutResult layout;
+
+    if (m_SuppliesExpanded)
+    {
+        std::vector<xuoassist::SupplyLayoutEntryInput> layoutInputs;
+        layoutInputs.reserve(m_Supplies.Entries.size());
+        bool hasCustom = false;
+        for (size_t i = 0; i < m_Supplies.Entries.size(); ++i)
+        {
+            const auto &entry = m_Supplies.Entries[i];
+            if (entry.Category == xuoassist::SupplyCategory::Custom)
+            {
+                hasCustom = true;
+            }
+            layoutInputs.push_back({ i, entry.Category, entry.Count, entry.Highlighted });
+        }
+        if (effectiveCategory == static_cast<int>(xuoassist::SupplyCategory::Custom) && !hasCustom)
+        {
+            effectiveCategory = -1;
+        }
+        layout = xuoassist::ItemCounters_BuildGroupedSupplyLayout(
+            layoutInputs,
+            effectiveCategory,
+            m_Supplies.HideZero,
+            m_Supplies.CollapsedCategories,
+            columns,
+            CellHeight,
+            GroupHeaderHeight,
+            GroupGap,
+            MaxBodyHeight);
+
+        tabs.push_back({ ID_GSB_SUPPLIES_TAB_ALL, "All", !xuoassist::ItemCounters_IsValidCategory(effectiveCategory) });
+        for (size_t c = 0; c < xuoassist::ItemCounters_CategoryCount; ++c)
+        {
+            const auto cat = static_cast<xuoassist::SupplyCategory>(c);
+            if (cat == xuoassist::SupplyCategory::Custom && layout.CategoryCounts[c] == 0)
+            {
+                continue;
+            }
+            tabs.push_back({
+                ID_GSB_SUPPLIES_TAB_FIRST + static_cast<int>(c),
+                xuoassist::ItemCounters_CategoryShortLabel(cat),
+                effectiveCategory == static_cast<int>(c),
+            });
+        }
+        tabs.push_back({ ID_GSB_SUPPLIES_HIDE_ZERO, "In bag", m_Supplies.HideZero });
+
+        int cursorX = 0;
+        int cursorY = 0;
+        for (auto &tab : tabs)
+        {
+            const int measured = g_FontManager.GetWidthA(9, tab.Label);
+            const int pillW = std::min(innerWidth, std::max(28, measured + 10));
+            if (cursorX > 0 && cursorX + pillW > innerWidth)
+            {
+                cursorX = 0;
+                cursorY += TabHeight + TabGapY;
+            }
+            tab.Left = Padding + cursorX;
+            tab.TopOffset = cursorY;
+            tab.Width = pillW;
+            cursorX += pillW + TabGapX;
+        }
+        tabBarHeight = cursorY + TabHeight + TabBarBottomGap;
+    }
+
+    const size_t pages = std::max(size_t{ 1 }, layout.Pages.size());
     m_SuppliesPage = std::min(m_SuppliesPage, pages - 1);
-    const size_t first = m_SuppliesPage * pageSize;
-    const size_t visible = std::min(count - first, pageSize);
-    const int rows = static_cast<int>((visible + columns - 1) / columns);
+    const bool hasPage = !layout.Pages.empty();
+    const int bodyHeight = hasPage ? layout.Pages[m_SuppliesPage].Height : 22;
     const int footer = pages > 1 ? 24 : 0;
-    const int height = !m_SuppliesExpanded ? HeaderHeight :
-        HeaderHeight + statusStripHeight + (rows == 0 ? 22 : rows * CellHeight) + footer + 8;
+    const int height = !m_SuppliesExpanded
+        ? HeaderHeight
+        : HeaderHeight + statusStripHeight + tabBarHeight + bodyHeight + footer + 8;
 
     addFill(0, y, width, height, 0xFF323E44);
     addFill(1, y + 1, width - 2, height - 2, 0xFF5D8698);
@@ -819,122 +972,174 @@ void CGumpStatusbar::AddSupplies(int x, int y, int width)
     Add(new CGUILine(x + Padding, y + HeaderHeight - 3, x + width - Padding,
         y + HeaderHeight - 3, 0xFF516771));
 
-    const int gridTop = y + HeaderHeight + statusStripHeight;
     if (!statusLine.empty())
     {
         const int statusTop = y + HeaderHeight;
-        const int statusWidth = width - 2 * Padding;
-        addFill(Padding, statusTop, statusWidth, StatusHeight - 2, 0xFF7B939D);
-        addFill(Padding + 1, statusTop + 1, statusWidth - 2, StatusHeight - 4, 0xFFD5E1E6);
+        addFill(Padding, statusTop, innerWidth, StatusHeight - 2, 0xFF7B939D);
+        addFill(Padding + 1, statusTop + 1, innerWidth - 2, StatusHeight - 4, 0xFFD5E1E6);
         const uint16_t statusHue = !m_Supplies.CriminalText.empty() ? LowHue : Ink;
-        addText(statusLine, Padding + 6, statusTop + 2, statusHue, statusWidth - 12, TS_LEFT);
-        Add(new CGUIHitBox(ID_GSB_SUPPLIES_STATUS, x + Padding, statusTop, statusWidth, StatusHeight - 2));
+        addText(statusLine, Padding + 6, statusTop + 2, statusHue, innerWidth - 12, TS_LEFT);
+        Add(new CGUIHitBox(ID_GSB_SUPPLIES_STATUS, x + Padding, statusTop, innerWidth, StatusHeight - 2));
     }
 
-    if (visible == 0)
+    const int tabBarTop = y + HeaderHeight + statusStripHeight + 1;
+    for (const auto &tab : tabs)
     {
-        addText(
-            "Click Counters to choose tracked items.",
-            Padding,
-            gridTop + 5,
-            Ink,
-            width - 2 * Padding,
-            TS_LEFT);
+        addControl(tab.Id, tab.Label, tab.Left, tabBarTop + tab.TopOffset, tab.Width, tab.Active);
+    }
+
+    const int bodyTop = y + HeaderHeight + statusStripHeight + tabBarHeight;
+    if (!hasPage)
+    {
+        const char *emptyMsg = m_Supplies.Entries.empty()
+            ? "Click Counters to choose tracked items."
+            : (m_Supplies.HideZero
+                  ? "No carried items in this group. Click In bag to show all."
+                  : "No tracked items in this group.");
+        addText(emptyMsg, Padding, bodyTop + 4, Ink, innerWidth, TS_LEFT);
         return;
     }
 
-    for (size_t i = 0; i < visible; ++i)
+    const auto &page = layout.Pages[m_SuppliesPage];
+    int cursorY = bodyTop;
+    for (size_t s = 0; s < page.Sections.size(); ++s)
     {
-        const auto &entry = m_Supplies.Entries[first + i];
-        const int cellLeft = Padding + static_cast<int>(i % static_cast<size_t>(columns)) * step;
-        const int cellTop = gridTop + static_cast<int>(i / static_cast<size_t>(columns)) * CellHeight;
-        if (entry.Highlighted)
+        if (s > 0)
         {
-            addFill(cellLeft + 2, cellTop + 2, step - 4, CellHeight - 4, HighlightBorder);
-            addFill(cellLeft + 3, cellTop + 3, step - 6, CellHeight - 6, HighlightFill);
+            cursorY += GroupGap;
         }
-        bool doubleDraw = false;
-        const uint16_t drawGraphic = entry.Icon
-            ? get_stack_graphic(entry.Graphic, entry.Count > 1 ? entry.Count : 1, doubleDraw)
-            : 0;
-        const auto *sprite = entry.Icon ? g_Game.ExecuteStaticArt(drawGraphic) : nullptr;
-        if (sprite != nullptr && sprite->Width > 0 && sprite->Height > 0)
+        const auto &section = page.Sections[s];
+        if (section.ShowHeader)
         {
-            const int iconBoxX = x + cellLeft + (step - IconBoxWidth) / 2;
-            const int iconBoxY = cellTop + 4;
-            const auto layout = xuoassist::ItemCounters_ComputeBackpackIconLayout(
-                iconBoxX,
-                iconBoxY,
-                IconBoxWidth,
-                IconBoxHeight,
-                sprite->Width,
-                sprite->Height,
-                sprite->ImageOffsetX,
-                sprite->ImageOffsetY,
-                sprite->ImageWidth,
-                sprite->ImageHeight,
-                doubleDraw);
-            const uint16_t hue = entry.Hue == 0xFFFF ? 0 : static_cast<uint16_t>(entry.Hue & 0x3FFF);
-            const bool partialHue = IsPartialHue(g_Game.GetStaticFlags(drawGraphic));
-            Add(new CGUIShader(&g_ColorizerShader, true));
-            if (layout.Downscaled)
+            addFill(Padding, cursorY, innerWidth, GroupHeaderHeight, GroupBorder);
+            addFill(Padding + 1, cursorY + 1, innerWidth - 2, GroupHeaderHeight - 2, GroupFill);
+            const astr_t title = astr_t(section.Collapsed ? "+ " : "- ") +
+                xuoassist::ItemCounters_CategoryLabel(section.Category);
+            const astr_t summary = section.HasKnownCounts
+                ? (str_from(section.StockedEntries) + "/" + str_from(section.TotalEntries))
+                : str_from(section.TotalEntries);
+            const int summaryW = 48;
+            addText(title, Padding + 5, cursorY + 1, Ink, std::max(1, innerWidth - summaryW - 10), TS_LEFT);
+            addText(
+                summary,
+                Padding + innerWidth - summaryW - 4,
+                cursorY + 1,
+                section.HasKnownCounts && section.StockedEntries > 0 ? Ink : Muted,
+                summaryW,
+                TS_RIGHT);
+            Add(new CGUIHitBox(
+                ID_GSB_SUPPLIES_GROUP_FIRST + static_cast<int>(section.Category),
+                x + Padding,
+                cursorY,
+                innerWidth,
+                GroupHeaderHeight,
+                true));
+            cursorY += GroupHeaderHeight;
+        }
+
+        if (section.Collapsed)
+        {
+            continue;
+        }
+
+        const size_t visible = section.SourceIndices.size();
+        for (size_t i = 0; i < visible; ++i)
+        {
+            const size_t entryIndex = section.SourceIndices[i];
+            const auto &entry = m_Supplies.Entries[entryIndex];
+            const int cellLeft = Padding + static_cast<int>(i % static_cast<size_t>(columns)) * step;
+            const int cellTop = cursorY + static_cast<int>(i / static_cast<size_t>(columns)) * CellHeight;
+            if (entry.Highlighted)
             {
-                auto *tile = static_cast<CGUITilepicScaled *>(Add(new CGUITilepicScaled(
-                    drawGraphic,
-                    hue,
+                addFill(cellLeft + 1, cellTop + 1, step - 2, CellHeight - 2, HighlightBorder);
+                addFill(cellLeft + 2, cellTop + 2, step - 4, CellHeight - 4, HighlightFill);
+            }
+            bool doubleDraw = false;
+            const uint16_t drawGraphic = entry.Icon
+                ? get_stack_graphic(entry.Graphic, entry.Count > 1 ? entry.Count : 1, doubleDraw)
+                : 0;
+            const auto *sprite = entry.Icon ? g_Game.ExecuteStaticArt(drawGraphic) : nullptr;
+            if (sprite != nullptr && sprite->Width > 0 && sprite->Height > 0)
+            {
+                const int iconBoxX = x + cellLeft + (step - IconBoxWidth) / 2;
+                const int iconBoxY = cellTop + 2;
+                const auto layoutIcon = xuoassist::ItemCounters_ComputeBackpackIconLayout(
                     iconBoxX,
                     iconBoxY,
                     IconBoxWidth,
                     IconBoxHeight,
-                    layout.DrawX,
-                    layout.DrawY,
-                    layout.DrawWidth,
-                    layout.DrawHeight)));
-                tile->PartialHue = partialHue;
+                    sprite->Width,
+                    sprite->Height,
+                    sprite->ImageOffsetX,
+                    sprite->ImageOffsetY,
+                    sprite->ImageWidth,
+                    sprite->ImageHeight,
+                    doubleDraw);
+                const uint16_t hue = entry.Hue == 0xFFFF ? 0 : static_cast<uint16_t>(entry.Hue & 0x3FFF);
+                const bool partialHue = IsPartialHue(g_Game.GetStaticFlags(drawGraphic));
+                Add(new CGUIShader(&g_ColorizerShader, true));
+                if (layoutIcon.Downscaled)
+                {
+                    auto *tile = static_cast<CGUITilepicScaled *>(Add(new CGUITilepicScaled(
+                        drawGraphic,
+                        hue,
+                        iconBoxX,
+                        iconBoxY,
+                        IconBoxWidth,
+                        IconBoxHeight,
+                        layoutIcon.DrawX,
+                        layoutIcon.DrawY,
+                        layoutIcon.DrawWidth,
+                        layoutIcon.DrawHeight)));
+                    tile->PartialHue = partialHue;
+                }
+                else
+                {
+                    auto *tile = static_cast<CGUITilepic *>(Add(new CGUITilepic(
+                        drawGraphic,
+                        hue,
+                        layoutIcon.DrawX,
+                        layoutIcon.DrawY,
+                        layoutIcon.DoubleDraw)));
+                    tile->PartialHue = partialHue;
+                }
+                Add(new CGUIShader(&g_ColorizerShader, false));
             }
             else
             {
-                auto *tile = static_cast<CGUITilepic *>(Add(new CGUITilepic(
-                    drawGraphic,
-                    hue,
-                    layout.DrawX,
-                    layout.DrawY,
-                    layout.DoubleDraw)));
-                tile->PartialHue = partialHue;
+                addText(
+                    entry.Key,
+                    cellLeft,
+                    cellTop + 10,
+                    entry.Highlighted ? HighlightTextHue : Ink,
+                    step,
+                    TS_CENTER);
             }
-            Add(new CGUIShader(&g_ColorizerShader, false));
-        }
-        else
-        {
+            const uint16_t countHue = entry.Highlighted
+                ? (entry.Low ? HighlightLowHue : HighlightTextHue)
+                : (entry.Low ? LowHue : (entry.Count == 0 ? Muted : Ink));
             addText(
-                entry.Key,
+                entry.Count < 0 ? astr_t("--") : str_from(entry.Count),
                 cellLeft,
-                cellTop + 12,
-                entry.Highlighted ? HighlightTextHue : Ink,
+                cellTop + 30,
+                countHue,
                 step,
                 TS_CENTER);
+            Add(new CGUIHitBox(
+                ID_GSB_SUPPLY_FIRST + static_cast<int>(entryIndex),
+                x + cellLeft,
+                cellTop,
+                step,
+                CellHeight));
         }
-        const uint16_t countHue = entry.Highlighted
-            ? (entry.Low ? HighlightLowHue : HighlightTextHue)
-            : (entry.Low ? LowHue : Ink);
-        addText(
-            entry.Count < 0 ? astr_t("--") : str_from(entry.Count),
-            cellLeft,
-            cellTop + 36,
-            countHue,
-            step,
-            TS_CENTER);
-        Add(new CGUIHitBox(
-            ID_GSB_SUPPLY_FIRST + static_cast<int>(first + i),
-            x + cellLeft,
-            cellTop,
-            step,
-            CellHeight));
+
+        const int rowsTaken = static_cast<int>((visible + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns));
+        cursorY += rowsTaken * CellHeight;
     }
 
     if (pages > 1)
     {
-        const int footerTop = gridTop + rows * CellHeight + 3;
+        const int footerTop = bodyTop + bodyHeight + 3;
         if (m_SuppliesPage > 0)
         {
             addControl(ID_GSB_SUPPLIES_PREVIOUS, "<", width / 2 - 59, footerTop, 30);
@@ -2048,7 +2253,7 @@ void CGumpStatusbar::UpdateContent()
     {
         if (item->Serial != ID_GSB_MINIMIZE
 #if defined(XUO_ASSISTANT)
-            && !(item->Serial >= ID_GSB_SUPPLIES_TOGGLE && item->Serial <= ID_GSB_SUPPLIES_NEXT)
+            && !IsSuppliesInteractiveControl(item->Serial)
 #endif
         )
         {
@@ -2084,37 +2289,68 @@ void CGumpStatusbar::GUMP_BUTTON_EVENT_C
 
 #if defined(XUO_ASSISTANT)
     if (Serial == g_PlayerSerial && !Minimized && g_Config.AssistantEnabled &&
-        serial >= ID_GSB_SUPPLIES_TOGGLE && serial <= ID_GSB_SUPPLIES_NEXT)
+        IsSuppliesInteractiveControl(serial))
     {
-        switch (serial)
+        if (serial == ID_GSB_SUPPLIES_TOGGLE)
         {
-            case ID_GSB_SUPPLIES_TOGGLE:
-                m_SuppliesInitialized = true;
-                m_SuppliesExpanded = !m_SuppliesExpanded;
-                xuoassist::ItemCounters_SetStatusExpanded(m_SuppliesExpanded);
-                break;
-            case ID_GSB_SUPPLIES_COUNTERS:
-                xuoassist::AssistantUI_OpenDisplayCounters();
-                return;
-            case ID_GSB_SUPPLIES_RECOUNT:
-                if (m_Supplies.Recounting)
-                {
-                    xuoassist::ItemCounters_CancelRecount();
-                }
-                else
-                {
-                    xuoassist::ItemCounters_StartRecount();
-                }
-                break;
-            case ID_GSB_SUPPLIES_PREVIOUS:
-                if (m_SuppliesPage > 0)
-                {
-                    --m_SuppliesPage;
-                }
-                break;
-            case ID_GSB_SUPPLIES_NEXT:
-                ++m_SuppliesPage;
-                break;
+            m_SuppliesInitialized = true;
+            m_SuppliesExpanded = !m_SuppliesExpanded;
+            xuoassist::ItemCounters_SetStatusExpanded(m_SuppliesExpanded);
+        }
+        else if (serial == ID_GSB_SUPPLIES_COUNTERS)
+        {
+            xuoassist::AssistantUI_OpenDisplayCounters();
+            return;
+        }
+        else if (serial == ID_GSB_SUPPLIES_RECOUNT)
+        {
+            if (m_Supplies.Recounting)
+            {
+                xuoassist::ItemCounters_CancelRecount();
+            }
+            else
+            {
+                xuoassist::ItemCounters_StartRecount();
+            }
+        }
+        else if (serial == ID_GSB_SUPPLIES_PREVIOUS)
+        {
+            if (m_SuppliesPage > 0)
+            {
+                --m_SuppliesPage;
+            }
+        }
+        else if (serial == ID_GSB_SUPPLIES_NEXT)
+        {
+            ++m_SuppliesPage;
+        }
+        else if (serial == ID_GSB_SUPPLIES_HIDE_ZERO)
+        {
+            xuoassist::ItemCounters_SetStatusHideZero(!m_Supplies.HideZero);
+            m_SuppliesPage = 0;
+        }
+        else if (serial == ID_GSB_SUPPLIES_TAB_ALL)
+        {
+            xuoassist::ItemCounters_SetStatusCategory(-1);
+            m_SuppliesPage = 0;
+        }
+        else if (serial >= ID_GSB_SUPPLIES_TAB_FIRST && serial <= ID_GSB_SUPPLIES_TAB_LAST)
+        {
+            const int cat = static_cast<int>(serial - ID_GSB_SUPPLIES_TAB_FIRST);
+            if (xuoassist::ItemCounters_IsValidCategory(cat))
+            {
+                xuoassist::ItemCounters_SetStatusCategory(cat);
+                m_SuppliesPage = 0;
+            }
+        }
+        else if (serial >= ID_GSB_SUPPLIES_GROUP_FIRST && serial <= ID_GSB_SUPPLIES_GROUP_LAST)
+        {
+            const int cat = static_cast<int>(serial - ID_GSB_SUPPLIES_GROUP_FIRST);
+            if (xuoassist::ItemCounters_IsValidCategory(cat))
+            {
+                xuoassist::ItemCounters_ToggleStatusCategoryCollapsed(static_cast<xuoassist::SupplyCategory>(cat));
+                m_SuppliesPage = 0;
+            }
         }
         WantUpdateContent = true;
         return;
@@ -2196,7 +2432,7 @@ bool CGumpStatusbar::OnLeftMouseButtonDoubleClick()
     if (Serial == g_PlayerSerial && !Minimized && g_Config.AssistantEnabled)
     {
         const uint32_t pressed = g_PressedObject.LeftSerial;
-        if (pressed >= ID_GSB_SUPPLIES_TOGGLE && pressed <= ID_GSB_SUPPLIES_NEXT)
+        if (IsSuppliesInteractiveControl(pressed))
         {
             return true;
         }

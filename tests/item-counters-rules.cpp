@@ -414,5 +414,157 @@ int main()
         assert(lowColor != midColor && midColor != goodColor && lowColor != goodColor);
     }
 
+    // 11. Built-in grouped supply catalog integrity, ModernUO IDs/hues, and uniqueness.
+    {
+        const auto &catalog = ItemCounters_GetDefaultCatalog();
+        assert(catalog.size() == 47);
+
+        std::array<int, ItemCounters_CategoryCount> counts{};
+        for (size_t i = 0; i < catalog.size(); ++i)
+        {
+            const auto &spec = catalog[i];
+            assert(spec.Name != nullptr && spec.Name[0] != '\0');
+            assert(spec.Key != nullptr && spec.Key[0] != '\0');
+            assert(spec.Graphic > 0 && spec.Graphic < ItemCounters_AnyHue);
+            assert(spec.Hue == ItemCounters_AnyHue || spec.Hue <= 0x3FFFu);
+            assert(spec.Category != SupplyCategory::Custom);
+            counts[static_cast<size_t>(spec.Category)] += 1;
+
+            // Every built-in key must be unique and not collide with reserved DisplayManager stats.
+            assert(!ItemCounters_EqualsIgnoreCaseAscii(spec.Key, "str"));
+            assert(!ItemCounters_EqualsIgnoreCaseAscii(spec.Key, "dex"));
+            assert(!ItemCounters_EqualsIgnoreCaseAscii(spec.Key, "int"));
+            assert(!ItemCounters_EqualsIgnoreCaseAscii(spec.Key, "gold"));
+            assert(!ItemCounters_EqualsIgnoreCaseAscii(spec.Key, "bandage"));
+            for (size_t j = i + 1; j < catalog.size(); ++j)
+            {
+                assert(!ItemCounters_EqualsIgnoreCaseAscii(spec.Key, catalog[j].Key));
+            }
+        }
+
+        assert(counts[static_cast<size_t>(SupplyCategory::Magery)] == 8);
+        assert(counts[static_cast<size_t>(SupplyCategory::Necromancy)] == 5);
+        assert(counts[static_cast<size_t>(SupplyCategory::Mysticism)] == 5);
+        assert(counts[static_cast<size_t>(SupplyCategory::Potions)] == 13);
+        assert(counts[static_cast<size_t>(SupplyCategory::Combat)] == 8);
+        assert(counts[static_cast<size_t>(SupplyCategory::Utility)] == 8);
+        assert(counts[static_cast<size_t>(SupplyCategory::Custom)] == 0);
+
+        // Verify shared-graphic potions use exact hues so they do not double-count.
+        assert(ItemCounters_HueMatches(0x0000, 0x0000));
+        assert(!ItemCounters_HueMatches(0x0000, 0x0489)); // Night Sight vs Conflagration (0x0F06)
+        assert(!ItemCounters_HueMatches(0x0000, 0x048D)); // Poison vs Invisibility (0x0F0A)
+        assert(ItemCounters_HueMatches(0x048D, static_cast<uint16_t>(0x848D))); // partial hue flag bit
+        assert(ItemCounters_HueMatches(ItemCounters_AnyHue, 0x048E));
+
+        // Category inference for legacy v1 counters & shared potion graphics.
+        assert(ItemCounters_InferCategory(0x0F7A, ItemCounters_AnyHue) == SupplyCategory::Magery);
+        assert(ItemCounters_InferCategory(0x0F78, ItemCounters_AnyHue) == SupplyCategory::Necromancy);
+        assert(ItemCounters_InferCategory(0x0F8F, ItemCounters_AnyHue) == SupplyCategory::Necromancy);
+        assert(ItemCounters_InferCategory(0x0F8E, ItemCounters_AnyHue) == SupplyCategory::Necromancy);
+        assert(ItemCounters_InferCategory(0x0F8A, ItemCounters_AnyHue) == SupplyCategory::Necromancy);
+        assert(ItemCounters_InferCategory(0x4077, ItemCounters_AnyHue) == SupplyCategory::Mysticism);
+        assert(ItemCounters_InferCategory(0x0F0C, 0x0000) == SupplyCategory::Potions);
+        assert(ItemCounters_InferCategory(0x0F06, 0x0489) == SupplyCategory::Potions);
+        assert(ItemCounters_InferCategory(0x0E21, ItemCounters_AnyHue) == SupplyCategory::Combat);
+        assert(ItemCounters_InferCategory(0x0E24, 0x048E) == SupplyCategory::Utility);
+        assert(ItemCounters_InferCategory(0x1234, 0x0000) == SupplyCategory::Custom);
+
+        // Category INI parsing & round-tripping.
+        for (size_t c = 0; c < ItemCounters_CategoryCount; ++c)
+        {
+            const auto cat = static_cast<SupplyCategory>(c);
+            SupplyCategory parsed = SupplyCategory::Custom;
+            assert(ItemCounters_ParseCategory(ItemCounters_CategoryId(cat), parsed));
+            assert(parsed == cat);
+            assert(ItemCounters_ParseCategoryFilter(ItemCounters_CategoryFilterId(static_cast<int>(c))) ==
+                   static_cast<int>(c));
+        }
+        assert(ItemCounters_ParseCategoryFilter("all") == -1);
+        assert(ItemCounters_ParseCategoryFilter("unknown") == -1);
+        assert(ItemCounters_EqualsIgnoreCaseAscii(ItemCounters_CategoryFilterId(-1), "all"));
+
+        // Migration deduplication: existing user Bat Wing (hue 0) covers AnyHue default,
+        // while existing Poison Potion (0x0F0A, hue 0) does NOT suppress Invisibility Potion (0x0F0A, hue 0x048D).
+        const DefaultSupplySpec batWingSpec{ "Bat wing", "bw", 0x0F78, ItemCounters_AnyHue, 5, SupplyCategory::Necromancy };
+        const DefaultSupplySpec invisSpec{ "Invisibility potion", "invis_pot", 0x0F0A, 0x048D, 0, SupplyCategory::Potions };
+        assert(ItemCounters_DefaultMatchesExisting("my_bats", 0x0F78, 0x0000, batWingSpec));
+        assert(!ItemCounters_DefaultMatchesExisting("poison_pot", 0x0F0A, 0x0000, invisSpec));
+        assert(ItemCounters_DefaultMatchesExisting("invis_pot", 0x0F0A, 0x048D, invisSpec));
+    }
+
+    // 12. Grouped status-bar layout: All view fits 6 groups on 1 page at 8 columns,
+    // supports category filtering, collapsible sections, In-bag filtering, and narrow pagination.
+    {
+        const auto &catalog = ItemCounters_GetDefaultCatalog();
+        std::vector<SupplyLayoutEntryInput> allEntries;
+        allEntries.reserve(catalog.size());
+        for (size_t i = 0; i < catalog.size(); ++i)
+        {
+            const auto &spec = catalog[i];
+            // Stocked items: Black pearl, Bat wing, Heal potion, Bandages.
+            const int count = (spec.Graphic == 0x0F7A || spec.Graphic == 0x0F78 ||
+                               spec.Graphic == 0x0F0C || spec.Graphic == 0x0E21)
+                ? 12
+                : 0;
+            const bool highlighted = spec.Graphic == 0x0F8F; // Grave dust cast highlight
+            allEntries.push_back({ i, spec.Category, count, highlighted });
+        }
+
+        // Standard 8-column All view fits all 6 built-in groups on 1 page cleanly.
+        const auto fullLayout = ItemCounters_BuildGroupedSupplyLayout(
+            allEntries, -1, false, 0u, 8, 44, 17, 4, 460);
+        assert(fullLayout.Pages.size() == 1);
+        assert(fullLayout.Pages[0].Sections.size() == 6);
+        assert(fullLayout.Pages[0].Sections[0].Category == SupplyCategory::Magery);
+        assert(fullLayout.Pages[0].Sections[0].ShowHeader);
+        assert(fullLayout.Pages[0].Sections[0].StockedEntries == 1);
+        assert(fullLayout.Pages[0].Sections[0].TotalEntries == 8);
+        assert(fullLayout.Pages[0].Sections[1].Category == SupplyCategory::Necromancy);
+        assert(fullLayout.Pages[0].Sections[3].Category == SupplyCategory::Potions);
+        assert(fullLayout.Pages[0].Sections[3].SourceIndices.size() == 13);
+
+        // Single-category tab (Potions) omits group header and returns only Potions.
+        const auto potionsLayout = ItemCounters_BuildGroupedSupplyLayout(
+            allEntries, static_cast<int>(SupplyCategory::Potions), false, 0u, 8, 44, 17, 4, 460);
+        assert(potionsLayout.Pages.size() == 1);
+        assert(potionsLayout.Pages[0].Sections.size() == 1);
+        assert(!potionsLayout.Pages[0].Sections[0].ShowHeader);
+        assert(potionsLayout.Pages[0].Sections[0].SourceIndices.size() == 13);
+
+        // In-bag filter keeps stocked items and active-cast highlighted reagents, hides empty groups.
+        const auto inBagLayout = ItemCounters_BuildGroupedSupplyLayout(
+            allEntries, -1, true, 0u, 8, 44, 17, 4, 460);
+        assert(inBagLayout.Pages.size() == 1);
+        assert(inBagLayout.Pages[0].Sections.size() == 4); // Magery, Necro (Bat wing + highlighted Grave dust), Potions, Combat
+        assert(inBagLayout.Pages[0].Sections[1].Category == SupplyCategory::Necromancy);
+        assert(inBagLayout.Pages[0].Sections[1].SourceIndices.size() == 2);
+
+        // Collapsing a category in All view shrinks its section to header-only with zero tiles.
+        const uint32_t collapsedMask = ItemCounters_ToggleCategoryCollapsed(0u, SupplyCategory::Potions);
+        assert(ItemCounters_IsCategoryCollapsed(collapsedMask, SupplyCategory::Potions));
+        const auto collapsedLayout = ItemCounters_BuildGroupedSupplyLayout(
+            allEntries, -1, false, collapsedMask, 8, 44, 17, 4, 460);
+        assert(collapsedLayout.Pages.size() == 1);
+        assert(collapsedLayout.Pages[0].Sections[3].Collapsed);
+        assert(collapsedLayout.Pages[0].Sections[3].SourceIndices.empty());
+        assert(collapsedLayout.Pages[0].Height < fullLayout.Pages[0].Height);
+
+        // Narrow classic statusbar (4 columns) cleanly paginates across multiple pages.
+        const auto narrowLayout = ItemCounters_BuildGroupedSupplyLayout(
+            allEntries, -1, false, 0u, 4, 44, 17, 4, 300);
+        assert(narrowLayout.Pages.size() > 1);
+        size_t totalTiles = 0;
+        for (const auto &page : narrowLayout.Pages)
+        {
+            assert(page.Height <= 300);
+            for (const auto &sec : page.Sections)
+            {
+                totalTiles += sec.SourceIndices.size();
+            }
+        }
+        assert(totalTiles == catalog.size());
+    }
+
     return 0;
 }

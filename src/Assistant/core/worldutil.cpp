@@ -62,7 +62,7 @@ int CountItems(const CGameObject *root, uint16_t graphic, uint16_t color, bool r
     for (CGameItem *item = (CGameItem *)root->m_Items; item != nullptr; item = (CGameItem *)item->m_Next)
     {
         if ((graphic == 0xFFFF || graphic == item->Graphic) &&
-            (color == 0xFFFF || color == item->Color))
+            (color == 0xFFFF || color == item->Color || color == (item->Color & 0x3FFF)))
         {
             count += item->Count;
         }

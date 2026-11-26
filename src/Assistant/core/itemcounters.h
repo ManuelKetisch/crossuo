@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <vector>
 #include <common/str.h>
+#include "itemcounters_rules.h"
 
 class CGameCharacter;
 
@@ -41,12 +42,14 @@ struct SupplyCounter
     bool Low = false;
     int Warning = 0;
     bool Highlighted = false;
+    SupplyCategory Category = SupplyCategory::Custom;
 
     bool operator==(const SupplyCounter &other) const
     {
         return Name == other.Name && Key == other.Key && Graphic == other.Graphic &&
                Hue == other.Hue && Count == other.Count && Icon == other.Icon && Low == other.Low &&
-               Warning == other.Warning && Highlighted == other.Highlighted;
+               Warning == other.Warning && Highlighted == other.Highlighted &&
+               Category == other.Category;
     }
 };
 
@@ -63,6 +66,9 @@ struct SuppliesSnapshot
     astr_t CastSpellName;
     bool AutoRecount = true;
     bool SkipPouches = true;
+    int ActiveCategory = -1;
+    bool HideZero = false;
+    uint32_t CollapsedCategories = 0;
 
     bool operator==(const SuppliesSnapshot &other) const
     {
@@ -71,6 +77,8 @@ struct SuppliesSnapshot
                GoldText == other.GoldText && GateText == other.GateText &&
                CriminalText == other.CriminalText && CastSpellName == other.CastSpellName &&
                AutoRecount == other.AutoRecount && SkipPouches == other.SkipPouches &&
+               ActiveCategory == other.ActiveCategory && HideZero == other.HideZero &&
+               CollapsedCategories == other.CollapsedCategories &&
                Entries == other.Entries;
     }
 };
@@ -80,6 +88,12 @@ bool ItemCounters_StartRecount();
 void ItemCounters_CancelRecount();
 bool ItemCounters_StatusExpanded();
 void ItemCounters_SetStatusExpanded(bool expanded);
+int ItemCounters_StatusCategory();
+void ItemCounters_SetStatusCategory(int category);
+bool ItemCounters_StatusHideZero();
+void ItemCounters_SetStatusHideZero(bool hideZero);
+uint32_t ItemCounters_StatusCollapsedCategories();
+void ItemCounters_ToggleStatusCategoryCollapsed(SupplyCategory category);
 bool ItemCounters_UseCounter(uint16_t graphic, uint16_t hue);
 void ItemCounters_OnContainerChanged(
     uint32_t containerSerial,
