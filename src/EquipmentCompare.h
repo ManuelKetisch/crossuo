@@ -26,6 +26,75 @@ enum class UpgradeVerdict : uint8_t
     Downgrade
 };
 
+enum class CompareBuildProfile : uint8_t
+{
+    Auto = 0,
+    Melee = 1,
+    Caster = 2,
+    Hybrid = 3,
+    Tank = 4,
+    Luck = 5
+};
+
+constexpr int kCompareSkillCount = 58;
+
+struct CharacterCompareContext
+{
+    bool Valid = false;
+    CompareBuildProfile Profile = CompareBuildProfile::Auto;
+
+    // Live character stats (from g_Player)
+    int Str = 0;
+    int Dex = 0;
+    int Int = 0;
+    int Stam = 0;
+
+    // Live totals & caps (from 0x11 extended status packet + equipped paperdoll scan)
+    bool HasStatusTotals = false;
+    int PhysicalResist = 0;
+    int FireResist = 0;
+    int ColdResist = 0;
+    int PoisonResist = 0;
+    int EnergyResist = 0;
+    int MaxPhysicalResist = 70;
+    int MaxFireResist = 70;
+    int MaxColdResist = 70;
+    int MaxPoisonResist = 70;
+    int MaxEnergyResist = 70;
+
+    // Uncapped sum of resists across OTHER loaded equipped items (excluding compared target(s)),
+    // allowing accurate overcap detection even though 0x11 clamps player resists at Max*Resist.
+    bool HasOtherEquippedResists = false;
+    int OtherEquippedPhysicalResist = 0;
+    int OtherEquippedFireResist = 0;
+    int OtherEquippedColdResist = 0;
+    int OtherEquippedPoisonResist = 0;
+    int OtherEquippedEnergyResist = 0;
+
+    int DefenseChance = 0;
+    int MaxDefenseChance = 45;
+    int AttackChance = 0;
+    int MaxAttackChance = 45;
+    int WeaponSpeed = 0;      // Suit SSI total
+    int MaxWeaponSpeed = 60;
+    int WeaponDamage = 0;     // Suit DI total
+    int MaxWeaponDamage = 100;
+    int LowerReagentCost = 0;
+    int MaxLowerReagentCost = 100;
+    int LowerManaCost = 0;
+    int MaxLowerManaCost = 40;
+    int SpellDamage = 0;
+    int CastSpeed = 0;        // Suit FC total
+    int MaxCastSpeed = 2;
+    int CastRecovery = 0;     // Suit FCR total
+    int MaxCastRecovery = 6;
+    int Luck = 0;
+
+    // Live character skills (indexed by UO SkillName 0..57; values 0.0..120.0+)
+    bool HasSkills = false;
+    double Skills[kCompareSkillCount] = {};
+};
+
 struct EquipmentSkillBonus
 {
     uint32_t SkillCliloc = 0;
@@ -130,6 +199,7 @@ struct ParsedEquipmentStats
     wstr_t MaterialGrade = {};
     int WeaponLevel = 0;
 
+    bool HasWeaponIdentity() const;
     double AverageDamage() const;
     double BaseSeconds() const;
     double EffectiveSeconds() const;
@@ -163,18 +233,22 @@ struct EquipmentStatDelta
     bool IsFloat = false;
     bool IsBooleanFlag = false;
     bool IsInformational = false;
+    bool MutedByCap = false;
     wstr_t DetailText = {};
+    wstr_t CapNote = {};
 };
 
 struct EquipmentComparisonEntry
 {
     wstr_t TargetLabel = {};
+    wstr_t ProfileLabel = {};
     double HoveredScore = 0.0;
     double EquippedScore = 0.0;
     double ScoreDelta = 0.0;
     double ScoreDeltaPct = 0.0;
     UpgradeVerdict Verdict = UpgradeVerdict::Sidegrade;
     std::vector<EquipmentStatDelta> Deltas = {};
+    std::vector<wstr_t> Warnings = {};
 };
 
 struct ComparisonCardOutput
@@ -200,7 +274,14 @@ EquipCategory ClassifyEquipmentCategory(
     int tileLayer,
     bool isWeapon);
 
-double ScoreEquipment(const ParsedEquipmentStats &stats, EquipCategory category);
+int SkillClilocToIndex(uint32_t skillCliloc);
+
+wstr_t ResolveBuildProfileLabel(const CharacterCompareContext *ctx);
+
+double ScoreEquipment(
+    const ParsedEquipmentStats &stats,
+    EquipCategory category,
+    const CharacterCompareContext *ctx = nullptr);
 
 UpgradeVerdict ClassifyVerdict(double scoreDelta, double equippedScore);
 
@@ -208,17 +289,20 @@ EquipmentComparisonEntry CompareSingleStats(
     const ParsedEquipmentStats &hovered,
     const ParsedEquipmentStats &equipped,
     EquipCategory category,
-    const wstr_t &targetLabel);
+    const wstr_t &targetLabel,
+    const CharacterCompareContext *ctx = nullptr);
 
 EquipmentComparisonEntry CompareAgainstCombinedStats(
     const ParsedEquipmentStats &hovered,
     const ParsedEquipmentStats &eqA,
     const ParsedEquipmentStats &eqB,
     EquipCategory category,
-    const wstr_t &targetLabel);
+    const wstr_t &targetLabel,
+    const CharacterCompareContext *ctx = nullptr);
 
 EquipmentCompareResult BuildEquipmentComparison(
     const EquipmentCompareItemInput &hovered,
     const std::vector<EquipmentCompareItemInput> &equippedTargets,
     int totalSlotsInFamily,
-    int occupiedSlotsInFamily);
+    int occupiedSlotsInFamily,
+    const CharacterCompareContext *ctx = nullptr);

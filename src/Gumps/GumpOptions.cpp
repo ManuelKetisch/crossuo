@@ -124,6 +124,12 @@ enum
     ID_GO_P3_TEXT_FONT,
     ID_GO_P3_DELAY_BEFORE_TOOLTIP,
     ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL,
+    ID_GO_P3_COMPARE_PROFILE_AUTO,
+    ID_GO_P3_COMPARE_PROFILE_MELEE,
+    ID_GO_P3_COMPARE_PROFILE_CASTER,
+    ID_GO_P3_COMPARE_PROFILE_HYBRID,
+    ID_GO_P3_COMPARE_PROFILE_TANK,
+    ID_GO_P3_COMPARE_PROFILE_LUCK,
 
     // Chat Page
     ID_GO_P4_TEXT_FONT,
@@ -750,6 +756,36 @@ void CGumpOptions::InitToolTip()
         case ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL:
         {
             g_ToolTip.Set(L"Hold Ctrl while hovering equipment to compare against equipped items");
+            break;
+        }
+        case ID_GO_P3_COMPARE_PROFILE_AUTO:
+        {
+            g_ToolTip.Set(L"Automatically weight stats based on your character's live skills and gear caps");
+            break;
+        }
+        case ID_GO_P3_COMPARE_PROFILE_MELEE:
+        {
+            g_ToolTip.Set(L"Prioritize Weapon DPS, DI, SSI, HCI, DCI, Leech, LMC, and Resists");
+            break;
+        }
+        case ID_GO_P3_COMPARE_PROFILE_CASTER:
+        {
+            g_ToolTip.Set(L"Prioritize SDI, FC, FCR, LMC, LRC, Spell Channeling, Mage Armor, and Mana Regen");
+            break;
+        }
+        case ID_GO_P3_COMPARE_PROFILE_HYBRID:
+        {
+            g_ToolTip.Set(L"Balanced scoring for martial and spellcasting stats combined");
+            break;
+        }
+        case ID_GO_P3_COMPARE_PROFILE_TANK:
+        {
+            g_ToolTip.Set(L"Prioritize Resists, DCI, HP Regen, Bonus Hits/Str, and Reflect Physical");
+            break;
+        }
+        case ID_GO_P3_COMPARE_PROFILE_LUCK:
+        {
+            g_ToolTip.Set(L"Elevate Luck while preserving core survivability and combat stats");
             break;
         }
         case ID_GO_P4_TEXT_FONT:
@@ -1562,6 +1598,34 @@ void CGumpOptions::DrawPage3()
         ID_GO_P3_COMPARE_EQUIPMENT_ON_CTRL, 0x00D2, 0x00D3, 0x00D2, 64, 198));
     checkbox->Checked = g_OptionsConfig.CompareEquipmentOnCtrl;
     checkbox->SetTextParameters(0, L"Hold Ctrl to compare equipment", g_OptionsTextColor);
+
+    text = (CGUIText *)Add(new CGUIText(g_OptionsTextColor, 64, 228));
+    text->CreateTextureW(0, L"Equipment comparison build profile:");
+
+    Add(new CGUIGroup(1));
+    struct CompareProfileOption
+    {
+        int Serial;
+        uint8_t Value;
+        int X;
+        int Y;
+        const wchar_t *Label;
+    };
+    const CompareProfileOption profileOpts[] = {
+        { ID_GO_P3_COMPARE_PROFILE_AUTO, 0, 64, 250, L"Auto (from skills)" },
+        { ID_GO_P3_COMPARE_PROFILE_MELEE, 1, 224, 250, L"Melee" },
+        { ID_GO_P3_COMPARE_PROFILE_CASTER, 2, 334, 250, L"Caster" },
+        { ID_GO_P3_COMPARE_PROFILE_HYBRID, 3, 64, 274, L"Hybrid" },
+        { ID_GO_P3_COMPARE_PROFILE_TANK, 4, 224, 274, L"Tank" },
+        { ID_GO_P3_COMPARE_PROFILE_LUCK, 5, 334, 274, L"Luck" },
+    };
+    for (const auto &opt : profileOpts)
+    {
+        CGUIRadio *radio =
+            (CGUIRadio *)Add(new CGUIRadio(opt.Serial, 0x00D0, 0x00D1, 0x00D2, opt.X, opt.Y));
+        radio->Checked = (g_OptionsConfig.CompareEquipmentProfile == opt.Value);
+        radio->SetTextParameters(0, opt.Label, g_OptionsTextColor);
+    }
 }
 
 void CGumpOptions::DrawPage4()
@@ -3601,6 +3665,12 @@ void CGumpOptions::GUMP_RADIO_EVENT_C
         }
         case 3: //Language
         {
+            if (serial >= ID_GO_P3_COMPARE_PROFILE_AUTO &&
+                serial <= ID_GO_P3_COMPARE_PROFILE_LUCK)
+            {
+                g_OptionsConfig.CompareEquipmentProfile =
+                    static_cast<uint8_t>(serial - ID_GO_P3_COMPARE_PROFILE_AUTO);
+            }
             break;
         }
         case 4: //Chat
@@ -4113,6 +4183,7 @@ void CGumpOptions::ApplyPageChanges()
             g_ConfigManager.ToolTipsTextFont = g_OptionsConfig.ToolTipsTextFont;
             g_ConfigManager.ToolTipsDelay = g_OptionsConfig.ToolTipsDelay;
             g_ConfigManager.CompareEquipmentOnCtrl = g_OptionsConfig.CompareEquipmentOnCtrl;
+            g_ConfigManager.CompareEquipmentProfile = g_OptionsConfig.CompareEquipmentProfile;
 
             break;
         }

@@ -4,6 +4,7 @@
 #include "ObjectPropertiesManager.h"
 #include "ConfigManager.h"
 #include "PacketManager.h"
+#include "SkillsManager.h"
 #include "GameObjects/GameObject.h"
 #include "GumpManager.h"
 #include "../EquipmentCompare.h"
@@ -87,7 +88,7 @@ const wchar_t *EquipmentSlotLabel(int layer)
     }
 }
 
-bool HasWeaponDamageCliloc(const CObjectProperty *prop)
+bool HasWeaponOplCliloc(const CObjectProperty *prop)
 {
     if (prop == nullptr)
     {
@@ -96,9 +97,20 @@ bool HasWeaponDamageCliloc(const CObjectProperty *prop)
 
     for (const auto &entry : prop->Properties)
     {
-        if (entry.first == 1061168u)
+        switch (entry.first)
         {
-            return true;
+            case 1061168u: // weapon damage
+            case 1061167u: // weapon speed
+            case 1061171u: // two-handed weapon
+            case 1061824u: // one-handed weapon
+            case 1061172u: // skill required: swordsmanship
+            case 1061173u: // skill required: mace fighting
+            case 1061174u: // skill required: fencing
+            case 1061175u: // skill required: archery
+            case 1112075u: // skill required: throwing
+                return true;
+            default:
+                break;
         }
     }
 
@@ -325,20 +337,103 @@ void CObjectPropertiesManager::Display(int serial)
             return;
         }
 
-        auto isEquippedWeapon = [&](CGameItem *eq) -> bool {
+        auto isEquippedWeapon = [&](CGameItem *eq, bool allowUnloadedTwoHandFallback) -> bool {
             if (eq == nullptr)
             {
                 return false;
             }
-            if (eq->GetStaticData() != nullptr && eq->IsWeapon())
+            const CObjectProperty *eqProp = Find(eq->Serial);
+            if (eqProp != nullptr && !eqProp->Empty())
             {
-                return true;
+                return HasWeaponOplCliloc(eqProp);
             }
-            return HasWeaponDamageCliloc(Find(eq->Serial));
+            // OPL not loaded yet: UO tiledata.mul sets TileFlag.Weapon (0x02) on armor,
+            // shields, and jewelry as well, so only allow hand-layer items as fallback.
+            const MulStaticTile2 *eqTd = eq->GetStaticData();
+            if (eqTd == nullptr)
+            {
+                return false;
+            }
+            if (eqTd->Layer == OL_1_HAND)
+            {
+                return eq->IsWeapon();
+            }
+            if (allowUnloadedTwoHandFallback && eqTd->Layer == OL_2_HAND)
+            {
+                return eq->IsWeapon();
+            }
+            return false;
         };
 
+        // Build live character context (profile, stats, caps, skills) for SOTA comparison.
+        CharacterCompareContext compareCtx;
+        compareCtx.Valid = true;
+        compareCtx.Profile = (g_ConfigManager.CompareEquipmentProfile <= 5u)
+                                 ? static_cast<CompareBuildProfile>(g_ConfigManager.CompareEquipmentProfile)
+                                 : CompareBuildProfile::Auto;
+        compareCtx.Str = g_Player->Str;
+        compareCtx.Dex = g_Player->Dex;
+        compareCtx.Int = g_Player->Int;
+        compareCtx.Stam = g_Player->MaxStam > 0 ? static_cast<int>(g_Player->MaxStam)
+                                                : static_cast<int>(g_Player->Stam);
+
+        const bool hasExtendedStatus =
+            g_Player->MaxPhysicalResistance > 0 || g_Player->MaxDefenceChance > 0 ||
+            g_Player->Armor != 0 || g_Player->FireResistance != 0 ||
+            g_Player->ColdResistance != 0 || g_Player->PoisonResistance != 0 ||
+            g_Player->EnergyResistance != 0 || g_Player->LowerRegCost != 0 ||
+            g_Player->LowerManaCost != 0 || g_Player->WeaponDamage != 0 ||
+            g_Player->WeaponSpeed != 0 || g_Player->AttackChance != 0 ||
+            g_Player->DefenceChance != 0 || g_Player->SpellDamage != 0 ||
+            g_Player->CastSpeed != 0 || g_Player->CastRecovery != 0;
+        if (hasExtendedStatus)
+        {
+            compareCtx.HasStatusTotals = true;
+            compareCtx.PhysicalResist = g_Player->Armor;
+            compareCtx.FireResist = g_Player->FireResistance;
+            compareCtx.ColdResist = g_Player->ColdResistance;
+            compareCtx.PoisonResist = g_Player->PoisonResistance;
+            compareCtx.EnergyResist = g_Player->EnergyResistance;
+            compareCtx.MaxPhysicalResist =
+                g_Player->MaxPhysicalResistance > 0 ? g_Player->MaxPhysicalResistance : 70;
+            compareCtx.MaxFireResist =
+                g_Player->MaxFireResistance > 0 ? g_Player->MaxFireResistance : 70;
+            compareCtx.MaxColdResist =
+                g_Player->MaxColdResistance > 0 ? g_Player->MaxColdResistance : 70;
+            compareCtx.MaxPoisonResist =
+                g_Player->MaxPoisonResistance > 0 ? g_Player->MaxPoisonResistance : 70;
+            compareCtx.MaxEnergyResist =
+                g_Player->MaxEnergyResistance > 0 ? g_Player->MaxEnergyResistance : 70;
+            compareCtx.DefenseChance = g_Player->DefenceChance;
+            compareCtx.MaxDefenseChance =
+                g_Player->MaxDefenceChance > 0 ? g_Player->MaxDefenceChance : 45;
+            compareCtx.AttackChance = g_Player->AttackChance;
+            compareCtx.WeaponSpeed = g_Player->WeaponSpeed;
+            compareCtx.WeaponDamage = g_Player->WeaponDamage;
+            compareCtx.LowerReagentCost = g_Player->LowerRegCost;
+            compareCtx.LowerManaCost = g_Player->LowerManaCost;
+            compareCtx.SpellDamage = g_Player->SpellDamage;
+            compareCtx.CastSpeed = g_Player->CastSpeed;
+            compareCtx.CastRecovery = g_Player->CastRecovery;
+            compareCtx.Luck = g_Player->Luck;
+        }
+
+        if (g_SkillsManager.Count > 0u && g_SkillsManager.SkillsTotal > 0.0f)
+        {
+            compareCtx.HasSkills = true;
+            const uint32_t skillLimit =
+                std::min<uint32_t>(g_SkillsManager.Count, static_cast<uint32_t>(kCompareSkillCount));
+            for (uint32_t i = 0; i < skillLimit; ++i)
+            {
+                if (const CSkill *sk = g_SkillsManager.Get(i))
+                {
+                    compareCtx.Skills[i] = static_cast<double>(sk->Value);
+                }
+            }
+        }
+
         const ParsedEquipmentStats hoveredParsed = ParseEquipmentOpl(hoveredProp.Properties);
-        const bool hoveredIsWeapon = item->IsWeapon() || hoveredParsed.HasWeaponDamage;
+        const bool hoveredIsWeapon = hoveredParsed.HasWeaponIdentity();
 
         std::vector<ResolvedCompareTarget> targets;
         std::vector<uint32_t> prefetchSerials;
@@ -351,7 +446,7 @@ void CObjectPropertiesManager::Display(int serial)
             CGameItem *oh = g_Player->FindLayer(OL_2_HAND);
             const bool dualWield =
                 (g_Player->GetOffHandWeapon() != nullptr) ||
-                (isEquippedWeapon(mh) && isEquippedWeapon(oh));
+                (isEquippedWeapon(mh, false) && isEquippedWeapon(oh, false));
             if (hoveredIsWeapon && dualWield)
             {
                 totalSlots = 2;
@@ -371,7 +466,7 @@ void CObjectPropertiesManager::Display(int serial)
                 targets.push_back({ mh, L"Main Hand", false });
                 occupiedSlots = 1;
             }
-            else if (isEquippedWeapon(oh))
+            else if (isEquippedWeapon(oh, true))
             {
                 targets.push_back({ oh, L"Two-Handed", false });
                 occupiedSlots = 1;
@@ -390,7 +485,7 @@ void CObjectPropertiesManager::Display(int serial)
                 }
                 if (oh != nullptr)
                 {
-                    const bool ohWeapon = isEquippedWeapon(oh);
+                    const bool ohWeapon = isEquippedWeapon(oh, true);
                     const wchar_t *ohLabel =
                         ohWeapon ? (mh != nullptr ? L"Off Hand" : L"Two-Handed")
                                  : L"Shield / Off Hand";
@@ -403,7 +498,7 @@ void CObjectPropertiesManager::Display(int serial)
             {
                 if (oh != nullptr)
                 {
-                    const bool ohWeapon = isEquippedWeapon(oh);
+                    const bool ohWeapon = isEquippedWeapon(oh, true);
                     const wchar_t *ohLabel =
                         ohWeapon ? (mh != nullptr ? L"Off Hand Weapon" : L"Two-Handed Weapon")
                                  : L"Shield";
@@ -474,7 +569,9 @@ void CObjectPropertiesManager::Display(int serial)
                         continue;
                     }
                     const double score = ScoreEquipment(
-                        ParseEquipmentOpl(ringProp->Properties), EquipCategory::JewelryOrUtility);
+                        ParseEquipmentOpl(ringProp->Properties),
+                        EquipCategory::JewelryOrUtility,
+                        &compareCtx);
                     if (weakestLoaded == nullptr || score < weakestScore)
                     {
                         weakestLoaded = ring;
@@ -565,6 +662,47 @@ void CObjectPropertiesManager::Display(int serial)
         std::vector<EquipmentCompareItemInput> equippedInputs;
         equippedInputs.reserve(targets.size());
 
+        // Scan other loaded worn paperdoll pieces for uncapped resist totals so overcap
+        // buffers are detected accurately even though 0x11 clamps player resists at Max*Resist.
+        if (compareCtx.HasStatusTotals)
+        {
+            auto isTargetSerial = [&](uint32_t s) {
+                for (const ResolvedCompareTarget &t : targets)
+                {
+                    if (t.Item != nullptr && t.Item->Serial == s)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (int layer = OL_1_HAND; layer < OL_EXTENDED_COUNT; ++layer)
+            {
+                if (!IsPaperdollEquipmentLayer(layer) || layer == OL_HAIR || layer == OL_BEARD ||
+                    layer == OL_BACKPACK)
+                {
+                    continue;
+                }
+                CGameItem *worn = g_Player->FindLayer(layer);
+                if (worn == nullptr || isTargetSerial(worn->Serial))
+                {
+                    continue;
+                }
+                const CObjectProperty *wornProp = Find(worn->Serial);
+                if (wornProp == nullptr || wornProp->Empty())
+                {
+                    continue;
+                }
+                const ParsedEquipmentStats wornStats = ParseEquipmentOpl(wornProp->Properties);
+                compareCtx.HasOtherEquippedResists = true;
+                compareCtx.OtherEquippedPhysicalResist += wornStats.PhysicalResist;
+                compareCtx.OtherEquippedFireResist += wornStats.FireResist;
+                compareCtx.OtherEquippedColdResist += wornStats.ColdResist;
+                compareCtx.OtherEquippedPoisonResist += wornStats.PoisonResist;
+                compareCtx.OtherEquippedEnergyResist += wornStats.EnergyResist;
+            }
+        }
+
         uint64_t sig = 0xcbf29ce484222325ULL;
         HashMixU64(sig, itemSerial);
         HashMixU64(sig, hoveredProp.Revision);
@@ -572,6 +710,33 @@ void CObjectPropertiesManager::Display(int serial)
         HashMixU64(sig, static_cast<uint64_t>(totalSlots));
         HashMixU64(sig, static_cast<uint64_t>(occupiedSlots));
         HashMixU64(sig, static_cast<uint64_t>(prefetchSerials.size()));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.Profile));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.Str));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.Stam));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.HasStatusTotals ? 1 : 0));
+        if (compareCtx.HasStatusTotals)
+        {
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.PhysicalResist + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.FireResist + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.ColdResist + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.PoisonResist + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.EnergyResist + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxPhysicalResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.DefenseChance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxDefenseChance));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.AttackChance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.WeaponSpeed + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.WeaponDamage + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.LowerReagentCost + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.LowerManaCost + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.CastSpeed + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.CastRecovery + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedPhysicalResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedFireResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedColdResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedPoisonResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedEnergyResist));
+        }
 
         for (const ResolvedCompareTarget &target : targets)
         {
@@ -596,7 +761,7 @@ void CObjectPropertiesManager::Display(int serial)
                                 : (eq->GetStaticData() != nullptr
                                        ? static_cast<int>(eq->GetStaticData()->Layer)
                                        : OL_NONE);
-            eqInput.IsWeapon = isEquippedWeapon(eq);
+            eqInput.IsWeapon = isEquippedWeapon(eq, false);
             eqInput.IsOffHandWeapon = target.IsOffHandWeapon;
             eqInput.PropertiesLoaded = loaded;
             eqInput.SlotLabel = target.SlotLabel;
@@ -624,8 +789,8 @@ void CObjectPropertiesManager::Display(int serial)
             sig = 1ULL;
         }
 
-        const EquipmentCompareResult compareResult =
-            BuildEquipmentComparison(hoveredInput, equippedInputs, totalSlots, occupiedSlots);
+        const EquipmentCompareResult compareResult = BuildEquipmentComparison(
+            hoveredInput, equippedInputs, totalSlots, occupiedSlots, &compareCtx);
 
         std::vector<CToolTip::TooltipSideCardDesc> sideCards;
         sideCards.reserve(compareResult.SideCards.size());

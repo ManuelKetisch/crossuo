@@ -72,6 +72,7 @@ public:
     uint16_t ToolTipsTextFont = 1; // As per client 7.0.47.0
     uint16_t ToolTipsDelay = 0;
     bool CompareEquipmentOnCtrl = true;
+    uint8_t CompareEquipmentProfile = 0; // 0=Auto, 1=Melee, 2=Caster, 3=Hybrid, 4=Tank, 5=Luck
 
     uint16_t ChatColorInputText = 0;
     uint16_t ChatColorMenuOption = 0;

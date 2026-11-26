@@ -1075,6 +1075,331 @@ void TestIdenticalStatsAndTruncation()
     assert(Contains(trunc.SideCards[0].HtmlText, L"... +"));
     assert(Contains(trunc.SideCards[0].HtmlText, L" more"));
 }
+
+void TestTiledataWeaponFlagRegression()
+{
+    // UO tiledata.mul sets TileFlag.Weapon (0x02) on armor (ringmail/plate/etc.),
+    // shields, and jewelry. Armor/jewelry/shields must NEVER be scored as Weapon.
+    EquipmentCompareItemInput lootedRingmail;
+    lootedRingmail.Serial = 0x40000130u;
+    lootedRingmail.Layer = OL_TORSO;
+    lootedRingmail.IsWeapon = true; // Simulate TileFlag.Weapon set on 0x13EC
+    lootedRingmail.PropertiesLoaded = true;
+    lootedRingmail.Name = L"Ringmail Tunic";
+    lootedRingmail.Properties = {
+        { 1060434u, L"10" },    // Lower Reagent Cost 10%
+        { 1060448u, L"3" },     // Physical Resist 3%
+        { 1060447u, L"3" },     // Fire Resist 3%
+        { 1060445u, L"1" },     // Cold Resist 1%
+        { 1060449u, L"5" },     // Poison Resist 5%
+        { 1060446u, L"3" },     // Energy Resist 3%
+        { 1061170u, L"40" },    // Strength Requirement 40
+        { 1060639u, L"46\t46" }, // Durability 46 / 46
+    };
+
+    EquipmentCompareItemInput baseRingmail;
+    baseRingmail.Serial = 0x40000131u;
+    baseRingmail.Layer = OL_TORSO;
+    baseRingmail.IsWeapon = true; // Simulate TileFlag.Weapon set on 0x13EC
+    baseRingmail.PropertiesLoaded = true;
+    baseRingmail.SlotLabel = L"Chest";
+    baseRingmail.FormattedTooltip = L"Ringmail Tunic";
+    baseRingmail.Properties = {
+        { 1060448u, L"3" },     // Physical Resist 3%
+        { 1060447u, L"3" },     // Fire Resist 3%
+        { 1060445u, L"1" },     // Cold Resist 1%
+        { 1060449u, L"5" },     // Poison Resist 5%
+        { 1060446u, L"3" },     // Energy Resist 3%
+        { 1061170u, L"40" },    // Strength Requirement 40
+        { 1060639u, L"33\t42" }, // Durability 33 / 42
+    };
+
+    const EquipmentCompareResult ringmailRes =
+        BuildEquipmentComparison(lootedRingmail, { baseRingmail }, 1, 1);
+    assert(ringmailRes.Valid);
+    assert(ringmailRes.Comparisons.size() == 1u);
+    const auto &cmp = ringmailRes.Comparisons[0];
+    // Balanced default: 15 resists * 1.65 = 24.75 vs +10% LRC (*0.65) = 31.25 (+26.3%)
+    assert(ApproxEq(cmp.EquippedScore, 24.75));
+    assert(ApproxEq(cmp.HoveredScore, 31.25));
+    assert(ApproxEq(cmp.ScoreDelta, 6.5));
+    assert(ApproxEq(cmp.ScoreDeltaPct, (6.5 / 24.75) * 100.0, 0.05));
+    assert(cmp.Verdict == UpgradeVerdict::Upgrade);
+    assert(ringmailRes.SideCards[0].BorderColorARGB == 0xFF44CC66u);
+    const EquipmentStatDelta *lrc = FindDelta(cmp.Deltas, L"Lower Reag");
+    assert(lrc != nullptr && ApproxEq(lrc->Delta, 10.0));
+    const EquipmentStatDelta *dur = FindDelta(cmp.Deltas, L"Max Durability");
+    assert(dur != nullptr && dur->IsInformational && ApproxEq(dur->Delta, 4.0));
+    AssertStrictAsciiAndSixDigitColors(ringmailRes.SideCards[0].HtmlText);
+    assert(Contains(ringmailRes.SideCards[0].HtmlText, L"^ UPGRADE (+26.3%)"));
+
+    // Verify all other armor, jewelry, and shield layers ignore stray IsWeapon = true
+    const ParsedEquipmentStats armorStats = ParseEquipmentOpl({
+        { 1060448u, L"5" },
+        { 1060639u, L"40\t40" },
+    });
+    assert(ClassifyEquipmentCategory(armorStats, OL_HELMET, true) == EquipCategory::ArmorOrShield);
+    assert(ClassifyEquipmentCategory(armorStats, OL_GLOVES, true) == EquipCategory::ArmorOrShield);
+    assert(ClassifyEquipmentCategory(armorStats, OL_ARMS, true) == EquipCategory::ArmorOrShield);
+    assert(ClassifyEquipmentCategory(armorStats, OL_LEGS, true) == EquipCategory::ArmorOrShield);
+    assert(ClassifyEquipmentCategory(armorStats, OL_PANTS, true) == EquipCategory::ArmorOrShield);
+    assert(ClassifyEquipmentCategory(armorStats, OL_NECKLACE, true) == EquipCategory::ArmorOrShield);
+    assert(ClassifyEquipmentCategory(armorStats, OL_2_HAND, true) == EquipCategory::ArmorOrShield);
+
+    const ParsedEquipmentStats jewelStats = ParseEquipmentOpl({
+        { 1060434u, L"10" },
+        { 1060436u, L"50" },
+    });
+    assert(ClassifyEquipmentCategory(jewelStats, OL_RING, true) == EquipCategory::JewelryOrUtility);
+    assert(ClassifyEquipmentCategory(jewelStats, OL_BRACELET, true) == EquipCategory::JewelryOrUtility);
+    assert(ClassifyEquipmentCategory(jewelStats, OL_EARRINGS, true) == EquipCategory::JewelryOrUtility);
+    assert(ClassifyEquipmentCategory(jewelStats, OL_NECKLACE, true) == EquipCategory::JewelryOrUtility);
+
+    // Shield (OL_2_HAND with IsWeapon=true from tiledata) hovered while wielding 1H + Shield
+    // must NOT be treated as a 2H weapon replacing both hands.
+    EquipmentCompareItemInput betterShield;
+    betterShield.Serial = 0x40000132u;
+    betterShield.Layer = OL_2_HAND;
+    betterShield.IsWeapon = true; // Simulate TileFlag.Weapon set on 0x1B76
+    betterShield.PropertiesLoaded = true;
+    betterShield.Properties = {
+        { 1060448u, L"8" },
+        { 1060408u, L"15" },
+        { 1060639u, L"50\t50" },
+    };
+
+    EquipmentCompareItemInput oldShield;
+    oldShield.Serial = 0x40000133u;
+    oldShield.Layer = OL_2_HAND;
+    oldShield.IsWeapon = true;
+    oldShield.PropertiesLoaded = true;
+    oldShield.SlotLabel = L"Shield";
+    oldShield.FormattedTooltip = L"Heater Shield";
+    oldShield.Properties = {
+        { 1060448u, L"5" },
+        { 1060639u, L"45\t45" },
+    };
+
+    const EquipmentCompareResult shieldRes =
+        BuildEquipmentComparison(betterShield, { oldShield }, 1, 1);
+    assert(shieldRes.Valid && shieldRes.Comparisons.size() == 1u);
+    assert(shieldRes.Comparisons[0].Verdict == UpgradeVerdict::Upgrade);
+    assert(!Contains(shieldRes.SideCards[0].HtmlText, L"Replaces Off-Hand / 2H"));
+}
+
+void TestSotaBuildProfilesAndStatWorth()
+{
+    // Compare identical armor with +10% Damage Increase vs +10% Lower Reagent Cost
+    const ParsedEquipmentStats armorDi = ParseEquipmentOpl({
+        { 1060448u, L"10" },
+        { 1060401u, L"10" }, // +10% DI
+    });
+    const ParsedEquipmentStats armorLrc = ParseEquipmentOpl({
+        { 1060448u, L"10" },
+        { 1060434u, L"10" }, // +10% LRC
+    });
+
+    // 1. Default Balanced (no context): +10% DI clearly beats +10% LRC
+    const EquipmentComparisonEntry balancedCmp =
+        CompareSingleStats(armorDi, armorLrc, EquipCategory::ArmorOrShield, L"Chest");
+    assert(balancedCmp.Verdict == UpgradeVerdict::Upgrade);
+    assert(balancedCmp.ScoreDelta > 7.0);
+
+    // 2. Auto-detected Melee swordsman: +10% DI overwhelmingly beats +10% LRC
+    CharacterCompareContext meleeCtx;
+    meleeCtx.Valid = true;
+    meleeCtx.Profile = CompareBuildProfile::Auto;
+    meleeCtx.HasSkills = true;
+    meleeCtx.Skills[40] = 100.0; // Swordsmanship
+    meleeCtx.Skills[27] = 100.0; // Tactics
+    meleeCtx.Skills[1] = 100.0;  // Anatomy
+    assert(ResolveBuildProfileLabel(&meleeCtx) == L"Auto: Melee");
+    const EquipmentComparisonEntry meleeCmp =
+        CompareSingleStats(armorDi, armorLrc, EquipCategory::ArmorOrShield, L"Chest", &meleeCtx);
+    assert(meleeCmp.Verdict == UpgradeVerdict::Upgrade);
+    assert(meleeCmp.ScoreDelta > 15.0);
+
+    // 3. Auto-detected Paladin (Swords + Chivalry, no Magery): DI beats LRC, FC/LMC valued
+    CharacterCompareContext paladinCtx = meleeCtx;
+    paladinCtx.Skills[51] = 85.0; // Chivalry
+    assert(ResolveBuildProfileLabel(&paladinCtx) == L"Auto: Paladin");
+    const EquipmentComparisonEntry palCmp =
+        CompareSingleStats(armorDi, armorLrc, EquipCategory::ArmorOrShield, L"Chest", &paladinCtx);
+    assert(palCmp.Verdict == UpgradeVerdict::Upgrade);
+
+    // 4. Auto-detected Pure Magery Caster: +10% LRC (uncapped) beats +10% DI
+    CharacterCompareContext casterCtx;
+    casterCtx.Valid = true;
+    casterCtx.Profile = CompareBuildProfile::Auto;
+    casterCtx.HasSkills = true;
+    casterCtx.Skills[25] = 100.0; // Magery
+    casterCtx.Skills[16] = 100.0; // EvalInt
+    casterCtx.Skills[46] = 100.0; // Meditation
+    assert(ResolveBuildProfileLabel(&casterCtx) == L"Auto: Caster");
+    const EquipmentComparisonEntry casterCmp =
+        CompareSingleStats(armorDi, armorLrc, EquipCategory::ArmorOrShield, L"Chest", &casterCtx);
+    assert(casterCmp.Verdict == UpgradeVerdict::Downgrade);
+
+    // 5. Skill relevance: +15 Swordsmanship beats +15 Begging on a Melee character
+    assert(SkillClilocToIndex(1002070u) == 16); // EvalInt special cliloc
+    assert(SkillClilocToIndex(1044060u + 40u) == 40); // Swordsmanship
+    const ParsedEquipmentStats ringSwords = ParseEquipmentOpl({ { 1060451u, L"#1044100\t15" } }); // Swords
+    const ParsedEquipmentStats ringBegging = ParseEquipmentOpl({ { 1060451u, L"#1044066\t15" } }); // Begging
+    const EquipmentComparisonEntry skillCmp = CompareSingleStats(
+        ringSwords, ringBegging, EquipCategory::JewelryOrUtility, L"Ring", &meleeCtx);
+    assert(skillCmp.Verdict == UpgradeVerdict::Upgrade);
+    assert(skillCmp.HoveredScore > skillCmp.EquippedScore * 5.0);
+
+    // 6. Tank & Luck manual overrides
+    CharacterCompareContext luckCtx;
+    luckCtx.Valid = true;
+    luckCtx.Profile = CompareBuildProfile::Luck;
+    const ParsedEquipmentStats luckyArmor = ParseEquipmentOpl({ { 1060436u, L"100" } }); // +100 Luck
+    const ParsedEquipmentStats resistArmor = ParseEquipmentOpl({ { 1060448u, L"10" } }); // +10 Phys
+    assert(
+        CompareSingleStats(luckyArmor, resistArmor, EquipCategory::ArmorOrShield, L"Chest", &luckCtx)
+            .Verdict == UpgradeVerdict::Upgrade);
+    assert(
+        CompareSingleStats(luckyArmor, resistArmor, EquipCategory::ArmorOrShield, L"Chest", &meleeCtx)
+            .Verdict == UpgradeVerdict::Downgrade);
+}
+
+void TestSotaCapAwareScoringResistsDpsAndWarnings()
+{
+    // 1. Caster ALREADY at 100% LRC: +15% LRC overcap must be marked (capped) and NOT dominate +8% SDI
+    CharacterCompareContext capCaster;
+    capCaster.Valid = true;
+    capCaster.Profile = CompareBuildProfile::Caster;
+    capCaster.HasStatusTotals = true;
+    capCaster.LowerReagentCost = 100;
+    capCaster.MaxLowerReagentCost = 100;
+    capCaster.LowerManaCost = 38;
+    capCaster.MaxLowerManaCost = 40;
+
+    EquipmentCompareItemInput lrcRing;
+    lrcRing.Serial = 0x40000201u;
+    lrcRing.Layer = OL_RING;
+    lrcRing.PropertiesLoaded = true;
+    lrcRing.Properties = {
+        { 1060434u, L"15" }, // +15% LRC (completely over cap!)
+        { 1060433u, L"8" },  // +8% LMC (only +2% effective!)
+    };
+
+    EquipmentCompareItemInput sdiRing;
+    sdiRing.Serial = 0x40000202u;
+    sdiRing.Layer = OL_RING;
+    sdiRing.PropertiesLoaded = true;
+    sdiRing.SlotLabel = L"Ring";
+    sdiRing.FormattedTooltip = L"SDI Ring";
+    sdiRing.Properties = {
+        { 1060483u, L"10" }, // +10% SDI
+    };
+
+    const EquipmentCompareResult capRes =
+        BuildEquipmentComparison(lrcRing, { sdiRing }, 6, 1, &capCaster);
+    assert(capRes.Valid && capRes.Comparisons.size() == 1u);
+    assert(capRes.Comparisons[0].Verdict == UpgradeVerdict::Downgrade);
+    const EquipmentStatDelta *lrcD = FindDelta(capRes.Comparisons[0].Deltas, L"Lower Reag");
+    assert(lrcD != nullptr && lrcD->MutedByCap && lrcD->CapNote == L"(capped)");
+    const EquipmentStatDelta *lmcD = FindDelta(capRes.Comparisons[0].Deltas, L"Lower Mana");
+    assert(lmcD != nullptr && !lmcD->MutedByCap && lmcD->CapNote == L"(+2% eff)");
+    AssertStrictAsciiAndSixDigitColors(capRes.SideCards[0].HtmlText);
+    assert(Contains(capRes.SideCards[0].HtmlText, L"--- COMPARE [Caster] ---"));
+    assert(Contains(capRes.SideCards[0].HtmlText, L"(capped)"));
+    assert(Contains(capRes.SideCards[0].HtmlText, L"(+2% eff)"));
+
+    // 2. Overcap Fire Resist (95/85 -> 90/85) traded for plugging a Cold Resist hole (40/85 -> 45/85)
+    // Total raw resists delta == 0, yet true cap-aware + EHP hole value MUST be a strong UPGRADE!
+    CharacterCompareContext resistCtx;
+    resistCtx.Valid = true;
+    resistCtx.Profile = CompareBuildProfile::Tank;
+    resistCtx.HasStatusTotals = true;
+    resistCtx.PhysicalResist = 80;
+    resistCtx.FireResist = 85; // clamped in 0x11
+    resistCtx.ColdResist = 40;
+    resistCtx.PoisonResist = 80;
+    resistCtx.EnergyResist = 80;
+    resistCtx.MaxPhysicalResist = 85;
+    resistCtx.MaxFireResist = 85;
+    resistCtx.MaxColdResist = 85;
+    resistCtx.MaxPoisonResist = 85;
+    resistCtx.MaxEnergyResist = 85;
+    resistCtx.HasOtherEquippedResists = true;
+    resistCtx.OtherEquippedPhysicalResist = 70;
+    resistCtx.OtherEquippedFireResist = 85; // Other worn gear alone already caps Fire at 85!
+    resistCtx.OtherEquippedColdResist = 40;
+    resistCtx.OtherEquippedPoisonResist = 70;
+    resistCtx.OtherEquippedEnergyResist = 70;
+
+    const ParsedEquipmentStats oldChest = ParseEquipmentOpl({
+        { 1060448u, L"10" },
+        { 1060447u, L"10" }, // Fire 10 (all overcap!)
+        { 1060445u, L"0" },
+    });
+    const ParsedEquipmentStats newChest = ParseEquipmentOpl({
+        { 1060448u, L"10" },
+        { 1060447u, L"5" }, // Lose 5 Fire (still 90 >= 85!)
+        { 1060445u, L"5" }, // Gain 5 Cold in a gaping 40/85 hole!
+    });
+    const EquipmentComparisonEntry holeCmp =
+        CompareSingleStats(newChest, oldChest, EquipCategory::ArmorOrShield, L"Chest", &resistCtx);
+    assert(holeCmp.Verdict == UpgradeVerdict::Upgrade);
+    assert(holeCmp.ScoreDelta > 10.0);
+    const EquipmentStatDelta *fireD = FindDelta(holeCmp.Deltas, L"Fire Resist");
+    assert(fireD != nullptr && fireD->MutedByCap && fireD->CapNote == L"(still capped)");
+
+    // 3. ModernUO ML Stamina + Suit SSI/DI cap + Usability warnings (Str Req, Wrong Skill, Low Dur)
+    CharacterCompareContext warCtx;
+    warCtx.Valid = true;
+    warCtx.Profile = CompareBuildProfile::Auto;
+    warCtx.Str = 75;
+    warCtx.Stam = 150; // 5 stam ticks -> 2.5s (10 ticks) drops to 5 ticks = 1.25s cap even at 0% SSI!
+    warCtx.HasSkills = true;
+    warCtx.Skills[40] = 100.0; // Swordsmanship
+    warCtx.Skills[27] = 100.0; // Tactics
+    warCtx.Skills[42] = 0.0;   // Fencing untrained!
+    warCtx.HasStatusTotals = true;
+    warCtx.WeaponSpeed = 60;
+    warCtx.MaxWeaponSpeed = 60;
+
+    EquipmentCompareItemInput wrongSkillWep;
+    wrongSkillWep.Serial = 0x40000210u;
+    wrongSkillWep.Layer = OL_1_HAND;
+    wrongSkillWep.IsWeapon = true;
+    wrongSkillWep.PropertiesLoaded = true;
+    wrongSkillWep.Properties = {
+        { 1061168u, L"14\t18" },
+        { 1061167u, L"2.5s" },
+        { 1061174u, L"" },      // Skill required: Fencing (0.0!)
+        { 1061170u, L"95" },    // Str Req 95 > 75
+        { 1060639u, L"6\t42" }, // Low durability (< 25%)
+    };
+
+    EquipmentCompareItemInput rightSkillWep;
+    rightSkillWep.Serial = 0x40000211u;
+    rightSkillWep.Layer = OL_1_HAND;
+    rightSkillWep.IsWeapon = true;
+    rightSkillWep.PropertiesLoaded = true;
+    rightSkillWep.SlotLabel = L"Main Hand";
+    rightSkillWep.FormattedTooltip = L"Katana";
+    rightSkillWep.Properties = {
+        { 1061168u, L"14\t18" },
+        { 1061167u, L"2.5s" },
+        { 1061172u, L"" }, // Skill required: Swordsmanship (100.0!)
+        { 1061170u, L"40" },
+        { 1060639u, L"40\t42" },
+    };
+
+    const EquipmentCompareResult warnRes =
+        BuildEquipmentComparison(wrongSkillWep, { rightSkillWep }, 1, 1, &warCtx);
+    assert(warnRes.Valid && warnRes.Comparisons.size() == 1u);
+    assert(warnRes.Comparisons[0].Verdict == UpgradeVerdict::Downgrade);
+    assert(warnRes.Comparisons[0].Warnings.size() == 3u);
+    AssertStrictAsciiAndSixDigitColors(warnRes.SideCards[0].HtmlText);
+    assert(Contains(warnRes.SideCards[0].HtmlText, L"Needs 95 Str (have 75)"));
+    assert(Contains(warnRes.SideCards[0].HtmlText, L"Low skill: Fencing (0.0)"));
+    assert(Contains(warnRes.SideCards[0].HtmlText, L"Low durability (6/42)"));
+}
 } // namespace
 
 int main()
@@ -1097,6 +1422,9 @@ int main()
     TestPartialTwoTargetLoading();
     TestCrossCategorySpellbookVsWeapon();
     TestIdenticalStatsAndTruncation();
+    TestTiledataWeaponFlagRegression();
+    TestSotaBuildProfilesAndStatWorth();
+    TestSotaCapAwareScoringResistsDpsAndWarnings();
 
     std::printf("equipment-compare-rules: all tests passed!\n");
     return 0;

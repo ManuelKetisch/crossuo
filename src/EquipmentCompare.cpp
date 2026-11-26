@@ -18,7 +18,1266 @@ const wchar_t *const kColorRed = L"<basefont color=\"#FF5555\">";
 const wchar_t *const kColorGold = L"<basefont color=\"#FFD700\">";
 const wchar_t *const kColorBlue = L"<basefont color=\"#66CCFF\">";
 const wchar_t *const kColorGray = L"<basefont color=\"#CCCCCC\">";
+const wchar_t *const kColorMuted = L"<basefont color=\"#999999\">";
 const wchar_t *const kColorWhite = L"<basefont color=\"#FFFFFF\">";
+
+wstr_t FormatFloat1(double val, bool withSign);
+wstr_t FormatInt(int val, bool withSign);
+
+enum SkillIndex
+{
+    kSkillAlchemy = 0,
+    kSkillAnatomy = 1,
+    kSkillAnimalLore = 2,
+    kSkillParry = 5,
+    kSkillPeacemaking = 9,
+    kSkillDiscordance = 15,
+    kSkillEvalInt = 16,
+    kSkillHealing = 17,
+    kSkillHiding = 21,
+    kSkillProvocation = 22,
+    kSkillInscribe = 23,
+    kSkillMagery = 25,
+    kSkillMagicResist = 26,
+    kSkillTactics = 27,
+    kSkillMusicianship = 29,
+    kSkillPoisoning = 30,
+    kSkillArchery = 31,
+    kSkillSpiritSpeak = 32,
+    kSkillAnimalTaming = 35,
+    kSkillVeterinary = 39,
+    kSkillSwords = 40,
+    kSkillMacing = 41,
+    kSkillFencing = 42,
+    kSkillWrestling = 43,
+    kSkillLumberjacking = 44,
+    kSkillMeditation = 46,
+    kSkillStealth = 47,
+    kSkillNecromancy = 49,
+    kSkillFocus = 50,
+    kSkillChivalry = 51,
+    kSkillBushido = 52,
+    kSkillNinjitsu = 53,
+    kSkillSpellweaving = 54,
+    kSkillMysticism = 55,
+    kSkillThrowing = 57
+};
+
+constexpr double kOvercapBufferFactor = 0.10;
+constexpr double kIrrelevantSkillFactor = 0.15;
+
+struct BuildStatWeights
+{
+    wstr_t Label = L"Balanced";
+    CompareBuildProfile EffectiveArchetype = CompareBuildProfile::Hybrid;
+    bool IsPaladin = false;
+    bool IsReagentCaster = true;
+
+    // Weapon-specific weights
+    double WeaponDps = 6.5;
+    double WeaponDi = 0.35;
+    double WeaponSsi = 0.50;
+    double WeaponHci = 1.15;
+    double WeaponDci = 0.75;
+    double WeaponVelocity = 0.65;
+    double WeaponBalanced = 10.0;
+    double WeaponLeech = 0.90;
+    double WeaponStamLeech = 0.60;
+    double WeaponHld = 0.80;
+    double WeaponHla = 0.55;
+    double WeaponSpellProc = 0.65;
+    double WeaponMinorProc = 0.45;
+    double WeaponHitArea = 0.55;
+    double WeaponSpellChanneling = 10.0;
+    double WeaponUseBestSkill = 8.0;
+    double WeaponSlayer = 13.0;
+    double WeaponSdi = 0.45;
+    double WeaponLmc = 0.70;
+    double WeaponLrc = 0.25;
+    double WeaponFc = 7.0;
+    double WeaponFcr = 3.0;
+    double WeaponResist = 0.55;
+    double WeaponStr = 0.85;
+    double WeaponDex = 0.85;
+    double WeaponInt = 0.55;
+    double WeaponHits = 0.70;
+    double WeaponStam = 0.60;
+    double WeaponMana = 0.55;
+    double WeaponRegenHits = 2.6;
+    double WeaponRegenMana = 2.5;
+    double WeaponRegenStam = 2.4;
+    double WeaponLuck = 0.08;
+    double WeaponSelfRepair = 1.5;
+    double WeaponSkill = 1.4;
+    double WeaponLevel = 0.5;
+    double WeaponReflect = 0.30;
+    double WeaponEnhancePotions = 0.25;
+
+    // Armor/Shield weights
+    double ArmorResist = 1.65;
+    double ArmorLmc = 2.20;
+    double ArmorLrc = 0.65;
+    double ArmorRegenHits = 4.5;
+    double ArmorRegenMana = 4.8;
+    double ArmorRegenStam = 3.2;
+    double ArmorDci = 1.65;
+    double ArmorHci = 1.65;
+    double ArmorDi = 1.45;
+    double ArmorSsi = 1.90;
+    double ArmorSdi = 1.35;
+    double ArmorFc = 11.0;
+    double ArmorFcr = 5.0;
+    double ArmorStr = 1.4;
+    double ArmorDex = 1.3;
+    double ArmorInt = 1.4;
+    double ArmorHits = 1.5;
+    double ArmorStam = 1.1;
+    double ArmorMana = 1.2;
+    double ArmorReflect = 0.50;
+    double ArmorLuck = 0.10;
+    double ArmorSkill = 1.8;
+    double ArmorMageArmor = 6.5;
+    double ArmorSpellChanneling = 10.0;
+    double ArmorSelfRepair = 1.5;
+    double ArmorEnhancePotions = 0.35;
+    double ArmorNightSight = 1.0;
+    double ArmorSlayer = 10.0;
+
+    // Jewelry/Utility weights
+    double JewelDi = 1.70;
+    double JewelSdi = 1.65;
+    double JewelHci = 1.90;
+    double JewelDci = 1.75;
+    double JewelSsi = 2.20;
+    double JewelFc = 13.0;
+    double JewelFcr = 5.8;
+    double JewelLmc = 2.30;
+    double JewelLrc = 0.75;
+    double JewelResist = 1.10;
+    double JewelStr = 1.5;
+    double JewelDex = 1.4;
+    double JewelInt = 1.5;
+    double JewelHits = 1.5;
+    double JewelStam = 1.1;
+    double JewelMana = 1.3;
+    double JewelRegenHits = 4.2;
+    double JewelRegenMana = 4.5;
+    double JewelRegenStam = 3.2;
+    double JewelSkill = 2.0;
+    double JewelLuck = 0.10;
+    double JewelEnhancePotions = 0.50;
+    double JewelReflect = 0.50;
+    double JewelSpellChanneling = 10.0;
+    double JewelSlayer = 10.0;
+    double JewelTalismanCombat = 0.85;
+    double JewelTalismanCraft = 0.40;
+    double JewelQuiverDmg = 1.60;
+    double JewelNightSight = 1.0;
+    double JewelSelfRepair = 1.0;
+};
+
+struct OtherGearBaseline
+{
+    bool Active = false;
+    int Phys = 0;
+    int Fire = 0;
+    int Cold = 0;
+    int Poison = 0;
+    int Energy = 0;
+    int MaxPhys = 70;
+    int MaxFire = 70;
+    int MaxCold = 70;
+    int MaxPoison = 70;
+    int MaxEnergy = 70;
+
+    int Dci = 0;
+    int MaxDci = 45;
+    int Hci = 0;
+    int MaxHci = 45;
+    int Ssi = 0;
+    int MaxSsi = 60;
+    int Di = 0;
+    int MaxDi = 100;
+    int Lrc = 0;
+    int MaxLrc = 100;
+    int Lmc = 0;
+    int MaxLmc = 40;
+    int Fc = 0;
+    int MaxFc = 2;
+    int Fcr = 0;
+    int MaxFcr = 6;
+};
+
+struct CapImpact
+{
+    int RawDelta = 0;
+    int EffBefore = 0;
+    int EffAfter = 0;
+    int EffDelta = 0;
+    int Cap = 0;
+};
+
+double ClampDouble(double v, double lo, double hi)
+{
+    return std::max(lo, std::min(hi, v));
+}
+
+double SkillVal(const CharacterCompareContext *ctx, int idx)
+{
+    if (ctx == nullptr || !ctx->HasSkills || idx < 0 || idx >= kCompareSkillCount)
+    {
+        return 0.0;
+    }
+    return std::max(0.0, ctx->Skills[idx]);
+}
+
+double BestWeaponSkillValue(const CharacterCompareContext *ctx)
+{
+    if (ctx == nullptr || !ctx->HasSkills)
+    {
+        return 0.0;
+    }
+    return std::max(
+        { SkillVal(ctx, kSkillSwords),
+          SkillVal(ctx, kSkillMacing),
+          SkillVal(ctx, kSkillFencing),
+          SkillVal(ctx, kSkillArchery),
+          SkillVal(ctx, kSkillThrowing) });
+}
+
+int WeaponSkillClilocToIndex(uint32_t cliloc)
+{
+    switch (cliloc)
+    {
+        case 1061172u:
+            return kSkillSwords;
+        case 1061173u:
+            return kSkillMacing;
+        case 1061174u:
+            return kSkillFencing;
+        case 1061175u:
+            return kSkillArchery;
+        case 1112075u:
+            return kSkillThrowing;
+        default:
+            return -1;
+    }
+}
+
+const wchar_t *WeaponSkillDisplayName(uint32_t cliloc)
+{
+    switch (cliloc)
+    {
+        case 1061172u:
+            return L"Swordsmanship";
+        case 1061173u:
+            return L"Mace Fighting";
+        case 1061174u:
+            return L"Fencing";
+        case 1061175u:
+            return L"Archery";
+        case 1112075u:
+            return L"Throwing";
+        default:
+            return L"Weapon Skill";
+    }
+}
+
+BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = false, bool reagentCaster = true)
+{
+    BuildStatWeights w;
+    w.EffectiveArchetype = profile;
+    w.IsPaladin = paladin;
+    w.IsReagentCaster = reagentCaster;
+
+    switch (profile)
+    {
+        case CompareBuildProfile::Melee:
+        {
+            w.Label = paladin ? L"Paladin" : L"Melee";
+            w.WeaponDps = 7.5;
+            w.WeaponDi = 0.45;
+            w.WeaponSsi = 0.60;
+            w.WeaponHci = 1.25;
+            w.WeaponDci = 0.80;
+            w.WeaponLeech = 1.00;
+            w.WeaponStamLeech = 0.65;
+            w.WeaponHld = 0.85;
+            w.WeaponHla = 0.60;
+            w.WeaponSpellChanneling = paladin ? 10.0 : 3.0;
+            w.WeaponSlayer = 14.0;
+            w.WeaponSdi = 0.05;
+            w.WeaponLmc = paladin ? 0.85 : 0.70;
+            w.WeaponLrc = 0.05;
+            w.WeaponFc = paladin ? 7.0 : 1.5;
+            w.WeaponFcr = paladin ? 3.0 : 0.8;
+            w.WeaponStr = 1.0;
+            w.WeaponDex = 1.0;
+            w.WeaponInt = paladin ? 0.45 : 0.20;
+            w.WeaponHits = 0.85;
+            w.WeaponStam = 0.80;
+            w.WeaponMana = paladin ? 0.45 : 0.25;
+            w.WeaponRegenStam = 3.0;
+            w.WeaponRegenMana = paladin ? 2.5 : 1.6;
+
+            w.ArmorResist = 1.70;
+            w.ArmorDi = 1.80;
+            w.ArmorSsi = 2.40;
+            w.ArmorHci = 2.10;
+            w.ArmorDci = 1.75;
+            w.ArmorSdi = 0.10;
+            w.ArmorLmc = paladin ? 2.20 : 2.00;
+            w.ArmorLrc = paladin ? 0.15 : 0.10;
+            w.ArmorFc = paladin ? 9.0 : 2.5;
+            w.ArmorFcr = paladin ? 4.0 : 1.5;
+            w.ArmorRegenHits = 5.0;
+            w.ArmorRegenStam = 4.5;
+            w.ArmorRegenMana = paladin ? 4.5 : 3.5;
+            w.ArmorStr = 1.8;
+            w.ArmorDex = 1.8;
+            w.ArmorInt = paladin ? 0.6 : 0.35;
+            w.ArmorHits = 1.6;
+            w.ArmorStam = 1.5;
+            w.ArmorMana = paladin ? 0.8 : 0.5;
+            w.ArmorMageArmor = paladin ? 3.5 : 1.5;
+            w.ArmorSpellChanneling = paladin ? 10.0 : 3.0;
+            w.ArmorLuck = 0.08;
+            w.ArmorSkill = 2.0;
+
+            w.JewelDi = 2.10;
+            w.JewelSsi = 2.80;
+            w.JewelHci = 2.40;
+            w.JewelDci = 1.85;
+            w.JewelSdi = 0.10;
+            w.JewelLmc = paladin ? 2.30 : 2.10;
+            w.JewelLrc = paladin ? 0.15 : 0.10;
+            w.JewelFc = paladin ? 10.0 : 2.5;
+            w.JewelFcr = paladin ? 4.5 : 1.5;
+            w.JewelResist = 1.15;
+            w.JewelStr = 1.9;
+            w.JewelDex = 1.9;
+            w.JewelInt = paladin ? 0.6 : 0.35;
+            w.JewelHits = 1.7;
+            w.JewelStam = 1.6;
+            w.JewelMana = paladin ? 0.8 : 0.5;
+            w.JewelRegenHits = 4.8;
+            w.JewelRegenStam = 4.2;
+            w.JewelRegenMana = paladin ? 4.2 : 3.0;
+            w.JewelSkill = 2.1;
+            w.JewelLuck = 0.08;
+            w.JewelSpellChanneling = paladin ? 10.0 : 3.0;
+            break;
+        }
+        case CompareBuildProfile::Caster:
+        {
+            w.Label = L"Caster";
+            w.WeaponDps = 2.0;
+            w.WeaponDi = 0.08;
+            w.WeaponSsi = 0.10;
+            w.WeaponHci = 0.20;
+            w.WeaponDci = 0.80;
+            w.WeaponLeech = 0.25;
+            w.WeaponStamLeech = 0.10;
+            w.WeaponHld = 0.20;
+            w.WeaponHla = 0.20;
+            w.WeaponSpellChanneling = 16.0;
+            w.WeaponSlayer = 14.0;
+            w.WeaponSdi = 1.60;
+            w.WeaponLmc = 1.60;
+            w.WeaponLrc = reagentCaster ? 0.80 : 0.15;
+            w.WeaponFc = 14.0;
+            w.WeaponFcr = 6.0;
+            w.WeaponResist = 1.00;
+            w.WeaponStr = 0.50;
+            w.WeaponDex = 0.30;
+            w.WeaponInt = 1.50;
+            w.WeaponHits = 0.80;
+            w.WeaponStam = 0.25;
+            w.WeaponMana = 1.20;
+            w.WeaponRegenMana = 4.5;
+            w.WeaponRegenHits = 2.8;
+            w.WeaponRegenStam = 0.8;
+
+            w.ArmorResist = 1.70;
+            w.ArmorDi = 0.15;
+            w.ArmorSsi = 0.15;
+            w.ArmorHci = 0.25;
+            w.ArmorDci = 1.50;
+            w.ArmorSdi = 2.20;
+            w.ArmorLmc = 2.60;
+            w.ArmorLrc = reagentCaster ? 1.10 : 0.20;
+            w.ArmorFc = 15.0;
+            w.ArmorFcr = 6.5;
+            w.ArmorRegenHits = 4.0;
+            w.ArmorRegenMana = 6.0;
+            w.ArmorRegenStam = 1.2;
+            w.ArmorStr = 0.8;
+            w.ArmorDex = 0.5;
+            w.ArmorInt = 2.0;
+            w.ArmorHits = 1.4;
+            w.ArmorStam = 0.4;
+            w.ArmorMana = 1.6;
+            w.ArmorMageArmor = 10.0;
+            w.ArmorSpellChanneling = 14.0;
+            w.ArmorLuck = 0.08;
+            w.ArmorSkill = 2.0;
+
+            w.JewelDi = 0.15;
+            w.JewelSsi = 0.15;
+            w.JewelHci = 0.25;
+            w.JewelDci = 1.60;
+            w.JewelSdi = 2.40;
+            w.JewelLmc = 2.70;
+            w.JewelLrc = reagentCaster ? 1.20 : 0.20;
+            w.JewelFc = 16.0;
+            w.JewelFcr = 7.0;
+            w.JewelResist = 1.15;
+            w.JewelStr = 0.8;
+            w.JewelDex = 0.5;
+            w.JewelInt = 2.1;
+            w.JewelHits = 1.4;
+            w.JewelStam = 0.4;
+            w.JewelMana = 1.7;
+            w.JewelRegenHits = 3.8;
+            w.JewelRegenMana = 6.0;
+            w.JewelRegenStam = 1.0;
+            w.JewelSkill = 2.1;
+            w.JewelLuck = 0.08;
+            w.JewelSpellChanneling = 14.0;
+            break;
+        }
+        case CompareBuildProfile::Tank:
+        {
+            w.Label = L"Tank";
+            w.WeaponDps = 5.0;
+            w.WeaponDci = 1.40;
+            w.WeaponLeech = 1.10;
+            w.WeaponHla = 0.85;
+            w.WeaponResist = 1.10;
+            w.WeaponRegenHits = 4.0;
+            w.WeaponHits = 1.2;
+            w.WeaponStr = 1.0;
+            w.WeaponLrc = 0.15;
+
+            w.ArmorResist = 2.60;
+            w.ArmorDci = 2.60;
+            w.ArmorRegenHits = 7.5;
+            w.ArmorRegenMana = 4.0;
+            w.ArmorRegenStam = 3.5;
+            w.ArmorLmc = 2.00;
+            w.ArmorLrc = 0.25;
+            w.ArmorDi = 0.70;
+            w.ArmorSsi = 0.90;
+            w.ArmorHci = 0.90;
+            w.ArmorSdi = 0.35;
+            w.ArmorFc = 5.0;
+            w.ArmorFcr = 2.5;
+            w.ArmorStr = 2.2;
+            w.ArmorDex = 1.2;
+            w.ArmorInt = 0.6;
+            w.ArmorHits = 2.4;
+            w.ArmorStam = 1.2;
+            w.ArmorMana = 0.7;
+            w.ArmorReflect = 1.10;
+            w.ArmorSelfRepair = 2.5;
+            w.ArmorMageArmor = 3.0;
+            w.ArmorSpellChanneling = 5.0;
+            w.ArmorLuck = 0.08;
+
+            w.JewelResist = 1.80;
+            w.JewelDci = 2.60;
+            w.JewelRegenHits = 7.0;
+            w.JewelRegenMana = 3.8;
+            w.JewelRegenStam = 3.0;
+            w.JewelLmc = 2.00;
+            w.JewelLrc = 0.25;
+            w.JewelDi = 0.80;
+            w.JewelSsi = 1.00;
+            w.JewelHci = 1.00;
+            w.JewelSdi = 0.40;
+            w.JewelFc = 5.5;
+            w.JewelFcr = 2.8;
+            w.JewelStr = 2.2;
+            w.JewelDex = 1.2;
+            w.JewelInt = 0.6;
+            w.JewelHits = 2.4;
+            w.JewelStam = 1.2;
+            w.JewelMana = 0.7;
+            w.JewelReflect = 1.10;
+            w.JewelLuck = 0.08;
+            break;
+        }
+        case CompareBuildProfile::Luck:
+        {
+            w.Label = L"Luck";
+            w.WeaponLuck = 0.40;
+            w.ArmorLuck = 0.55;
+            w.JewelLuck = 0.55;
+            w.ArmorResist = 1.45;
+            w.ArmorDci = 1.40;
+            w.ArmorDi = 1.10;
+            w.ArmorSsi = 1.30;
+            w.ArmorHci = 1.20;
+            w.ArmorSdi = 0.90;
+            w.ArmorLmc = 1.50;
+            w.ArmorLrc = 0.50;
+            w.ArmorFc = 7.0;
+            w.ArmorFcr = 3.5;
+            w.ArmorRegenHits = 3.5;
+            w.ArmorRegenMana = 3.5;
+            w.ArmorRegenStam = 2.5;
+            w.ArmorStr = 1.0;
+            w.ArmorDex = 1.0;
+            w.ArmorInt = 1.0;
+            w.ArmorHits = 1.0;
+            w.ArmorStam = 1.0;
+            w.ArmorMana = 1.0;
+            w.ArmorMageArmor = 3.5;
+            w.ArmorSpellChanneling = 6.0;
+            w.ArmorSkill = 1.4;
+
+            w.JewelResist = 1.00;
+            w.JewelDci = 1.40;
+            w.JewelDi = 1.20;
+            w.JewelSsi = 1.40;
+            w.JewelHci = 1.30;
+            w.JewelSdi = 1.00;
+            w.JewelLmc = 1.50;
+            w.JewelLrc = 0.55;
+            w.JewelFc = 8.0;
+            w.JewelFcr = 4.0;
+            w.JewelSkill = 1.5;
+            break;
+        }
+        case CompareBuildProfile::Hybrid:
+        case CompareBuildProfile::Auto:
+        default:
+        {
+            w.Label = L"Hybrid";
+            w.EffectiveArchetype = CompareBuildProfile::Hybrid;
+            break;
+        }
+    }
+
+    return w;
+}
+
+BuildStatWeights ResolveBuildWeights(const CharacterCompareContext *ctx)
+{
+    if (ctx == nullptr || !ctx->Valid)
+    {
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Hybrid);
+        w.Label = L"Balanced";
+        return w;
+    }
+
+    if (ctx->Profile != CompareBuildProfile::Auto)
+    {
+        return MakeProfilePreset(ctx->Profile);
+    }
+
+    if (!ctx->HasSkills)
+    {
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Hybrid);
+        w.Label = L"Auto: Balanced";
+        return w;
+    }
+
+    const double bestWeapon = std::min(100.0, BestWeaponSkillValue(ctx));
+    const double wrestling = std::min(100.0, SkillVal(ctx, kSkillWrestling));
+    const double martialCore = std::max(bestWeapon, wrestling * 0.5);
+    const double martialSupport = std::min(100.0, std::max(SkillVal(ctx, kSkillTactics), SkillVal(ctx, kSkillAnatomy)));
+    const double martialStyle = std::min(
+        100.0,
+        std::max(
+            { SkillVal(ctx, kSkillBushido),
+              SkillVal(ctx, kSkillChivalry),
+              SkillVal(ctx, kSkillParry),
+              SkillVal(ctx, kSkillNinjitsu) }));
+    const double martial = ClampDouble(
+        (martialCore * 0.55 + martialSupport * 0.25 + martialStyle * 0.20) / 100.0, 0.0, 1.0);
+
+    const double magery = std::min(100.0, SkillVal(ctx, kSkillMagery));
+    const double necro = std::min(100.0, SkillVal(ctx, kSkillNecromancy));
+    const double myst = std::min(100.0, SkillVal(ctx, kSkillMysticism));
+    const double sw = std::min(100.0, SkillVal(ctx, kSkillSpellweaving));
+    const double bestCaster = std::max({ magery, necro, myst, sw });
+    const double casterSupport =
+        std::min(100.0, std::max(SkillVal(ctx, kSkillEvalInt), SkillVal(ctx, kSkillSpiritSpeak)));
+    const double med = std::min(100.0, SkillVal(ctx, kSkillMeditation));
+    const double caster =
+        ClampDouble((bestCaster * 0.60 + casterSupport * 0.25 + med * 0.15) / 100.0, 0.0, 1.0);
+
+    const double chiv = std::min(100.0, SkillVal(ctx, kSkillChivalry));
+    const bool reagentCaster = std::max({ magery, necro, myst }) >= 25.0;
+
+    if (martial < 0.25 && caster < 0.25)
+    {
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Hybrid, false, reagentCaster);
+        w.Label = L"Auto: Balanced";
+        return w;
+    }
+
+    if (martial >= 0.40 && caster < 0.30)
+    {
+        const bool paladin = (chiv >= 35.0);
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Melee, paladin, false);
+        w.Label = paladin ? L"Auto: Paladin" : L"Auto: Melee";
+        return w;
+    }
+
+    if (caster >= 0.40 && martial < 0.30)
+    {
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Caster, false, reagentCaster);
+        w.Label = L"Auto: Caster";
+        return w;
+    }
+
+    if (martial >= 0.30 && caster >= 0.30)
+    {
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Hybrid, chiv >= 35.0, reagentCaster);
+        if (!reagentCaster)
+        {
+            w.ArmorLrc = 0.20;
+            w.JewelLrc = 0.20;
+            w.WeaponLrc = 0.10;
+        }
+        w.Label = L"Auto: Hybrid";
+        return w;
+    }
+
+    if (martial >= caster)
+    {
+        const bool paladin = (chiv >= 35.0);
+        BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Melee, paladin, false);
+        w.Label = paladin ? L"Auto: Paladin" : L"Auto: Melee";
+        return w;
+    }
+
+    BuildStatWeights w = MakeProfilePreset(CompareBuildProfile::Caster, false, reagentCaster);
+    w.Label = L"Auto: Caster";
+    return w;
+}
+
+bool IsSkillRelevantToArchetype(int skillIdx, CompareBuildProfile archetype, bool isPaladin)
+{
+    if (skillIdx < 0)
+    {
+        return true;
+    }
+    switch (skillIdx)
+    {
+        case kSkillMagicResist:
+        case kSkillHealing:
+        case kSkillFocus:
+        case kSkillParry:
+            return true;
+        case kSkillSwords:
+        case kSkillMacing:
+        case kSkillFencing:
+        case kSkillArchery:
+        case kSkillThrowing:
+        case kSkillTactics:
+        case kSkillAnatomy:
+        case kSkillBushido:
+        case kSkillNinjitsu:
+        case kSkillLumberjacking:
+            return archetype != CompareBuildProfile::Caster;
+        case kSkillChivalry:
+            return archetype != CompareBuildProfile::Caster || isPaladin;
+        case kSkillMagery:
+        case kSkillEvalInt:
+        case kSkillMeditation:
+        case kSkillNecromancy:
+        case kSkillSpiritSpeak:
+        case kSkillSpellweaving:
+        case kSkillMysticism:
+        case kSkillInscribe:
+            return archetype == CompareBuildProfile::Caster ||
+                   archetype == CompareBuildProfile::Hybrid;
+        case kSkillAnimalTaming:
+        case kSkillAnimalLore:
+        case kSkillVeterinary:
+        case kSkillMusicianship:
+        case kSkillProvocation:
+        case kSkillPeacemaking:
+        case kSkillDiscordance:
+            return archetype == CompareBuildProfile::Hybrid ||
+                   archetype == CompareBuildProfile::Caster;
+        default:
+            return false;
+    }
+}
+
+double EffectiveSkillBonusSum(
+    const ParsedEquipmentStats &stats,
+    const BuildStatWeights &weights,
+    const CharacterCompareContext *ctx)
+{
+    if (stats.SkillBonuses.empty())
+    {
+        return 0.0;
+    }
+
+    const bool useCharacterSkills = (ctx != nullptr && ctx->Valid && ctx->HasSkills);
+    const bool useArchetypeFilter = (ctx != nullptr && ctx->Valid);
+
+    double total = 0.0;
+    for (const auto &entry : stats.SkillBonuses)
+    {
+        const int idx = SkillClilocToIndex(entry.SkillCliloc);
+        if (!useArchetypeFilter || idx < 0)
+        {
+            total += entry.Value;
+            continue;
+        }
+
+        if (useCharacterSkills)
+        {
+            const double playerSkill = SkillVal(ctx, idx);
+            if (playerSkill >= 30.0)
+            {
+                total += entry.Value;
+            }
+            else if (IsSkillRelevantToArchetype(idx, weights.EffectiveArchetype, weights.IsPaladin))
+            {
+                total += entry.Value * 0.50;
+            }
+            else
+            {
+                total += entry.Value * kIrrelevantSkillFactor;
+            }
+        }
+        else
+        {
+            if (IsSkillRelevantToArchetype(idx, weights.EffectiveArchetype, weights.IsPaladin))
+            {
+                total += entry.Value;
+            }
+            else
+            {
+                total += entry.Value * kIrrelevantSkillFactor;
+            }
+        }
+    }
+    return total;
+}
+
+OtherGearBaseline MakeBaselineWithout(
+    const CharacterCompareContext *ctx,
+    const ParsedEquipmentStats &removed,
+    const BuildStatWeights &weights)
+{
+    OtherGearBaseline b;
+    if (ctx == nullptr || !ctx->Valid || !ctx->HasStatusTotals)
+    {
+        return b;
+    }
+
+    b.Active = true;
+    b.MaxPhys = ctx->MaxPhysicalResist > 0 ? ctx->MaxPhysicalResist : 70;
+    b.MaxFire = ctx->MaxFireResist > 0 ? ctx->MaxFireResist : 70;
+    b.MaxCold = ctx->MaxColdResist > 0 ? ctx->MaxColdResist : 70;
+    b.MaxPoison = ctx->MaxPoisonResist > 0 ? ctx->MaxPoisonResist : 70;
+    b.MaxEnergy = ctx->MaxEnergyResist > 0 ? ctx->MaxEnergyResist : 70;
+
+    auto resolveOtherResist = [](int statusTotal, int removedVal, bool hasOther, int otherScanned) {
+        const int fromStatus = std::max(0, statusTotal - removedVal);
+        return hasOther ? std::max(fromStatus, std::max(0, otherScanned)) : fromStatus;
+    };
+
+    b.Phys = resolveOtherResist(
+        ctx->PhysicalResist, removed.PhysicalResist, ctx->HasOtherEquippedResists,
+        ctx->OtherEquippedPhysicalResist);
+    b.Fire = resolveOtherResist(
+        ctx->FireResist, removed.FireResist, ctx->HasOtherEquippedResists,
+        ctx->OtherEquippedFireResist);
+    b.Cold = resolveOtherResist(
+        ctx->ColdResist, removed.ColdResist, ctx->HasOtherEquippedResists,
+        ctx->OtherEquippedColdResist);
+    b.Poison = resolveOtherResist(
+        ctx->PoisonResist, removed.PoisonResist, ctx->HasOtherEquippedResists,
+        ctx->OtherEquippedPoisonResist);
+    b.Energy = resolveOtherResist(
+        ctx->EnergyResist, removed.EnergyResist, ctx->HasOtherEquippedResists,
+        ctx->OtherEquippedEnergyResist);
+
+    b.MaxDci = ctx->MaxDefenseChance > 0 ? ctx->MaxDefenseChance : 45;
+    b.MaxHci = ctx->MaxAttackChance > 0 ? ctx->MaxAttackChance : 45;
+    b.MaxSsi = ctx->MaxWeaponSpeed > 0 ? ctx->MaxWeaponSpeed : 60;
+    b.MaxDi = ctx->MaxWeaponDamage > 0 ? ctx->MaxWeaponDamage : 100;
+    b.MaxLrc = ctx->MaxLowerReagentCost > 0 ? ctx->MaxLowerReagentCost : 100;
+    b.MaxLmc = ctx->MaxLowerManaCost > 0 ? ctx->MaxLowerManaCost : 40;
+    b.MaxFc = ctx->MaxCastSpeed > 0 ? ctx->MaxCastSpeed : (weights.IsPaladin ? 4 : 2);
+    if (weights.IsPaladin && b.MaxFc < 4)
+    {
+        b.MaxFc = 4;
+    }
+    b.MaxFcr = ctx->MaxCastRecovery > 0 ? ctx->MaxCastRecovery : 6;
+
+    b.Dci = std::max(0, ctx->DefenseChance - removed.DefenseChanceIncrease);
+    b.Hci = std::max(0, ctx->AttackChance - removed.HitChanceIncrease);
+    b.Ssi = std::max(0, ctx->WeaponSpeed - removed.SwingSpeedIncrease);
+    b.Di = std::max(0, ctx->WeaponDamage - removed.DamageIncrease);
+    b.Lrc = std::max(0, ctx->LowerReagentCost - removed.LowerReagentCost);
+    b.Lmc = std::max(0, ctx->LowerManaCost - removed.LowerManaCost);
+    b.Fc = std::max(0, ctx->CastSpeed - removed.FasterCasting);
+    b.Fcr = std::max(0, ctx->CastRecovery - removed.FasterCastRecovery);
+    return b;
+}
+
+OtherGearBaseline AdvanceBaseline(const OtherGearBaseline &base, const ParsedEquipmentStats &added)
+{
+    OtherGearBaseline next = base;
+    if (!next.Active)
+    {
+        return next;
+    }
+    next.Phys += added.PhysicalResist;
+    next.Fire += added.FireResist;
+    next.Cold += added.ColdResist;
+    next.Poison += added.PoisonResist;
+    next.Energy += added.EnergyResist;
+    next.Dci += added.DefenseChanceIncrease;
+    next.Hci += added.HitChanceIncrease;
+    next.Ssi += added.SwingSpeedIncrease;
+    next.Di += added.DamageIncrease;
+    next.Lrc += added.LowerReagentCost;
+    next.Lmc += added.LowerManaCost;
+    next.Fc += added.FasterCasting;
+    next.Fcr += added.FasterCastRecovery;
+    return next;
+}
+
+double ScoreCappedAttr(int otherVal, int itemVal, int cap, double weight, bool baselineActive)
+{
+    if (itemVal == 0 || weight == 0.0)
+    {
+        return 0.0;
+    }
+    if (!baselineActive || cap <= 0)
+    {
+        return static_cast<double>(itemVal) * weight;
+    }
+
+    const int effBase = std::max(0, std::min(otherVal, cap));
+    const int effWith = std::max(0, std::min(otherVal + itemVal, cap));
+    const int effContrib = effWith - effBase;
+    const int overcapContrib = itemVal - effContrib;
+    return static_cast<double>(effContrib) * weight +
+           static_cast<double>(overcapContrib) * (weight * kOvercapBufferFactor);
+}
+
+// Cumulative EHP-aware resistance value curve V(x, cap):
+// Marginal slope rises smoothly from 1.0x at 0% to 1.55x at cap, then drops to 0.10x overcap.
+double ResistCurveValue(int level, int cap)
+{
+    if (level <= 0 || cap <= 0)
+    {
+        return static_cast<double>(level);
+    }
+    const double c = static_cast<double>(cap);
+    if (level <= cap)
+    {
+        const double x = static_cast<double>(level);
+        return x + 0.55 * (x * x) / (2.0 * c);
+    }
+    const double atCap = c + 0.55 * c * 0.5;
+    return atCap + kOvercapBufferFactor * static_cast<double>(level - cap);
+}
+
+double ScoreResistsOnBaseline(
+    const ParsedEquipmentStats &stats,
+    const OtherGearBaseline &base,
+    double resistWeight)
+{
+    if (!base.Active)
+    {
+        return static_cast<double>(stats.TotalResists()) * resistWeight;
+    }
+
+    const double avgOther =
+        static_cast<double>(base.Phys + base.Fire + base.Cold + base.Poison + base.Energy) / 5.0;
+    auto scoreOne = [&](int other, int itemVal, int cap) -> double {
+        if (itemVal == 0)
+        {
+            return 0.0;
+        }
+        double holeMult = 1.0;
+        if (avgOther >= 20.0 && static_cast<double>(other) < avgOther - 10.0)
+        {
+            const double deficit =
+                ClampDouble((avgOther - static_cast<double>(other)) / std::max(20.0, avgOther), 0.0, 1.0);
+            holeMult = 1.0 + 0.35 * deficit;
+        }
+        const double deltaV = ResistCurveValue(other + itemVal, cap) - ResistCurveValue(other, cap);
+        return deltaV * resistWeight * holeMult;
+    };
+
+    return scoreOne(base.Phys, stats.PhysicalResist, base.MaxPhys) +
+           scoreOne(base.Fire, stats.FireResist, base.MaxFire) +
+           scoreOne(base.Cold, stats.ColdResist, base.MaxCold) +
+           scoreOne(base.Poison, stats.PoisonResist, base.MaxPoison) +
+           scoreOne(base.Energy, stats.EnergyResist, base.MaxEnergy);
+}
+
+double EffectiveSecondsOnBaseline(
+    const ParsedEquipmentStats &weapon,
+    const OtherGearBaseline &base,
+    const CharacterCompareContext *ctx)
+{
+    if (!weapon.HasWeaponSpeed || weapon.WeaponSpeed <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const int maxSsi = base.Active ? base.MaxSsi : 60;
+    const int totalSsi = std::max(
+        -50, std::min(maxSsi, (base.Active ? base.Ssi : 0) + weapon.SwingSpeedIncrease));
+
+    if (weapon.SpeedIsMlSeconds)
+    {
+        if (ctx != nullptr && ctx->Valid && (ctx->Stam > 0 || ctx->Dex > 0))
+        {
+            const int stam = ctx->Stam > 0 ? ctx->Stam : ctx->Dex;
+            const int stamTicks = std::max(0, stam / 30);
+            const double baseTicks = weapon.WeaponSpeed * 4.0;
+            const double scaledTicks =
+                std::floor((baseTicks - static_cast<double>(stamTicks)) * (100.0 / (100.0 + totalSsi)));
+            return std::max(5.0, scaledTicks) * 0.25;
+        }
+        return std::max(1.25, weapon.WeaponSpeed * (100.0 / (100.0 + static_cast<double>(totalSsi))));
+    }
+
+    const double baseSec = std::max(1.25, 400.0 / std::max(1.0, weapon.WeaponSpeed));
+    return std::max(1.25, baseSec * (100.0 / (100.0 + static_cast<double>(totalSsi))));
+}
+
+double EffectiveDpsOnBaseline(
+    const ParsedEquipmentStats &weapon,
+    const OtherGearBaseline &base,
+    const CharacterCompareContext *ctx)
+{
+    if (!weapon.HasWeaponDamage)
+    {
+        return 0.0;
+    }
+    const double effSec = EffectiveSecondsOnBaseline(weapon, base, ctx);
+    if (effSec <= 0.0)
+    {
+        return 0.0;
+    }
+    const int maxDi = base.Active ? base.MaxDi : 100;
+    const int totalDi =
+        std::max(0, std::min(maxDi, (base.Active ? base.Di : 0) + weapon.DamageIncrease));
+    const double diMult = 1.0 + static_cast<double>(totalDi) / 100.0;
+    return (weapon.AverageDamage() * diMult) / effSec;
+}
+
+double WeaponSkillUsabilityFactor(
+    const ParsedEquipmentStats &weapon,
+    const CharacterCompareContext *ctx,
+    wstr_t *warningOut = nullptr)
+{
+    if (ctx == nullptr || !ctx->Valid || !ctx->HasSkills || !weapon.HasWeaponDamage)
+    {
+        return 1.0;
+    }
+    if (weapon.UseBestSkill || weapon.WeaponSkillCliloc == 0u)
+    {
+        return 1.0;
+    }
+    if (weapon.HasMageWeapon && SkillVal(ctx, kSkillMagery) >= 50.0)
+    {
+        return 1.0;
+    }
+    const int reqIdx = WeaponSkillClilocToIndex(weapon.WeaponSkillCliloc);
+    if (reqIdx < 0)
+    {
+        return 1.0;
+    }
+
+    const double reqSkill = SkillVal(ctx, reqIdx);
+    const double bestSkill = BestWeaponSkillValue(ctx);
+    if (bestSkill >= 50.0 && reqSkill < 20.0)
+    {
+        if (warningOut != nullptr)
+        {
+            *warningOut = L"Low skill: " + wstr_t(WeaponSkillDisplayName(weapon.WeaponSkillCliloc)) +
+                          L" (" + FormatFloat1(reqSkill, false) + L")";
+        }
+        return 0.45;
+    }
+    return 1.0;
+}
+
+CapImpact EvaluateCappedSwap(int otherVal, int cap, int equippedVal, int hoveredVal)
+{
+    CapImpact c;
+    c.RawDelta = hoveredVal - equippedVal;
+    c.Cap = cap;
+    c.EffBefore = std::max(0, std::min(otherVal + equippedVal, cap));
+    c.EffAfter = std::max(0, std::min(otherVal + hoveredVal, cap));
+    c.EffDelta = c.EffAfter - c.EffBefore;
+    return c;
+}
+
+void AnnotateCappedDeltas(
+    std::vector<EquipmentStatDelta> &deltas,
+    const ParsedEquipmentStats &hovered,
+    const ParsedEquipmentStats &equipped,
+    const OtherGearBaseline &base)
+{
+    if (!base.Active)
+    {
+        return;
+    }
+
+    auto applyCap = [&](const wchar_t *label, int otherVal, int cap, int eqVal, int hovVal, bool isPct) {
+        if (cap <= 0 || eqVal == hovVal)
+        {
+            return;
+        }
+        const CapImpact imp = EvaluateCappedSwap(otherVal, cap, eqVal, hovVal);
+        if (imp.EffDelta == imp.RawDelta)
+        {
+            return; // Completely uncapped: no annotation needed
+        }
+
+        for (auto &d : deltas)
+        {
+            if (d.Label != label)
+            {
+                continue;
+            }
+            if (imp.EffDelta == 0)
+            {
+                d.MutedByCap = true;
+                d.CapNote = (imp.RawDelta > 0) ? L"(capped)" : L"(still capped)";
+            }
+            else
+            {
+                d.CapNote = L"(" + FormatInt(imp.EffDelta, true) + (isPct ? L"% eff)" : L" eff)");
+            }
+            break;
+        }
+    };
+
+    applyCap(L"Phys Resist", base.Phys, base.MaxPhys, equipped.PhysicalResist, hovered.PhysicalResist, true);
+    applyCap(L"Fire Resist", base.Fire, base.MaxFire, equipped.FireResist, hovered.FireResist, true);
+    applyCap(L"Cold Resist", base.Cold, base.MaxCold, equipped.ColdResist, hovered.ColdResist, true);
+    applyCap(L"Poison Resist", base.Poison, base.MaxPoison, equipped.PoisonResist, hovered.PoisonResist, true);
+    applyCap(L"Energy Resist", base.Energy, base.MaxEnergy, equipped.EnergyResist, hovered.EnergyResist, true);
+
+    applyCap(L"Def Chance", base.Dci, base.MaxDci, equipped.DefenseChanceIncrease, hovered.DefenseChanceIncrease, true);
+    applyCap(L"Hit Chance", base.Hci, base.MaxHci, equipped.HitChanceIncrease, hovered.HitChanceIncrease, true);
+    applyCap(L"Swing Speed", base.Ssi, base.MaxSsi, equipped.SwingSpeedIncrease, hovered.SwingSpeedIncrease, true);
+    applyCap(L"Damage Inc", base.Di, base.MaxDi, equipped.DamageIncrease, hovered.DamageIncrease, true);
+    applyCap(L"Lower Reag", base.Lrc, base.MaxLrc, equipped.LowerReagentCost, hovered.LowerReagentCost, true);
+    applyCap(L"Lower Mana", base.Lmc, base.MaxLmc, equipped.LowerManaCost, hovered.LowerManaCost, true);
+    applyCap(L"Faster Cast", base.Fc, base.MaxFc, equipped.FasterCasting, hovered.FasterCasting, false);
+    applyCap(L"Cast Recovery", base.Fcr, base.MaxFcr, equipped.FasterCastRecovery, hovered.FasterCastRecovery, false);
+
+    // Also annotate Total Resists when effective resist change differs from raw sum
+    const int rawResDelta = hovered.TotalResists() - equipped.TotalResists();
+    if (rawResDelta != 0)
+    {
+        const int effResDelta =
+            EvaluateCappedSwap(base.Phys, base.MaxPhys, equipped.PhysicalResist, hovered.PhysicalResist).EffDelta +
+            EvaluateCappedSwap(base.Fire, base.MaxFire, equipped.FireResist, hovered.FireResist).EffDelta +
+            EvaluateCappedSwap(base.Cold, base.MaxCold, equipped.ColdResist, hovered.ColdResist).EffDelta +
+            EvaluateCappedSwap(base.Poison, base.MaxPoison, equipped.PoisonResist, hovered.PoisonResist).EffDelta +
+            EvaluateCappedSwap(base.Energy, base.MaxEnergy, equipped.EnergyResist, hovered.EnergyResist).EffDelta;
+        if (effResDelta != rawResDelta)
+        {
+            for (auto &d : deltas)
+            {
+                if (d.Label == L"Total Resists")
+                {
+                    if (effResDelta == 0)
+                    {
+                        d.MutedByCap = true;
+                        d.CapNote = (rawResDelta > 0) ? L"(capped)" : L"(still capped)";
+                    }
+                    else
+                    {
+                        d.CapNote = L"(" + FormatInt(effResDelta, true) + L"% eff)";
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void CollectUsabilityWarnings(
+    std::vector<wstr_t> &warnings,
+    const ParsedEquipmentStats &hovered,
+    const CharacterCompareContext *ctx)
+{
+    if (ctx != nullptr && ctx->Valid)
+    {
+        if (ctx->Str > 0 && hovered.StrengthReq > ctx->Str)
+        {
+            warnings.push_back(
+                L"Needs " + FormatInt(hovered.StrengthReq, false) + L" Str (have " +
+                FormatInt(ctx->Str, false) + L")");
+        }
+
+        wstr_t skillWarn;
+        WeaponSkillUsabilityFactor(hovered, ctx, &skillWarn);
+        if (!skillWarn.empty())
+        {
+            warnings.push_back(std::move(skillWarn));
+        }
+    }
+
+    if (hovered.HasDurability && hovered.DurabilityMax > 0 &&
+        hovered.DurabilityCur * 4 < hovered.DurabilityMax)
+    {
+        warnings.push_back(
+            L"Low durability (" + FormatInt(hovered.DurabilityCur, false) + L"/" +
+            FormatInt(hovered.DurabilityMax, false) + L")");
+    }
+}
+
+double ScoreEquipmentOnBaseline(
+    const ParsedEquipmentStats &stats,
+    EquipCategory category,
+    const BuildStatWeights &w,
+    const OtherGearBaseline &base,
+    const CharacterCompareContext *ctx)
+{
+    EquipCategory effectiveCat = category;
+    if (effectiveCat == EquipCategory::Unknown)
+    {
+        effectiveCat = stats.HasWeaponIdentity() ? EquipCategory::Weapon : EquipCategory::JewelryOrUtility;
+    }
+
+    double score = 0.0;
+    const double skillSum = EffectiveSkillBonusSum(stats, w, ctx);
+    const bool capActive = base.Active;
+
+    if (effectiveCat == EquipCategory::Weapon)
+    {
+        const double usability = WeaponSkillUsabilityFactor(stats, ctx);
+        const double effDps = EffectiveDpsOnBaseline(stats, base, ctx);
+        score += effDps * w.WeaponDps * usability;
+        score += ScoreCappedAttr(base.Di, stats.DamageIncrease, base.MaxDi, w.WeaponDi, capActive);
+        score += ScoreCappedAttr(base.Ssi, stats.SwingSpeedIncrease, base.MaxSsi, w.WeaponSsi, capActive);
+        score += ScoreCappedAttr(base.Hci, stats.HitChanceIncrease, base.MaxHci, w.WeaponHci, capActive);
+        score += ScoreCappedAttr(base.Dci, stats.DefenseChanceIncrease, base.MaxDci, w.WeaponDci, capActive);
+        score += static_cast<double>(stats.Velocity) * w.WeaponVelocity;
+        score += stats.Balanced ? w.WeaponBalanced : 0.0;
+
+        score += static_cast<double>(stats.HitLifeLeech + stats.HitManaLeech) * w.WeaponLeech;
+        score += static_cast<double>(stats.HitStamLeech) * w.WeaponStamLeech;
+        score += static_cast<double>(stats.HitLowerDefense) * w.WeaponHld;
+        score += static_cast<double>(stats.HitLowerAttack) * w.WeaponHla;
+        score += static_cast<double>(stats.HitLightning + stats.HitFireball) * w.WeaponSpellProc;
+        score += static_cast<double>(stats.HitHarm + stats.HitMagicArrow + stats.HitDispel) * w.WeaponMinorProc;
+        score += static_cast<double>(stats.TotalHitArea()) * w.WeaponHitArea;
+
+        score += stats.SpellChanneling ? w.WeaponSpellChanneling : 0.0;
+        score += stats.UseBestSkill ? w.WeaponUseBestSkill : 0.0;
+        score += static_cast<double>(stats.SlayerCount()) * w.WeaponSlayer;
+        score += static_cast<double>(stats.SpellDamageIncrease) * w.WeaponSdi;
+        score += ScoreCappedAttr(base.Lmc, stats.LowerManaCost, base.MaxLmc, w.WeaponLmc, capActive);
+        score += ScoreCappedAttr(base.Lrc, stats.LowerReagentCost, base.MaxLrc, w.WeaponLrc, capActive);
+        score += ScoreCappedAttr(base.Fc, stats.FasterCasting, base.MaxFc, w.WeaponFc, capActive);
+        score += ScoreCappedAttr(base.Fcr, stats.FasterCastRecovery, base.MaxFcr, w.WeaponFcr, capActive);
+        score += ScoreResistsOnBaseline(stats, base, w.WeaponResist);
+        score += static_cast<double>(stats.BonusStr) * w.WeaponStr +
+                 static_cast<double>(stats.BonusDex) * w.WeaponDex +
+                 static_cast<double>(stats.BonusInt) * w.WeaponInt;
+        score += static_cast<double>(stats.BonusHits) * w.WeaponHits +
+                 static_cast<double>(stats.BonusStam) * w.WeaponStam +
+                 static_cast<double>(stats.BonusMana) * w.WeaponMana;
+        score += static_cast<double>(stats.RegenHits) * w.WeaponRegenHits +
+                 static_cast<double>(stats.RegenMana) * w.WeaponRegenMana +
+                 static_cast<double>(stats.RegenStam) * w.WeaponRegenStam;
+        score += static_cast<double>(stats.Luck) * w.WeaponLuck;
+        score += static_cast<double>(stats.SelfRepair) * w.WeaponSelfRepair;
+        score += skillSum * w.WeaponSkill;
+        score += static_cast<double>(stats.WeaponLevel) * w.WeaponLevel;
+        if (stats.HasMageWeapon)
+        {
+            const double mageWepMult =
+                (w.EffectiveArchetype == CompareBuildProfile::Caster) ? 0.55 : 0.30;
+            score += static_cast<double>(std::max(0, 30 - stats.MageWeaponPenalty)) * mageWepMult;
+        }
+        score += static_cast<double>(stats.ReflectPhysical) * w.WeaponReflect;
+        score += static_cast<double>(stats.EnhancePotions) * w.WeaponEnhancePotions;
+    }
+    else if (effectiveCat == EquipCategory::ArmorOrShield)
+    {
+        score += ScoreResistsOnBaseline(stats, base, w.ArmorResist);
+        score += ScoreCappedAttr(base.Lmc, stats.LowerManaCost, base.MaxLmc, w.ArmorLmc, capActive);
+        score += ScoreCappedAttr(base.Lrc, stats.LowerReagentCost, base.MaxLrc, w.ArmorLrc, capActive);
+        score += static_cast<double>(stats.RegenHits) * w.ArmorRegenHits;
+        score += static_cast<double>(stats.RegenMana) * w.ArmorRegenMana;
+        score += static_cast<double>(stats.RegenStam) * w.ArmorRegenStam;
+        score += ScoreCappedAttr(base.Dci, stats.DefenseChanceIncrease, base.MaxDci, w.ArmorDci, capActive);
+        score += ScoreCappedAttr(base.Hci, stats.HitChanceIncrease, base.MaxHci, w.ArmorHci, capActive);
+        score += ScoreCappedAttr(base.Di, stats.DamageIncrease, base.MaxDi, w.ArmorDi, capActive);
+        score += ScoreCappedAttr(base.Ssi, stats.SwingSpeedIncrease, base.MaxSsi, w.ArmorSsi, capActive);
+        score += static_cast<double>(stats.SpellDamageIncrease) * w.ArmorSdi;
+        score += ScoreCappedAttr(base.Fc, stats.FasterCasting, base.MaxFc, w.ArmorFc, capActive);
+        score += ScoreCappedAttr(base.Fcr, stats.FasterCastRecovery, base.MaxFcr, w.ArmorFcr, capActive);
+        score += static_cast<double>(stats.BonusStr) * w.ArmorStr +
+                 static_cast<double>(stats.BonusDex) * w.ArmorDex +
+                 static_cast<double>(stats.BonusInt) * w.ArmorInt;
+        score += static_cast<double>(stats.BonusHits) * w.ArmorHits +
+                 static_cast<double>(stats.BonusStam) * w.ArmorStam +
+                 static_cast<double>(stats.BonusMana) * w.ArmorMana;
+        score += static_cast<double>(stats.ReflectPhysical) * w.ArmorReflect;
+        score += static_cast<double>(stats.Luck) * w.ArmorLuck;
+        score += skillSum * w.ArmorSkill;
+        score += stats.MageArmor ? w.ArmorMageArmor : 0.0;
+        score += stats.SpellChanneling ? w.ArmorSpellChanneling : 0.0;
+        score += static_cast<double>(stats.SelfRepair) * w.ArmorSelfRepair;
+        score += static_cast<double>(stats.EnhancePotions) * w.ArmorEnhancePotions;
+        score += stats.NightSight ? w.ArmorNightSight : 0.0;
+        score += static_cast<double>(stats.SlayerCount()) * w.ArmorSlayer;
+    }
+    else
+    {
+        // JewelryOrUtility
+        score += ScoreCappedAttr(base.Di, stats.DamageIncrease, base.MaxDi, w.JewelDi, capActive);
+        score += static_cast<double>(stats.SpellDamageIncrease) * w.JewelSdi;
+        score += ScoreCappedAttr(base.Hci, stats.HitChanceIncrease, base.MaxHci, w.JewelHci, capActive);
+        score += ScoreCappedAttr(base.Dci, stats.DefenseChanceIncrease, base.MaxDci, w.JewelDci, capActive);
+        score += ScoreCappedAttr(base.Ssi, stats.SwingSpeedIncrease, base.MaxSsi, w.JewelSsi, capActive);
+        score += ScoreCappedAttr(base.Fc, stats.FasterCasting, base.MaxFc, w.JewelFc, capActive);
+        score += ScoreCappedAttr(base.Fcr, stats.FasterCastRecovery, base.MaxFcr, w.JewelFcr, capActive);
+        score += ScoreCappedAttr(base.Lmc, stats.LowerManaCost, base.MaxLmc, w.JewelLmc, capActive);
+        score += ScoreCappedAttr(base.Lrc, stats.LowerReagentCost, base.MaxLrc, w.JewelLrc, capActive);
+        score += ScoreResistsOnBaseline(stats, base, w.JewelResist);
+        score += static_cast<double>(stats.BonusStr) * w.JewelStr +
+                 static_cast<double>(stats.BonusDex) * w.JewelDex +
+                 static_cast<double>(stats.BonusInt) * w.JewelInt;
+        score += static_cast<double>(stats.BonusHits) * w.JewelHits +
+                 static_cast<double>(stats.BonusStam) * w.JewelStam +
+                 static_cast<double>(stats.BonusMana) * w.JewelMana;
+        score += static_cast<double>(stats.RegenHits) * w.JewelRegenHits +
+                 static_cast<double>(stats.RegenMana) * w.JewelRegenMana +
+                 static_cast<double>(stats.RegenStam) * w.JewelRegenStam;
+        score += skillSum * w.JewelSkill;
+        score += static_cast<double>(stats.Luck) * w.JewelLuck;
+        score += static_cast<double>(stats.EnhancePotions) * w.JewelEnhancePotions;
+        score += static_cast<double>(stats.ReflectPhysical) * w.JewelReflect;
+        score += stats.SpellChanneling ? w.JewelSpellChanneling : 0.0;
+        score += static_cast<double>(stats.SlayerCount()) * w.JewelSlayer;
+        score += static_cast<double>(stats.TalismanKiller + stats.TalismanProtection) * w.JewelTalismanCombat;
+        score += static_cast<double>(stats.TalismanExceptional + stats.TalismanSuccess) * w.JewelTalismanCraft;
+        score += static_cast<double>(stats.QuiverDamageMod) * w.JewelQuiverDmg;
+        score += stats.NightSight ? w.JewelNightSight : 0.0;
+        score += static_cast<double>(stats.SelfRepair) * w.JewelSelfRepair;
+    }
+
+    score -= static_cast<double>(stats.IncreasedKarmaLoss) * 0.5;
+    return score;
+}
 
 bool IsAsciiSpace(wchar_t ch)
 {
@@ -472,8 +1731,19 @@ void SortDeltasForDisplay(std::vector<EquipmentStatDelta> &deltas)
         deltas.begin(),
         deltas.end(),
         [](const EquipmentStatDelta &a, const EquipmentStatDelta &b) {
-            const int bucketA = a.IsInformational ? 2 : (IsDeltaGain(a) ? 0 : 1);
-            const int bucketB = b.IsInformational ? 2 : (IsDeltaGain(b) ? 0 : 1);
+            auto bucket = [](const EquipmentStatDelta &d) {
+                if (d.IsInformational)
+                {
+                    return 3;
+                }
+                if (d.MutedByCap)
+                {
+                    return 2;
+                }
+                return IsDeltaGain(d) ? 0 : 1;
+            };
+            const int bucketA = bucket(a);
+            const int bucketB = bucket(b);
             if (bucketA != bucketB)
             {
                 return bucketA < bucketB;
@@ -899,7 +2169,7 @@ EquipCategory InferEquippedCategory(
     const ParsedEquipmentStats &equipped,
     EquipCategory fallbackCategory)
 {
-    if (equipped.HasWeaponDamage)
+    if (equipped.HasWeaponIdentity())
     {
         return EquipCategory::Weapon;
     }
@@ -953,7 +2223,11 @@ wstr_t FormatDeltaLine(const EquipmentStatDelta &d)
     const wchar_t *color = kColorGray;
     if (!d.IsInformational)
     {
-        if (IsDeltaGain(d))
+        if (d.MutedByCap)
+        {
+            color = kColorMuted;
+        }
+        else if (IsDeltaGain(d))
         {
             color = kColorGreen;
         }
@@ -1013,6 +2287,10 @@ wstr_t FormatDeltaLine(const EquipmentStatDelta &d)
         line += SanitizeAsciiLabel(d.DetailText);
     }
     line += L" " + d.Label;
+    if (!d.CapNote.empty())
+    {
+        line += wstr_t(kColorMuted) + L" " + SanitizeAsciiLabel(d.CapNote);
+    }
     line += kColorWhite;
     return line;
 }
@@ -1035,6 +2313,13 @@ void AppendComparisonBlock(
     if (!extraNote.empty())
     {
         html += wstr_t(kColorGold) + L"* " + SanitizeAsciiLabel(extraNote) + kColorWhite + L"\n";
+    }
+
+    for (const wstr_t &warn : entry.Warnings)
+    {
+        const bool isHardReq = (warn.find(L"Needs ") == 0u);
+        html += wstr_t(isHardReq ? kColorRed : kColorGold) + L"* " + SanitizeAsciiLabel(warn) +
+                kColorWhite + L"\n";
     }
 
     const wchar_t *scoreColor =
@@ -1109,6 +2394,10 @@ void AppendEmptySlotSummaryLines(
     if (stats.LowerManaCost > 0)
     {
         addStat(L"Lower Mana", FormatInt(stats.LowerManaCost, false) + L"%");
+    }
+    if (stats.LowerReagentCost > 0)
+    {
+        addStat(L"Lower Reag", FormatInt(stats.LowerReagentCost, false) + L"%");
     }
     if (stats.FasterCasting > 0)
     {
@@ -1244,6 +2533,12 @@ ComparisonCardOutput BuildEquippedSideCard(const EquipmentCompareItemInput &eq)
     return card;
 }
 } // namespace
+
+bool ParsedEquipmentStats::HasWeaponIdentity() const
+{
+    return HasWeaponDamage || HasWeaponSpeed || IsOneHanded || IsTwoHanded ||
+           WeaponSkillCliloc != 0u;
+}
 
 double ParsedEquipmentStats::AverageDamage() const
 {
@@ -1900,7 +3195,7 @@ EquipCategory ClassifyEquipmentCategory(
     int tileLayer,
     bool isWeapon)
 {
-    if (isWeapon || stats.HasWeaponDamage)
+    if (stats.HasWeaponIdentity())
     {
         return EquipCategory::Weapon;
     }
@@ -1916,12 +3211,6 @@ EquipCategory ClassifyEquipmentCategory(
         return EquipCategory::JewelryOrUtility;
     }
 
-    if (tileLayer == OL_1_HAND)
-    {
-        // Non-weapon in 1H slot (e.g., Spellbook)
-        return EquipCategory::JewelryOrUtility;
-    }
-
     if (tileLayer == OL_NECKLACE)
     {
         // Gorgets carry armor resists/durability; necklaces behave as jewelry
@@ -1932,9 +3221,10 @@ EquipCategory ClassifyEquipmentCategory(
         return EquipCategory::JewelryOrUtility;
     }
 
+    // Non-hand armor layers: UO tiledata.mul sets TileFlag.Weapon (0x02) on most
+    // armor/jewelry graphics, so never treat a non-hand armor layer as a Weapon.
     switch (tileLayer)
     {
-        case OL_2_HAND: // Shield / off-hand non-weapon
         case OL_SHOES:
         case OL_PANTS:
         case OL_SHIRT:
@@ -1953,6 +3243,37 @@ EquipCategory ClassifyEquipmentCategory(
             break;
     }
 
+    if (tileLayer == OL_1_HAND)
+    {
+        if (isWeapon)
+        {
+            return EquipCategory::Weapon;
+        }
+        // Non-weapon in 1H slot (e.g., Spellbook)
+        return EquipCategory::JewelryOrUtility;
+    }
+
+    if (tileLayer == OL_2_HAND)
+    {
+        // Shields on OL_2_HAND also carry TileFlag.Weapon in tiledata.mul, but lack
+        // weapon OPL clilocs and carry armor resists/durability/DCI instead.
+        if (stats.TotalResists() > 0 || stats.MageArmor || stats.HasDurability ||
+            stats.DefenseChanceIncrease > 0 || stats.ReflectPhysical > 0)
+        {
+            return EquipCategory::ArmorOrShield;
+        }
+        if (isWeapon)
+        {
+            return EquipCategory::Weapon;
+        }
+        return EquipCategory::ArmorOrShield;
+    }
+
+    if (isWeapon)
+    {
+        return EquipCategory::Weapon;
+    }
+
     if (stats.TalismanKiller > 0 || stats.TalismanProtection > 0 || stats.QuiverDamageMod > 0)
     {
         return EquipCategory::JewelryOrUtility;
@@ -1966,120 +3287,40 @@ EquipCategory ClassifyEquipmentCategory(
     return EquipCategory::Unknown;
 }
 
-double ScoreEquipment(const ParsedEquipmentStats &stats, EquipCategory category)
+int SkillClilocToIndex(uint32_t skillCliloc)
 {
-    EquipCategory effectiveCat = category;
-    if (effectiveCat == EquipCategory::Unknown)
+    switch (skillCliloc)
     {
-        effectiveCat = stats.HasWeaponDamage ? EquipCategory::Weapon : EquipCategory::JewelryOrUtility;
+        case 1002070u:
+            return kSkillEvalInt;
+        case 1002078u:
+            return 19; // Forensics
+        case 1002097u:
+            return 24; // Lockpicking
+        default:
+            break;
     }
-
-    double score = 0.0;
-    const int statSum = stats.BonusStr + stats.BonusDex + stats.BonusInt;
-    const int poolSum = stats.BonusHits + stats.BonusMana + stats.BonusStam;
-    const int totalResists = stats.TotalResists();
-    const double skillSum = stats.TotalSkillBonuses();
-
-    if (effectiveCat == EquipCategory::Weapon)
+    if (skillCliloc >= 1044060u && skillCliloc < 1044060u + static_cast<uint32_t>(kCompareSkillCount))
     {
-        score += stats.EffectiveDps() * 6.0;
-        score += static_cast<double>(stats.DamageIncrease) * 0.35;
-        score += static_cast<double>(stats.SwingSpeedIncrease) * 0.55;
-        score += static_cast<double>(stats.HitChanceIncrease) * 1.0;
-        score += static_cast<double>(stats.DefenseChanceIncrease) * 0.7;
-        score += static_cast<double>(stats.Velocity) * 0.6;
-        score += stats.Balanced ? 10.0 : 0.0;
-
-        score += static_cast<double>(stats.HitLifeLeech) * 0.85;
-        score += static_cast<double>(stats.HitManaLeech) * 0.85;
-        score += static_cast<double>(stats.HitStamLeech) * 0.55;
-        score += static_cast<double>(stats.HitLowerDefense) * 0.75;
-        score += static_cast<double>(stats.HitLowerAttack) * 0.55;
-        score += static_cast<double>(stats.HitLightning + stats.HitFireball) * 0.65;
-        score += static_cast<double>(stats.HitHarm + stats.HitMagicArrow + stats.HitDispel) * 0.45;
-        score += static_cast<double>(stats.TotalHitArea()) * 0.50;
-
-        score += stats.SpellChanneling ? 12.0 : 0.0;
-        score += stats.UseBestSkill ? 8.0 : 0.0;
-        score += static_cast<double>(stats.SlayerCount()) * 12.0;
-        score += static_cast<double>(stats.SpellDamageIncrease) * 0.4;
-        score += static_cast<double>(stats.LowerManaCost) * 0.6;
-        score += static_cast<double>(stats.LowerReagentCost) * 0.3;
-        score += static_cast<double>(stats.FasterCasting) * 8.0;
-        score += static_cast<double>(stats.FasterCastRecovery) * 3.0;
-        score += static_cast<double>(totalResists) * 0.5;
-        score += static_cast<double>(statSum) * 0.8;
-        score += static_cast<double>(poolSum) * 0.6;
-        score += static_cast<double>(stats.RegenHits + stats.RegenMana + stats.RegenStam) * 2.5;
-        score += static_cast<double>(stats.Luck) * 0.08;
-        score += static_cast<double>(stats.SelfRepair) * 1.5;
-        score += skillSum * 1.2;
-        score += static_cast<double>(stats.WeaponLevel) * 0.5;
-        if (stats.HasMageWeapon)
-        {
-            score += static_cast<double>(std::max(0, 30 - stats.MageWeaponPenalty)) * 0.3;
-        }
-        score += static_cast<double>(stats.ReflectPhysical) * 0.3;
-        score += static_cast<double>(stats.EnhancePotions) * 0.2;
+        return static_cast<int>(skillCliloc - 1044060u);
     }
-    else if (effectiveCat == EquipCategory::ArmorOrShield)
-    {
-        score += static_cast<double>(totalResists) * 1.5;
-        score += static_cast<double>(stats.LowerManaCost) * 2.2;
-        score += static_cast<double>(stats.LowerReagentCost) * 1.0;
-        score += static_cast<double>(stats.RegenHits) * 4.5;
-        score += static_cast<double>(stats.RegenMana) * 4.5;
-        score += static_cast<double>(stats.RegenStam) * 3.0;
-        score += static_cast<double>(stats.DefenseChanceIncrease) * 1.5;
-        score += static_cast<double>(stats.HitChanceIncrease) * 1.5;
-        score += static_cast<double>(stats.DamageIncrease) * 1.0;
-        score += static_cast<double>(stats.SwingSpeedIncrease) * 1.8;
-        score += static_cast<double>(stats.SpellDamageIncrease) * 1.4;
-        score += static_cast<double>(stats.FasterCasting) * 12.0;
-        score += static_cast<double>(stats.FasterCastRecovery) * 5.0;
-        score += static_cast<double>(statSum) * 1.4;
-        score += static_cast<double>(poolSum) * 1.2;
-        score += static_cast<double>(stats.ReflectPhysical) * 0.5;
-        score += static_cast<double>(stats.Luck) * 0.12;
-        score += skillSum * 1.5;
-        score += stats.MageArmor ? 8.0 : 0.0;
-        score += stats.SpellChanneling ? 12.0 : 0.0;
-        score += static_cast<double>(stats.SelfRepair) * 1.5;
-        score += static_cast<double>(stats.EnhancePotions) * 0.3;
-        score += stats.NightSight ? 1.0 : 0.0;
-        score += static_cast<double>(stats.SlayerCount()) * 10.0;
-    }
-    else
-    {
-        // JewelryOrUtility
-        score += static_cast<double>(stats.DamageIncrease) * 1.5;
-        score += static_cast<double>(stats.SpellDamageIncrease) * 1.8;
-        score += static_cast<double>(stats.HitChanceIncrease) * 1.8;
-        score += static_cast<double>(stats.DefenseChanceIncrease) * 1.6;
-        score += static_cast<double>(stats.SwingSpeedIncrease) * 2.2;
-        score += static_cast<double>(stats.FasterCasting) * 14.0;
-        score += static_cast<double>(stats.FasterCastRecovery) * 6.0;
-        score += static_cast<double>(stats.LowerManaCost) * 2.2;
-        score += static_cast<double>(stats.LowerReagentCost) * 1.1;
-        score += static_cast<double>(totalResists) * 1.0;
-        score += static_cast<double>(statSum) * 1.5;
-        score += static_cast<double>(poolSum) * 1.2;
-        score += static_cast<double>(stats.RegenHits + stats.RegenMana + stats.RegenStam) * 4.0;
-        score += skillSum * 1.8;
-        score += static_cast<double>(stats.Luck) * 0.12;
-        score += static_cast<double>(stats.EnhancePotions) * 0.5;
-        score += static_cast<double>(stats.ReflectPhysical) * 0.5;
-        score += stats.SpellChanneling ? 12.0 : 0.0;
-        score += static_cast<double>(stats.SlayerCount()) * 10.0;
-        score += static_cast<double>(stats.TalismanKiller + stats.TalismanProtection) * 0.8;
-        score += static_cast<double>(stats.TalismanExceptional + stats.TalismanSuccess) * 0.4;
-        score += static_cast<double>(stats.QuiverDamageMod) * 1.5;
-        score += stats.NightSight ? 1.0 : 0.0;
-        score += static_cast<double>(stats.SelfRepair) * 1.0;
-    }
+    return -1;
+}
 
-    score -= static_cast<double>(stats.IncreasedKarmaLoss) * 0.5;
-    return score;
+wstr_t ResolveBuildProfileLabel(const CharacterCompareContext *ctx)
+{
+    return ResolveBuildWeights(ctx).Label;
+}
+
+double ScoreEquipment(
+    const ParsedEquipmentStats &stats,
+    EquipCategory category,
+    const CharacterCompareContext *ctx)
+{
+    const BuildStatWeights weights = ResolveBuildWeights(ctx);
+    const ParsedEquipmentStats emptyRemoved;
+    const OtherGearBaseline base = MakeBaselineWithout(ctx, emptyRemoved, weights);
+    return ScoreEquipmentOnBaseline(stats, category, weights, base, ctx);
 }
 
 UpgradeVerdict ClassifyVerdict(double scoreDelta, double equippedScore)
@@ -2113,24 +3354,33 @@ EquipmentComparisonEntry CompareSingleStats(
     const ParsedEquipmentStats &hovered,
     const ParsedEquipmentStats &equipped,
     EquipCategory category,
-    const wstr_t &targetLabel)
+    const wstr_t &targetLabel,
+    const CharacterCompareContext *ctx)
 {
     EquipmentComparisonEntry entry;
     entry.TargetLabel = SanitizeAsciiLabel(targetLabel);
-    entry.HoveredScore = ScoreEquipment(hovered, category);
+
+    const BuildStatWeights weights = ResolveBuildWeights(ctx);
+    entry.ProfileLabel = weights.Label;
+    const OtherGearBaseline base = MakeBaselineWithout(ctx, equipped, weights);
+
+    entry.HoveredScore = ScoreEquipmentOnBaseline(hovered, category, weights, base, ctx);
 
     const EquipCategory eqCategory = InferEquippedCategory(equipped, category);
 
-    entry.EquippedScore = ScoreEquipment(equipped, eqCategory);
+    entry.EquippedScore = ScoreEquipmentOnBaseline(equipped, eqCategory, weights, base, ctx);
     entry.ScoreDelta = entry.HoveredScore - entry.EquippedScore;
     entry.ScoreDeltaPct = ComputeScoreDeltaPct(entry.ScoreDelta, entry.EquippedScore);
     entry.Verdict = ClassifyVerdict(entry.ScoreDelta, entry.EquippedScore);
 
+    CollectUsabilityWarnings(entry.Warnings, hovered, ctx);
+
     // Weapon derived & core deltas
     if (hovered.HasWeaponDamage || equipped.HasWeaponDamage)
     {
-        AddFloatDelta(
-            entry.Deltas, L"Eff DPS", hovered.EffectiveDps(), equipped.EffectiveDps(), false);
+        const double hovEffDps = EffectiveDpsOnBaseline(hovered, base, ctx);
+        const double eqEffDps = EffectiveDpsOnBaseline(equipped, base, ctx);
+        AddFloatDelta(entry.Deltas, L"Eff DPS", hovEffDps, eqEffDps, false);
         AddFloatDelta(entry.Deltas, L"Base DPS", hovered.BaseDps(), equipped.BaseDps(), false);
         AddFloatDelta(
             entry.Deltas, L"Avg Dmg", hovered.AverageDamage(), equipped.AverageDamage(), false);
@@ -2181,6 +3431,7 @@ EquipmentComparisonEntry CompareSingleStats(
     }
 
     CollectSharedAttributeDeltas(entry.Deltas, hovered, equipped);
+    AnnotateCappedDeltas(entry.Deltas, hovered, equipped, base);
     SortDeltasForDisplay(entry.Deltas);
     return entry;
 }
@@ -2190,34 +3441,46 @@ EquipmentComparisonEntry CompareAgainstCombinedStats(
     const ParsedEquipmentStats &eqA,
     const ParsedEquipmentStats &eqB,
     EquipCategory category,
-    const wstr_t &targetLabel)
+    const wstr_t &targetLabel,
+    const CharacterCompareContext *ctx)
 {
     EquipmentComparisonEntry entry;
     entry.TargetLabel = SanitizeAsciiLabel(targetLabel);
-    entry.HoveredScore = ScoreEquipment(hovered, category);
+
+    const BuildStatWeights weights = ResolveBuildWeights(ctx);
+    entry.ProfileLabel = weights.Label;
+
+    const ParsedEquipmentStats combined = CombineStatsForComparison(eqA, eqB);
+    const OtherGearBaseline base = MakeBaselineWithout(ctx, combined, weights);
+
+    entry.HoveredScore = ScoreEquipmentOnBaseline(hovered, category, weights, base, ctx);
 
     const EquipCategory catA = InferEquippedCategory(eqA, EquipCategory::Weapon);
     const EquipCategory catB = InferEquippedCategory(eqB, EquipCategory::Weapon);
-    entry.EquippedScore = ScoreEquipment(eqA, catA) + ScoreEquipment(eqB, catB);
+    const OtherGearBaseline baseAfterA = AdvanceBaseline(base, eqA);
+    entry.EquippedScore = ScoreEquipmentOnBaseline(eqA, catA, weights, base, ctx) +
+                          ScoreEquipmentOnBaseline(eqB, catB, weights, baseAfterA, ctx);
     entry.ScoreDelta = entry.HoveredScore - entry.EquippedScore;
     entry.ScoreDeltaPct = ComputeScoreDeltaPct(entry.ScoreDelta, entry.EquippedScore);
     entry.Verdict = ClassifyVerdict(entry.ScoreDelta, entry.EquippedScore);
 
-    const ParsedEquipmentStats combined = CombineStatsForComparison(eqA, eqB);
+    CollectUsabilityWarnings(entry.Warnings, hovered, ctx);
 
     // Combined independent-hand DPS (dual-wield swings both hands; 1H+shield swings 1H only)
-    const double eqEffDps = (eqA.HasWeaponDamage ? eqA.EffectiveDps() : 0.0) +
-                            (eqB.HasWeaponDamage ? eqB.EffectiveDps() : 0.0);
+    const double eqEffDps = (eqA.HasWeaponDamage ? EffectiveDpsOnBaseline(eqA, base, ctx) : 0.0) +
+                            (eqB.HasWeaponDamage ? EffectiveDpsOnBaseline(eqB, baseAfterA, ctx) : 0.0);
     const double eqBaseDps = (eqA.HasWeaponDamage ? eqA.BaseDps() : 0.0) +
                              (eqB.HasWeaponDamage ? eqB.BaseDps() : 0.0);
 
     if (hovered.HasWeaponDamage || eqA.HasWeaponDamage || eqB.HasWeaponDamage)
     {
-        AddFloatDelta(entry.Deltas, L"Eff DPS", hovered.EffectiveDps(), eqEffDps, false);
+        AddFloatDelta(
+            entry.Deltas, L"Eff DPS", EffectiveDpsOnBaseline(hovered, base, ctx), eqEffDps, false);
         AddFloatDelta(entry.Deltas, L"Base DPS", hovered.BaseDps(), eqBaseDps, false);
     }
 
     CollectSharedAttributeDeltas(entry.Deltas, hovered, combined);
+    AnnotateCappedDeltas(entry.Deltas, hovered, combined, base);
     SortDeltasForDisplay(entry.Deltas);
     return entry;
 }
@@ -2226,7 +3489,8 @@ EquipmentCompareResult BuildEquipmentComparison(
     const EquipmentCompareItemInput &hovered,
     const std::vector<EquipmentCompareItemInput> &equippedTargets,
     int totalSlotsInFamily,
-    int occupiedSlotsInFamily)
+    int occupiedSlotsInFamily,
+    const CharacterCompareContext *ctx)
 {
     EquipmentCompareResult result;
     if (!hovered.PropertiesLoaded)
@@ -2237,7 +3501,11 @@ EquipmentCompareResult BuildEquipmentComparison(
     const ParsedEquipmentStats hoveredStats = ParseEquipmentOpl(hovered.Properties);
     const EquipCategory hoveredCat =
         ClassifyEquipmentCategory(hoveredStats, hovered.Layer, hovered.IsWeapon);
-    const bool hoveredIsWeapon = hovered.IsWeapon || hoveredStats.HasWeaponDamage;
+    const bool hoveredIsWeapon = (hoveredCat == EquipCategory::Weapon);
+    const BuildStatWeights weights = ResolveBuildWeights(ctx);
+    const wstr_t headerTitle = (ctx != nullptr && ctx->Valid)
+                                   ? (L"--- COMPARE [" + SanitizeAsciiLabel(weights.Label) + L"] ---")
+                                   : L"--- COMPARE ---";
 
     result.Valid = true;
 
@@ -2252,15 +3520,17 @@ EquipmentCompareResult BuildEquipmentComparison(
     // Case 1: Empty slot (nothing equipped in matching slot family)
     if (equippedTargets.empty())
     {
-        const double hoveredScore = ScoreEquipment(hoveredStats, hoveredCat);
+        const double hoveredScore = ScoreEquipment(hoveredStats, hoveredCat, ctx);
         const UpgradeVerdict emptyVerdict = ClassifyVerdict(hoveredScore, 0.0);
         EquipmentComparisonEntry emptyEntry;
         emptyEntry.TargetLabel = L"Empty Slot";
+        emptyEntry.ProfileLabel = weights.Label;
         emptyEntry.HoveredScore = hoveredScore;
         emptyEntry.EquippedScore = 0.0;
         emptyEntry.ScoreDelta = hoveredScore;
         emptyEntry.ScoreDeltaPct = ComputeScoreDeltaPct(hoveredScore, 0.0);
         emptyEntry.Verdict = emptyVerdict;
+        CollectUsabilityWarnings(emptyEntry.Warnings, hoveredStats, ctx);
         result.Comparisons.push_back(emptyEntry);
 
         ComparisonCardOutput card;
@@ -2269,11 +3539,17 @@ EquipmentCompareResult BuildEquipmentComparison(
         card.BorderColorARGB = BorderColorForVerdict(emptyVerdict);
 
         wstr_t html;
-        html += wstr_t(kColorGold) + L"--- COMPARE ---" + kColorWhite + L"\n";
+        html += wstr_t(kColorGold) + headerTitle + kColorWhite + L"\n";
         html += FormatVerdictBanner(emptyVerdict, emptyEntry.ScoreDeltaPct, false) + L"\n";
         if (!openSlotBanner.empty())
         {
             html += wstr_t(kColorBlue) + L"* " + openSlotBanner + kColorWhite + L"\n";
+        }
+        for (const wstr_t &warn : emptyEntry.Warnings)
+        {
+            const bool isHardReq = (warn.find(L"Needs ") == 0u);
+            html += wstr_t(isHardReq ? kColorRed : kColorGold) + L"* " + SanitizeAsciiLabel(warn) +
+                    kColorWhite + L"\n";
         }
         html += wstr_t(kColorGray) + L"Score: " + kColorWhite +
                 FormatFloat1(hoveredScore, false) + L"\n";
@@ -2302,7 +3578,7 @@ EquipmentCompareResult BuildEquipmentComparison(
     compareCard.BorderColorARGB = kBorderNeutralARGB;
 
     wstr_t html;
-    html += wstr_t(kColorGold) + L"--- COMPARE ---" + kColorWhite + L"\n";
+    html += wstr_t(kColorGold) + headerTitle + kColorWhite + L"\n";
     if (!openSlotBanner.empty())
     {
         html += wstr_t(kColorBlue) + L"* " + openSlotBanner + kColorWhite + L"\n";
@@ -2314,13 +3590,19 @@ EquipmentCompareResult BuildEquipmentComparison(
         {
             const ParsedEquipmentStats statsA = ParseEquipmentOpl(equippedTargets[0].Properties);
             const ParsedEquipmentStats statsB = ParseEquipmentOpl(equippedTargets[1].Properties);
-            const bool aIsWeapon = equippedTargets[0].IsWeapon || statsA.HasWeaponDamage;
-            const bool bIsWeapon = equippedTargets[1].IsWeapon || statsB.HasWeaponDamage;
+            const bool aIsWeapon =
+                ClassifyEquipmentCategory(
+                    statsA, equippedTargets[0].Layer, equippedTargets[0].IsWeapon) ==
+                EquipCategory::Weapon;
+            const bool bIsWeapon =
+                ClassifyEquipmentCategory(
+                    statsB, equippedTargets[1].Layer, equippedTargets[1].IsWeapon) ==
+                EquipCategory::Weapon;
             const wstr_t combinedLabel =
                 (aIsWeapon && bIsWeapon) ? L"Combined (MH + OH)" : L"Combined (1H + Shield)";
 
             EquipmentComparisonEntry combined = CompareAgainstCombinedStats(
-                hoveredStats, statsA, statsB, hoveredCat, combinedLabel);
+                hoveredStats, statsA, statsB, hoveredCat, combinedLabel, ctx);
             compareCard.BorderColorARGB = BorderColorForVerdict(combined.Verdict);
             AppendComparisonBlock(
                 html, combined, 16, true, L"Replaces both hands");
@@ -2362,13 +3644,13 @@ EquipmentCompareResult BuildEquipmentComparison(
             }
             else if (
                 equippedTargets.size() == 1 && hovered.Layer == OL_2_HAND && !hoveredIsWeapon &&
-                (eq.IsWeapon || eqStats.HasWeaponDamage))
+                ClassifyEquipmentCategory(eqStats, eq.Layer, eq.IsWeapon) == EquipCategory::Weapon)
             {
                 note = L"Replaces Off-Hand / 2H";
             }
 
             result.Comparisons.push_back(
-                CompareSingleStats(hoveredStats, eqStats, hoveredCat, targetLabel));
+                CompareSingleStats(hoveredStats, eqStats, hoveredCat, targetLabel, ctx));
             notes.push_back(std::move(note));
         }
 

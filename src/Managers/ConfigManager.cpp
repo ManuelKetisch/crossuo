@@ -88,6 +88,7 @@ enum
     CMKC_TOOLTIPS_TEXT_FONT,
     CMKC_TOOLTIPS_DELAY,
     CMKC_COMPARE_EQUIPMENT_ON_CTRL,
+    CMKC_COMPARE_EQUIPMENT_PROFILE,
     CMKC_CHAT_COLOR_INPUT_TEXT,
     CMKC_CHAT_COLOR_MENU_OPTION,
     CMKC_CHAT_COLOR_PLAYER_IN_MEMBER_LIST,
@@ -231,6 +232,7 @@ static const ConfigEntry s_Keys[] = {
     { CMKC_TOOLTIPS_TEXT_FONT, "tooltipstextfont" },
     { CMKC_TOOLTIPS_DELAY, "tooltipsdelay" },
     { CMKC_COMPARE_EQUIPMENT_ON_CTRL, "compareequipmentonctrl" },
+    { CMKC_COMPARE_EQUIPMENT_PROFILE, "compareequipmentprofile" },
     { CMKC_CHAT_COLOR_INPUT_TEXT, "chatcolorinputtext" },
     { CMKC_CHAT_COLOR_MENU_OPTION, "chatcolormenuoption" },
     { CMKC_CHAT_COLOR_PLAYER_IN_MEMBER_LIST, "chatcolorplayerinmemberlist" },
@@ -433,6 +435,7 @@ void CConfigManager::DefaultPage3()
     ToolTipsTextFont = 1;
     ToolTipsDelay = 200;
     CompareEquipmentOnCtrl = true;
+    CompareEquipmentProfile = 0;
 }
 
 void CConfigManager::DefaultPage4()
@@ -1188,6 +1191,13 @@ bool CConfigManager::Load(const fs_path &path)
                 case CMKC_COMPARE_EQUIPMENT_ON_CTRL:
                     CompareEquipmentOnCtrl = str_to_bool(strings[1]);
                     break;
+                case CMKC_COMPARE_EQUIPMENT_PROFILE:
+                {
+                    const int v = str_to_int(strings[1]);
+                    CompareEquipmentProfile =
+                        static_cast<uint8_t>((v >= 0 && v <= 5) ? v : 0);
+                    break;
+                }
 
                 //Page 4
                 case CMKC_CHAT_COLOR_INPUT_TEXT:
@@ -1624,6 +1634,7 @@ void CConfigManager::SaveSection(TextFileWriter &writer)
         writer.WriteInt("ToolTipsTextFont", ToolTipsTextFont);
         writer.WriteInt("ToolTipsDelay", ToolTipsDelay);
         writer.WriteBool("CompareEquipmentOnCtrl", CompareEquipmentOnCtrl);
+        writer.WriteInt("CompareEquipmentProfile", CompareEquipmentProfile);
 
         //Page 4
         writer.WriteInt("ChatColorInputText", ChatColorInputText);
