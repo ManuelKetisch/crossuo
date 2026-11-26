@@ -8,11 +8,11 @@
 class CGumpBuff : public CGump
 {
 private:
-    const int BUFF_ITEM_STEP_OFFSET_X = 3;
-    const int BUFF_ITEM_STEP_OFFSET_Y = 3;
-    const int MUNIMUM_ICON_ALPHA = 80;
-    const int ALPHA_CHANGE_KOEFF = 600;
-    const int USE_ALPHA_BLENDING_WHEN_TIMER_LESS = 10000;
+    const int BUFF_ITEM_STEP_OFFSET_X = 4;
+    const int BUFF_ITEM_STEP_OFFSET_Y = 4;
+    const int MUNIMUM_ICON_ALPHA = 95;
+    const int ALPHA_CHANGE_KOEFF = 700;
+    const int USE_ALPHA_BLENDING_WHEN_TIMER_LESS = 15000;
 
     const int ID_GB_NEXT_WINDOW_DIRECTION = 1;
     const int ID_GB_LOCK_MOVING = 2;

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2016 Hotride
 
 #include "GumpBuff.h"
+#include "GumpBuff_rules.h"
 #include "../Point.h"
 #include "../CrossUO.h"
 #include "../ToolTip.h"
@@ -9,6 +10,7 @@
 #include "../Managers/FontsManager.h"
 #include "../Managers/ConfigManager.h"
 #include "xuocore/enumlist.h"
+#include <algorithm>
 
 CGumpBuff::CGumpBuff(short x, short y)
     : CGump(GT_BUFF, 0, x, y)
@@ -41,21 +43,38 @@ void CGumpBuff::UpdateBuffIcons()
         {
             CGUIBuff *buff = (CGUIBuff *)item;
 
-            int delta = (int)(buff->Timer - g_Ticks);
-
-            if (buff->Timer != 0xFFFFFFFF && delta < USE_ALPHA_BLENDING_WHEN_TIMER_LESS)
+            if (xuobuff::HasTimer(buff->Timer))
             {
-                WantRedraw = true;
-
-                if (delta <= 0)
+                const uint32_t remainingMs = xuobuff::ComputeRemainingMs(buff->Timer, g_Ticks);
+                if (remainingMs == 0u)
                 {
+                    if (g_ToolTip.m_Object == buff)
+                    {
+                        g_ToolTip.Reset();
+                    }
                     Delete(buff);
                     WantUpdateContent = true;
+                    item = next;
+                    continue;
                 }
-                else
+
+                const uint32_t remainingSec = xuobuff::RemainingSecondsCeil(remainingMs);
+                if (remainingSec != buff->LastDisplayedSeconds)
                 {
+                    buff->LastDisplayedSeconds = remainingSec;
+                    WantRedraw = true;
+                }
+
+                if (remainingMs <= static_cast<uint32_t>(USE_ALPHA_BLENDING_WHEN_TIMER_LESS))
+                {
+                    WantRedraw = true;
+
                     int alpha = buff->Alpha;
-                    int addVal = (USE_ALPHA_BLENDING_WHEN_TIMER_LESS - delta) / ALPHA_CHANGE_KOEFF;
+                    const int addVal = std::max(
+                        1,
+                        static_cast<int>(
+                            (static_cast<uint32_t>(USE_ALPHA_BLENDING_WHEN_TIMER_LESS) - remainingMs) /
+                            static_cast<uint32_t>(ALPHA_CHANGE_KOEFF)));
 
                     if (buff->DecAlpha)
                     {
@@ -78,7 +97,13 @@ void CGumpBuff::UpdateBuffIcons()
                         }
                     }
 
-                    buff->Alpha = alpha;
+                    buff->Alpha = static_cast<uint8_t>(alpha);
+                }
+                else if (buff->Alpha != 0xFF)
+                {
+                    buff->Alpha = 0xFF;
+                    buff->DecAlpha = true;
+                    WantRedraw = true;
                 }
             }
         }
@@ -89,11 +114,8 @@ void CGumpBuff::UpdateBuffIcons()
 
 void CGumpBuff::AddBuff(uint16_t id, uint16_t timer, const wstr_t &text)
 {
-    uint32_t ticks = 0xFFFFFFFF;
-    if (timer != 0u)
-    {
-        ticks = g_Ticks + (timer * 1000);
-    }
+    const uint32_t totalDurationMs = static_cast<uint32_t>(timer) * 1000u;
+    const uint32_t ticks = timer != 0u ? (g_Ticks + totalDurationMs) : xuobuff::kBuffIndefiniteTimer;
 
     for (CBaseGUI *item = (CBaseGUI *)m_Items; item != nullptr; item = (CBaseGUI *)item->m_Next)
     {
@@ -102,10 +124,13 @@ void CGumpBuff::AddBuff(uint16_t id, uint16_t timer, const wstr_t &text)
             CGUIBuff *buff = (CGUIBuff *)item;
 
             buff->Timer = ticks;
+            buff->TotalDurationMs = totalDurationMs;
             buff->Text = text;
             buff->DecAlpha = true;
             buff->Alpha = 0xFF;
             buff->TooltipTimer = 0;
+            buff->LastDisplayedSeconds = 0xFFFFFFFFu;
+            buff->LastTooltipSeconds = 0xFFFFFFFFu;
 
             MoveToBack(buff);
             WantUpdateContent = true;
@@ -114,7 +139,7 @@ void CGumpBuff::AddBuff(uint16_t id, uint16_t timer, const wstr_t &text)
         }
     }
 
-    Add(new CGUIBuff(id, ticks, text));
+    Add(new CGUIBuff(id, ticks, totalDurationMs, text));
     WantUpdateContent = true;
 }
 
@@ -124,6 +149,10 @@ void CGumpBuff::DeleteBuff(uint16_t id)
     {
         if (item->Type == GOT_BUFF && item->Graphic == id)
         {
+            if (g_ToolTip.m_Object == item)
+            {
+                g_ToolTip.Reset();
+            }
             Delete(item);
             WantUpdateContent = true;
 
@@ -136,7 +165,7 @@ void CGumpBuff::InitToolTip()
 {
     if (g_SelectedObject.Serial == ID_GB_NEXT_WINDOW_DIRECTION)
     {
-        g_ToolTip.Set(L"Change buff window gump");
+        g_ToolTip.Set(L"Rotate buff bar direction", 180);
     }
     else if (g_SelectedObject.Object != nullptr)
     {
@@ -150,37 +179,33 @@ void CGumpBuff::InitToolTip()
             if (item->Type == GOT_BUFF)
             {
                 CGUIBuff *buff = (CGUIBuff *)item;
+                const bool hasTimer = xuobuff::HasTimer(buff->Timer);
+                const uint32_t remainingMs = xuobuff::ComputeRemainingMs(buff->Timer, g_Ticks);
+                const uint32_t remainingSec = xuobuff::RemainingSecondsCeil(remainingMs);
+                const wstr_t tip = xuobuff::BuildTooltipText(buff->Text, remainingSec, hasTimer);
 
-                g_FontManager.SetUseHTML(true);
-
-                if (buff->Timer != 0xFFFFFFFF && buff->TooltipTimer < g_Ticks)
+                if (g_ToolTip.m_Object != buff)
                 {
-                    buff->TooltipTimer = g_Ticks + ((buff->Timer - g_Ticks) % 1000);
+                    buff->LastTooltipSeconds = remainingSec;
+                    g_ToolTip.Set(tip, 240);
+                }
+                else if (buff->LastTooltipSeconds != remainingSec || g_ToolTip.Data != tip)
+                {
+                    buff->LastTooltipSeconds = remainingSec;
+                    const uint32_t prevTimer = g_ToolTip.Timer;
                     g_ToolTip.Reset();
-
-                    wchar_t buf[512];
-                    swprintf(
-                        buf,
-                        sizeof(buf),
-                        L"%s\nTimeLeft: %i seconds.",
-                        buff->Text.c_str(),
-                        (buff->Timer - g_Ticks) / 1000); // FIXME: check windows
-
-                    g_ToolTip.Set(buf);
-
-                    g_ToolTip.Timer = 0;
-                    g_ToolTip.Use = true;
+                    g_ToolTip.Set(tip, 240);
+                    g_ToolTip.Timer = prevTimer;
+                    g_ToolTip.Use = !(prevTimer > g_Ticks);
                 }
                 else
                 {
-                    g_ToolTip.Set(buff->Text);
+                    g_ToolTip.Set(tip, 240);
                 }
-
-                g_FontManager.SetUseHTML(false);
             }
             else
             {
-                g_ToolTip.Set(L"Buffs and Debuffs will appear here.", 120);
+                g_ToolTip.Set(L"Buffs and Debuffs will appear here.", 140);
             }
 
             break;
@@ -208,7 +233,7 @@ void CGumpBuff::GetGumpStatus(
         {
             ball.X = 0;
             ball.Y = 0;
-            items.X = 25;
+            items.X = 16;
             items.Y = 25;
             decY = false;
             decX = false;
@@ -219,8 +244,8 @@ void CGumpBuff::GetGumpStatus(
         {
             ball.X = 34;
             ball.Y = 78;
-            items.X = 7;
-            items.Y = 52;
+            items.X = 4;
+            items.Y = 24;
             decY = true;
             decX = false;
             useX = false;
@@ -230,8 +255,8 @@ void CGumpBuff::GetGumpStatus(
         {
             ball.X = 76;
             ball.Y = 36;
-            items.X = 52;
-            items.Y = 7;
+            items.X = 28;
+            items.Y = 5;
             decY = false;
             decX = true;
             useX = true;
@@ -243,7 +268,7 @@ void CGumpBuff::GetGumpStatus(
             ball.X = -2;
             ball.Y = 36;
             items.X = 20;
-            items.Y = 7;
+            items.Y = 5;
             decY = false;
             decX = false;
             useX = true;
@@ -252,6 +277,8 @@ void CGumpBuff::GetGumpStatus(
     }
 
     CPoint2Di itemsOfs = items;
+    int maxSlotW = 0;
+    int maxSlotH = 0;
 
     for (CBaseGUI *item = (CBaseGUI *)m_Items; item != nullptr; item = (CBaseGUI *)item->m_Next)
     {
@@ -260,28 +287,30 @@ void CGumpBuff::GetGumpStatus(
             continue;
         }
 
-        CSize gumpDim = g_Game.GetGumpDimension(item->Graphic);
+        const CSize slotDim = item->GetSize();
+        maxSlotW = std::max(maxSlotW, slotDim.Width);
+        maxSlotH = std::max(maxSlotH, slotDim.Height);
 
         if (useX)
         {
             if (decX)
             {
-                itemsOfs.X -= gumpDim.Width + BUFF_ITEM_STEP_OFFSET_X;
+                itemsOfs.X -= slotDim.Width + BUFF_ITEM_STEP_OFFSET_X;
             }
             else
             {
-                itemsOfs.X += gumpDim.Width + BUFF_ITEM_STEP_OFFSET_X;
+                itemsOfs.X += slotDim.Width + BUFF_ITEM_STEP_OFFSET_X;
             }
         }
         else
         {
             if (decY)
             {
-                itemsOfs.Y -= gumpDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
+                itemsOfs.Y -= slotDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
             }
             else
             {
-                itemsOfs.Y += gumpDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
+                itemsOfs.Y += slotDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
             }
         }
     }
@@ -290,22 +319,30 @@ void CGumpBuff::GetGumpStatus(
     {
         if (decX)
         {
-            itemsOfs.X -= 20;
+            itemsOfs.X -= 12;
         }
         else
         {
-            itemsOfs.X += 20;
+            itemsOfs.X += 12;
+        }
+        if (maxSlotH > 0)
+        {
+            endGump.Height = std::max(endGump.Height, items.Y + maxSlotH + 6);
         }
     }
     else
     {
         if (decY)
         {
-            itemsOfs.Y -= 20;
+            itemsOfs.Y -= 12;
         }
         else
         {
-            itemsOfs.Y += 20;
+            itemsOfs.Y += 12;
+        }
+        if (maxSlotW > 0)
+        {
+            endGump.Width = std::max(endGump.Width, items.X + maxSlotW + 6);
         }
     }
 
@@ -360,8 +397,8 @@ void CGumpBuff::UpdateContent()
     gui = (CBaseGUI *)gui->m_Next;
     gui->SetX(startGump.X);
     gui->SetY(startGump.Y);
-    ((CGUIPolygonal *)gui)->Width = endGump.Width;
-    ((CGUIPolygonal *)gui)->Height = endGump.Height;
+    ((CGUIPolygonal *)gui)->Width = std::max(0, endGump.Width - startGump.X);
+    ((CGUIPolygonal *)gui)->Height = std::max(0, endGump.Height - startGump.Y);
 
     //Crystall ball
     gui = (CBaseGUI *)gui->m_Next;
@@ -384,7 +421,7 @@ void CGumpBuff::UpdateContent()
 
         CGUIBuff *buff = (CGUIBuff *)item;
 
-        CSize gumpDim = g_Game.GetGumpDimension(buff->Graphic);
+        const CSize slotDim = buff->GetSize();
         buff->SetX(startCoordinates.X);
         buff->SetY(startCoordinates.Y);
 
@@ -392,22 +429,22 @@ void CGumpBuff::UpdateContent()
         {
             if (decX)
             {
-                startCoordinates.X -= gumpDim.Width + BUFF_ITEM_STEP_OFFSET_X;
+                startCoordinates.X -= slotDim.Width + BUFF_ITEM_STEP_OFFSET_X;
             }
             else
             {
-                startCoordinates.X += gumpDim.Width + BUFF_ITEM_STEP_OFFSET_X;
+                startCoordinates.X += slotDim.Width + BUFF_ITEM_STEP_OFFSET_X;
             }
         }
         else
         {
             if (decY)
             {
-                startCoordinates.Y -= gumpDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
+                startCoordinates.Y -= slotDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
             }
             else
             {
-                startCoordinates.Y += gumpDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
+                startCoordinates.Y += slotDim.Height + BUFF_ITEM_STEP_OFFSET_Y;
             }
         }
     }
