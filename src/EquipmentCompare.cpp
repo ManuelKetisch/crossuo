@@ -112,6 +112,20 @@ struct BuildStatWeights
     double WeaponLevel = 0.5;
     double WeaponReflect = 0.30;
     double WeaponEnhancePotions = 0.25;
+    double WeaponCastingFocus = 1.80;
+    double WeaponDamageEater = 3.20;
+    double WeaponElementalEater = 0.70;
+    double WeaponSoulCharge = 0.55;
+    double WeaponReactiveParalyze = 8.0;
+    double WeaponManaPhase = 10.0;
+    double WeaponResonance = 0.25;
+    double WeaponBattleLust = 20.0;
+    double WeaponSplintering = 0.95;
+    double WeaponHitCurse = 0.70;
+    double WeaponHitFatigue = 0.50;
+    double WeaponHitManaDrain = 0.50;
+    double WeaponBloodDrinker = 16.0;
+    double WeaponBane = 22.0;
 
     // Armor/Shield weights
     double ArmorResist = 1.65;
@@ -142,6 +156,13 @@ struct BuildStatWeights
     double ArmorEnhancePotions = 0.35;
     double ArmorNightSight = 1.0;
     double ArmorSlayer = 10.0;
+    double ArmorCastingFocus = 2.40;
+    double ArmorDamageEater = 4.50;
+    double ArmorElementalEater = 1.00;
+    double ArmorSoulCharge = 0.85;
+    double ArmorReactiveParalyze = 14.0;
+    double ArmorManaPhase = 14.0;
+    double ArmorResonance = 0.40;
 
     // Jewelry/Utility weights
     double JewelDi = 1.70;
@@ -174,6 +195,13 @@ struct BuildStatWeights
     double JewelQuiverDmg = 1.60;
     double JewelNightSight = 1.0;
     double JewelSelfRepair = 1.0;
+    double JewelCastingFocus = 2.60;
+    double JewelDamageEater = 4.80;
+    double JewelElementalEater = 1.05;
+    double JewelSoulCharge = 0.85;
+    double JewelReactiveParalyze = 12.0;
+    double JewelManaPhase = 14.0;
+    double JewelResonance = 0.40;
 };
 
 struct OtherGearBaseline
@@ -206,6 +234,33 @@ struct OtherGearBaseline
     int MaxFc = 2;
     int Fcr = 0;
     int MaxFcr = 6;
+
+    // SA/HS/ToL suit cap baselines (populated from loaded worn paperdoll pieces)
+    bool SAActive = false;
+    int CastingFocus = 0;
+    int MaxCastingFocus = 12;
+    int DamageEater = 0;
+    int MaxDamageEater = 18;
+    int MaxTotalEater = 30;
+    int KineticEater = 0;
+    int FireEater = 0;
+    int ColdEater = 0;
+    int PoisonEater = 0;
+    int EnergyEater = 0;
+    int SoulCharge = 0;
+    int MaxSoulCharge = 30;
+    int KineticResonance = 0;
+    int FireResonance = 0;
+    int ColdResonance = 0;
+    int PoisonResonance = 0;
+    int EnergyResonance = 0;
+    int MaxResonance = 20;
+    bool ReactiveParalyze = false;
+    bool ManaPhase = false;
+    int EnhancePotions = 0;
+    int MaxEnhancePotions = 50;
+    int SplinteringWeapon = 0;
+    int MaxSplinteringWeapon = 35;
 };
 
 struct CapImpact
@@ -300,6 +355,8 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.WeaponSsi = 0.60;
             w.WeaponHci = 1.25;
             w.WeaponDci = 0.80;
+            w.WeaponVelocity = 0.75;
+            w.WeaponBalanced = paladin ? 12.0 : 10.0;
             w.WeaponLeech = 1.00;
             w.WeaponStamLeech = 0.65;
             w.WeaponHld = 0.85;
@@ -319,6 +376,20 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.WeaponMana = paladin ? 0.45 : 0.25;
             w.WeaponRegenStam = 3.0;
             w.WeaponRegenMana = paladin ? 2.5 : 1.6;
+            w.WeaponCastingFocus = paladin ? 0.80 : 0.15;
+            w.WeaponDamageEater = 3.40;
+            w.WeaponElementalEater = 0.75;
+            w.WeaponSoulCharge = paladin ? 0.60 : 0.35;
+            w.WeaponReactiveParalyze = 10.0;
+            w.WeaponManaPhase = paladin ? 10.0 : 6.0;
+            w.WeaponResonance = paladin ? 0.15 : 0.03;
+            w.WeaponBattleLust = 24.0;
+            w.WeaponSplintering = 1.15;
+            w.WeaponHitCurse = 0.75;
+            w.WeaponHitFatigue = 0.55;
+            w.WeaponHitManaDrain = 0.50;
+            w.WeaponBloodDrinker = 19.0;
+            w.WeaponBane = 26.0;
 
             w.ArmorResist = 1.70;
             w.ArmorDi = 1.80;
@@ -343,6 +414,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.ArmorSpellChanneling = paladin ? 10.0 : 3.0;
             w.ArmorLuck = 0.08;
             w.ArmorSkill = 2.0;
+            w.ArmorCastingFocus = paladin ? 1.00 : 0.20;
+            w.ArmorDamageEater = 4.60;
+            w.ArmorElementalEater = 1.05;
+            w.ArmorSoulCharge = paladin ? 0.90 : 0.55;
+            w.ArmorReactiveParalyze = 16.0;
+            w.ArmorManaPhase = paladin ? 14.0 : 8.0;
+            w.ArmorResonance = paladin ? 0.25 : 0.05;
 
             w.JewelDi = 2.10;
             w.JewelSsi = 2.80;
@@ -366,6 +444,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.JewelSkill = 2.1;
             w.JewelLuck = 0.08;
             w.JewelSpellChanneling = paladin ? 10.0 : 3.0;
+            w.JewelCastingFocus = paladin ? 1.10 : 0.20;
+            w.JewelDamageEater = 4.80;
+            w.JewelElementalEater = 1.05;
+            w.JewelSoulCharge = paladin ? 0.90 : 0.55;
+            w.JewelReactiveParalyze = 14.0;
+            w.JewelManaPhase = paladin ? 14.0 : 8.0;
+            w.JewelResonance = paladin ? 0.25 : 0.05;
             break;
         }
         case CompareBuildProfile::Caster:
@@ -376,6 +461,8 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.WeaponSsi = 0.10;
             w.WeaponHci = 0.20;
             w.WeaponDci = 0.80;
+            w.WeaponVelocity = 0.15;
+            w.WeaponBalanced = 6.0;
             w.WeaponLeech = 0.25;
             w.WeaponStamLeech = 0.10;
             w.WeaponHld = 0.20;
@@ -397,6 +484,20 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.WeaponRegenMana = 4.5;
             w.WeaponRegenHits = 2.8;
             w.WeaponRegenStam = 0.8;
+            w.WeaponCastingFocus = 3.20;
+            w.WeaponDamageEater = 3.50;
+            w.WeaponElementalEater = 0.75;
+            w.WeaponSoulCharge = 0.75;
+            w.WeaponReactiveParalyze = 5.0;
+            w.WeaponManaPhase = 14.0;
+            w.WeaponResonance = 0.50;
+            w.WeaponBattleLust = 3.0;
+            w.WeaponSplintering = 0.20;
+            w.WeaponHitCurse = 0.30;
+            w.WeaponHitFatigue = 0.15;
+            w.WeaponHitManaDrain = 0.25;
+            w.WeaponBloodDrinker = 3.0;
+            w.WeaponBane = 4.0;
 
             w.ArmorResist = 1.70;
             w.ArmorDi = 0.15;
@@ -421,6 +522,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.ArmorSpellChanneling = 14.0;
             w.ArmorLuck = 0.08;
             w.ArmorSkill = 2.0;
+            w.ArmorCastingFocus = 4.00;
+            w.ArmorDamageEater = 4.20;
+            w.ArmorElementalEater = 0.95;
+            w.ArmorSoulCharge = 1.15;
+            w.ArmorReactiveParalyze = 8.0;
+            w.ArmorManaPhase = 18.0;
+            w.ArmorResonance = 0.75;
 
             w.JewelDi = 0.15;
             w.JewelSsi = 0.15;
@@ -444,6 +552,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.JewelSkill = 2.1;
             w.JewelLuck = 0.08;
             w.JewelSpellChanneling = 14.0;
+            w.JewelCastingFocus = 4.20;
+            w.JewelDamageEater = 4.40;
+            w.JewelElementalEater = 1.00;
+            w.JewelSoulCharge = 1.15;
+            w.JewelReactiveParalyze = 7.0;
+            w.JewelManaPhase = 18.0;
+            w.JewelResonance = 0.75;
             break;
         }
         case CompareBuildProfile::Tank:
@@ -451,6 +566,8 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.Label = L"Tank";
             w.WeaponDps = 5.0;
             w.WeaponDci = 1.40;
+            w.WeaponVelocity = 0.40;
+            w.WeaponBalanced = 10.0;
             w.WeaponLeech = 1.10;
             w.WeaponHla = 0.85;
             w.WeaponResist = 1.10;
@@ -458,6 +575,20 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.WeaponHits = 1.2;
             w.WeaponStr = 1.0;
             w.WeaponLrc = 0.15;
+            w.WeaponCastingFocus = 0.40;
+            w.WeaponDamageEater = 5.00;
+            w.WeaponElementalEater = 1.10;
+            w.WeaponSoulCharge = 0.65;
+            w.WeaponReactiveParalyze = 14.0;
+            w.WeaponManaPhase = 6.0;
+            w.WeaponResonance = 0.08;
+            w.WeaponBattleLust = 18.0;
+            w.WeaponSplintering = 0.85;
+            w.WeaponHitCurse = 0.75;
+            w.WeaponHitFatigue = 0.65;
+            w.WeaponHitManaDrain = 0.55;
+            w.WeaponBloodDrinker = 22.0;
+            w.WeaponBane = 18.0;
 
             w.ArmorResist = 2.60;
             w.ArmorDci = 2.60;
@@ -483,6 +614,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.ArmorMageArmor = 3.0;
             w.ArmorSpellChanneling = 5.0;
             w.ArmorLuck = 0.08;
+            w.ArmorCastingFocus = 0.60;
+            w.ArmorDamageEater = 6.50;
+            w.ArmorElementalEater = 1.45;
+            w.ArmorSoulCharge = 1.05;
+            w.ArmorReactiveParalyze = 22.0;
+            w.ArmorManaPhase = 9.0;
+            w.ArmorResonance = 0.12;
 
             w.JewelResist = 1.80;
             w.JewelDci = 2.60;
@@ -505,12 +643,36 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.JewelMana = 0.7;
             w.JewelReflect = 1.10;
             w.JewelLuck = 0.08;
+            w.JewelCastingFocus = 0.60;
+            w.JewelDamageEater = 6.80;
+            w.JewelElementalEater = 1.50;
+            w.JewelSoulCharge = 1.00;
+            w.JewelReactiveParalyze = 18.0;
+            w.JewelManaPhase = 9.0;
+            w.JewelResonance = 0.12;
             break;
         }
         case CompareBuildProfile::Luck:
         {
             w.Label = L"Luck";
             w.WeaponLuck = 0.40;
+            w.WeaponVelocity = 0.50;
+            w.WeaponBalanced = 8.0;
+            w.WeaponCastingFocus = 1.20;
+            w.WeaponDamageEater = 2.60;
+            w.WeaponElementalEater = 0.55;
+            w.WeaponSoulCharge = 0.40;
+            w.WeaponReactiveParalyze = 7.0;
+            w.WeaponManaPhase = 7.0;
+            w.WeaponResonance = 0.20;
+            w.WeaponBattleLust = 16.0;
+            w.WeaponSplintering = 0.80;
+            w.WeaponHitCurse = 0.60;
+            w.WeaponHitFatigue = 0.45;
+            w.WeaponHitManaDrain = 0.45;
+            w.WeaponBloodDrinker = 14.0;
+            w.WeaponBane = 18.0;
+
             w.ArmorLuck = 0.55;
             w.JewelLuck = 0.55;
             w.ArmorResist = 1.45;
@@ -535,6 +697,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.ArmorMageArmor = 3.5;
             w.ArmorSpellChanneling = 6.0;
             w.ArmorSkill = 1.4;
+            w.ArmorCastingFocus = 1.60;
+            w.ArmorDamageEater = 3.60;
+            w.ArmorElementalEater = 0.80;
+            w.ArmorSoulCharge = 0.65;
+            w.ArmorReactiveParalyze = 11.0;
+            w.ArmorManaPhase = 10.0;
+            w.ArmorResonance = 0.30;
 
             w.JewelResist = 1.00;
             w.JewelDci = 1.40;
@@ -547,6 +716,13 @@ BuildStatWeights MakeProfilePreset(CompareBuildProfile profile, bool paladin = f
             w.JewelFc = 8.0;
             w.JewelFcr = 4.0;
             w.JewelSkill = 1.5;
+            w.JewelCastingFocus = 1.70;
+            w.JewelDamageEater = 3.80;
+            w.JewelElementalEater = 0.85;
+            w.JewelSoulCharge = 0.65;
+            w.JewelReactiveParalyze = 10.0;
+            w.JewelManaPhase = 10.0;
+            w.JewelResonance = 0.30;
             break;
         }
         case CompareBuildProfile::Hybrid:
@@ -763,13 +939,86 @@ double EffectiveSkillBonusSum(
     return total;
 }
 
+int ResolveEffectiveMaxFc(const CharacterCompareContext *ctx, const BuildStatWeights &weights)
+{
+    if (ctx == nullptr || !ctx->Valid)
+    {
+        return 2;
+    }
+    if (ctx->MaxCastSpeed > 2)
+    {
+        return ctx->MaxCastSpeed;
+    }
+    if (ctx->HasSkills)
+    {
+        const double magery = SkillVal(ctx, kSkillMagery);
+        const double necro = SkillVal(ctx, kSkillNecromancy);
+        const double chiv = SkillVal(ctx, kSkillChivalry);
+        const double sw = SkillVal(ctx, kSkillSpellweaving);
+        const double myst = SkillVal(ctx, kSkillMysticism);
+        const double bushido = SkillVal(ctx, kSkillBushido);
+        const double ninjitsu = SkillVal(ctx, kSkillNinjitsu);
+
+        // ModernUO Spell.cs: Chivalry caps at FC 4 only while Magery < 70;
+        // Spellweaving / Mysticism / Bushido / Ninjitsu cap at FC 4 when not bound by Magery/Necro.
+        const bool fc4School =
+            (chiv >= 35.0 && magery < 70.0) ||
+            (std::max({ sw, myst, bushido, ninjitsu }) >= 35.0 && magery < 70.0 && necro < 70.0);
+        if (fc4School)
+        {
+            return 4;
+        }
+        return ctx->MaxCastSpeed > 0 ? ctx->MaxCastSpeed : 2;
+    }
+    if (weights.IsPaladin)
+    {
+        return 4;
+    }
+    return ctx->MaxCastSpeed > 0 ? ctx->MaxCastSpeed : 2;
+}
+
 OtherGearBaseline MakeBaselineWithout(
     const CharacterCompareContext *ctx,
     const ParsedEquipmentStats &removed,
     const BuildStatWeights &weights)
 {
     OtherGearBaseline b;
-    if (ctx == nullptr || !ctx->Valid || !ctx->HasStatusTotals)
+    if (ctx == nullptr || !ctx->Valid)
+    {
+        return b;
+    }
+
+    b.MaxCastingFocus = ctx->MaxCastingFocus > 0 ? ctx->MaxCastingFocus : 12;
+    b.MaxDamageEater = ctx->MaxDamageEater > 0 ? ctx->MaxDamageEater : 18;
+    b.MaxTotalEater = ctx->MaxTotalEater > 0 ? ctx->MaxTotalEater : 30;
+    b.MaxSoulCharge = ctx->MaxSoulCharge > 0 ? ctx->MaxSoulCharge : 30;
+    b.MaxResonance = ctx->MaxResonance > 0 ? ctx->MaxResonance : 20;
+    b.MaxEnhancePotions = ctx->MaxEnhancePotions > 0 ? ctx->MaxEnhancePotions : 50;
+    b.MaxSplinteringWeapon = ctx->MaxSplinteringWeapon > 0 ? ctx->MaxSplinteringWeapon : 35;
+
+    if (ctx->HasOtherEquippedSAStats)
+    {
+        b.SAActive = true;
+        b.CastingFocus = std::max(0, ctx->OtherEquippedCastingFocus);
+        b.DamageEater = std::max(0, ctx->OtherEquippedDamageEater);
+        b.KineticEater = std::max(0, ctx->OtherEquippedKineticEater);
+        b.FireEater = std::max(0, ctx->OtherEquippedFireEater);
+        b.ColdEater = std::max(0, ctx->OtherEquippedColdEater);
+        b.PoisonEater = std::max(0, ctx->OtherEquippedPoisonEater);
+        b.EnergyEater = std::max(0, ctx->OtherEquippedEnergyEater);
+        b.SoulCharge = std::max(0, ctx->OtherEquippedSoulCharge);
+        b.KineticResonance = std::max(0, ctx->OtherEquippedKineticResonance);
+        b.FireResonance = std::max(0, ctx->OtherEquippedFireResonance);
+        b.ColdResonance = std::max(0, ctx->OtherEquippedColdResonance);
+        b.PoisonResonance = std::max(0, ctx->OtherEquippedPoisonResonance);
+        b.EnergyResonance = std::max(0, ctx->OtherEquippedEnergyResonance);
+        b.ReactiveParalyze = ctx->OtherEquippedReactiveParalyze;
+        b.ManaPhase = ctx->OtherEquippedManaPhase;
+        b.EnhancePotions = std::max(0, ctx->OtherEquippedEnhancePotions);
+        b.SplinteringWeapon = std::max(0, ctx->OtherEquippedSplinteringWeapon);
+    }
+
+    if (!ctx->HasStatusTotals)
     {
         return b;
     }
@@ -808,11 +1057,7 @@ OtherGearBaseline MakeBaselineWithout(
     b.MaxDi = ctx->MaxWeaponDamage > 0 ? ctx->MaxWeaponDamage : 100;
     b.MaxLrc = ctx->MaxLowerReagentCost > 0 ? ctx->MaxLowerReagentCost : 100;
     b.MaxLmc = ctx->MaxLowerManaCost > 0 ? ctx->MaxLowerManaCost : 40;
-    b.MaxFc = ctx->MaxCastSpeed > 0 ? ctx->MaxCastSpeed : (weights.IsPaladin ? 4 : 2);
-    if (weights.IsPaladin && b.MaxFc < 4)
-    {
-        b.MaxFc = 4;
-    }
+    b.MaxFc = ResolveEffectiveMaxFc(ctx, weights);
     b.MaxFcr = ctx->MaxCastRecovery > 0 ? ctx->MaxCastRecovery : 6;
 
     b.Dci = std::max(0, ctx->DefenseChance - removed.DefenseChanceIncrease);
@@ -821,7 +1066,8 @@ OtherGearBaseline MakeBaselineWithout(
     b.Di = std::max(0, ctx->WeaponDamage - removed.DamageIncrease);
     b.Lrc = std::max(0, ctx->LowerReagentCost - removed.LowerReagentCost);
     b.Lmc = std::max(0, ctx->LowerManaCost - removed.LowerManaCost);
-    b.Fc = std::max(0, ctx->CastSpeed - removed.FasterCasting);
+    // Preserve negative CastSpeed (e.g. -1 FC from Spell Channeling applies in full in ModernUO).
+    b.Fc = ctx->CastSpeed - removed.FasterCasting;
     b.Fcr = std::max(0, ctx->CastRecovery - removed.FasterCastRecovery);
     return b;
 }
@@ -829,23 +1075,39 @@ OtherGearBaseline MakeBaselineWithout(
 OtherGearBaseline AdvanceBaseline(const OtherGearBaseline &base, const ParsedEquipmentStats &added)
 {
     OtherGearBaseline next = base;
-    if (!next.Active)
+    if (next.Active)
     {
-        return next;
+        next.Phys += added.PhysicalResist;
+        next.Fire += added.FireResist;
+        next.Cold += added.ColdResist;
+        next.Poison += added.PoisonResist;
+        next.Energy += added.EnergyResist;
+        next.Dci += added.DefenseChanceIncrease;
+        next.Hci += added.HitChanceIncrease;
+        next.Ssi += added.SwingSpeedIncrease;
+        next.Di += added.DamageIncrease;
+        next.Lrc += added.LowerReagentCost;
+        next.Lmc += added.LowerManaCost;
+        next.Fc += added.FasterCasting;
+        next.Fcr += added.FasterCastRecovery;
     }
-    next.Phys += added.PhysicalResist;
-    next.Fire += added.FireResist;
-    next.Cold += added.ColdResist;
-    next.Poison += added.PoisonResist;
-    next.Energy += added.EnergyResist;
-    next.Dci += added.DefenseChanceIncrease;
-    next.Hci += added.HitChanceIncrease;
-    next.Ssi += added.SwingSpeedIncrease;
-    next.Di += added.DamageIncrease;
-    next.Lrc += added.LowerReagentCost;
-    next.Lmc += added.LowerManaCost;
-    next.Fc += added.FasterCasting;
-    next.Fcr += added.FasterCastRecovery;
+    next.CastingFocus += added.CastingFocus;
+    next.DamageEater += added.DamageEater;
+    next.KineticEater += added.KineticEater;
+    next.FireEater += added.FireEater;
+    next.ColdEater += added.ColdEater;
+    next.PoisonEater += added.PoisonEater;
+    next.EnergyEater += added.EnergyEater;
+    next.SoulCharge += added.SoulCharge;
+    next.KineticResonance += added.KineticResonance;
+    next.FireResonance += added.FireResonance;
+    next.ColdResonance += added.ColdResonance;
+    next.PoisonResonance += added.PoisonResonance;
+    next.EnergyResonance += added.EnergyResonance;
+    next.ReactiveParalyze = next.ReactiveParalyze || added.ReactiveParalyze;
+    next.ManaPhase = next.ManaPhase || added.ManaPhase;
+    next.EnhancePotions += added.EnhancePotions;
+    next.SplinteringWeapon += added.SplinteringWeapon;
     return next;
 }
 
@@ -860,8 +1122,10 @@ double ScoreCappedAttr(int otherVal, int itemVal, int cap, double weight, bool b
         return static_cast<double>(itemVal) * weight;
     }
 
-    const int effBase = std::max(0, std::min(otherVal, cap));
-    const int effWith = std::max(0, std::min(otherVal + itemVal, cap));
+    // Clamp only at the upper cap so signed stats (e.g. -1 Faster Casting from Spell Channeling)
+    // retain full penalty below 0 rather than being muted as overcap.
+    const int effBase = std::min(otherVal, cap);
+    const int effWith = std::min(otherVal + itemVal, cap);
     const int effContrib = effWith - effBase;
     const int overcapContrib = itemVal - effContrib;
     return static_cast<double>(effContrib) * weight +
@@ -1016,8 +1280,9 @@ CapImpact EvaluateCappedSwap(int otherVal, int cap, int equippedVal, int hovered
     CapImpact c;
     c.RawDelta = hoveredVal - equippedVal;
     c.Cap = cap;
-    c.EffBefore = std::max(0, std::min(otherVal + equippedVal, cap));
-    c.EffAfter = std::max(0, std::min(otherVal + hoveredVal, cap));
+    // Clamp only at upper cap so signed stats (e.g. -1 FC) do not falsely mute below 0.
+    c.EffBefore = std::min(otherVal + equippedVal, cap);
+    c.EffAfter = std::min(otherVal + hoveredVal, cap);
     c.EffDelta = c.EffAfter - c.EffBefore;
     return c;
 }
@@ -1028,11 +1293,6 @@ void AnnotateCappedDeltas(
     const ParsedEquipmentStats &equipped,
     const OtherGearBaseline &base)
 {
-    if (!base.Active)
-    {
-        return;
-    }
-
     auto applyCap = [&](const wchar_t *label, int otherVal, int cap, int eqVal, int hovVal, bool isPct) {
         if (cap <= 0 || eqVal == hovVal)
         {
@@ -1063,51 +1323,124 @@ void AnnotateCappedDeltas(
         }
     };
 
-    applyCap(L"Phys Resist", base.Phys, base.MaxPhys, equipped.PhysicalResist, hovered.PhysicalResist, true);
-    applyCap(L"Fire Resist", base.Fire, base.MaxFire, equipped.FireResist, hovered.FireResist, true);
-    applyCap(L"Cold Resist", base.Cold, base.MaxCold, equipped.ColdResist, hovered.ColdResist, true);
-    applyCap(L"Poison Resist", base.Poison, base.MaxPoison, equipped.PoisonResist, hovered.PoisonResist, true);
-    applyCap(L"Energy Resist", base.Energy, base.MaxEnergy, equipped.EnergyResist, hovered.EnergyResist, true);
-
-    applyCap(L"Def Chance", base.Dci, base.MaxDci, equipped.DefenseChanceIncrease, hovered.DefenseChanceIncrease, true);
-    applyCap(L"Hit Chance", base.Hci, base.MaxHci, equipped.HitChanceIncrease, hovered.HitChanceIncrease, true);
-    applyCap(L"Swing Speed", base.Ssi, base.MaxSsi, equipped.SwingSpeedIncrease, hovered.SwingSpeedIncrease, true);
-    applyCap(L"Damage Inc", base.Di, base.MaxDi, equipped.DamageIncrease, hovered.DamageIncrease, true);
-    applyCap(L"Lower Reag", base.Lrc, base.MaxLrc, equipped.LowerReagentCost, hovered.LowerReagentCost, true);
-    applyCap(L"Lower Mana", base.Lmc, base.MaxLmc, equipped.LowerManaCost, hovered.LowerManaCost, true);
-    applyCap(L"Faster Cast", base.Fc, base.MaxFc, equipped.FasterCasting, hovered.FasterCasting, false);
-    applyCap(L"Cast Recovery", base.Fcr, base.MaxFcr, equipped.FasterCastRecovery, hovered.FasterCastRecovery, false);
-
-    // Also annotate Total Resists when effective resist change differs from raw sum
-    const int rawResDelta = hovered.TotalResists() - equipped.TotalResists();
-    if (rawResDelta != 0)
+    if (base.Active)
     {
-        const int effResDelta =
-            EvaluateCappedSwap(base.Phys, base.MaxPhys, equipped.PhysicalResist, hovered.PhysicalResist).EffDelta +
-            EvaluateCappedSwap(base.Fire, base.MaxFire, equipped.FireResist, hovered.FireResist).EffDelta +
-            EvaluateCappedSwap(base.Cold, base.MaxCold, equipped.ColdResist, hovered.ColdResist).EffDelta +
-            EvaluateCappedSwap(base.Poison, base.MaxPoison, equipped.PoisonResist, hovered.PoisonResist).EffDelta +
-            EvaluateCappedSwap(base.Energy, base.MaxEnergy, equipped.EnergyResist, hovered.EnergyResist).EffDelta;
-        if (effResDelta != rawResDelta)
+        applyCap(L"Phys Resist", base.Phys, base.MaxPhys, equipped.PhysicalResist, hovered.PhysicalResist, true);
+        applyCap(L"Fire Resist", base.Fire, base.MaxFire, equipped.FireResist, hovered.FireResist, true);
+        applyCap(L"Cold Resist", base.Cold, base.MaxCold, equipped.ColdResist, hovered.ColdResist, true);
+        applyCap(L"Poison Resist", base.Poison, base.MaxPoison, equipped.PoisonResist, hovered.PoisonResist, true);
+        applyCap(L"Energy Resist", base.Energy, base.MaxEnergy, equipped.EnergyResist, hovered.EnergyResist, true);
+
+        applyCap(L"Def Chance", base.Dci, base.MaxDci, equipped.DefenseChanceIncrease, hovered.DefenseChanceIncrease, true);
+        applyCap(L"Hit Chance", base.Hci, base.MaxHci, equipped.HitChanceIncrease, hovered.HitChanceIncrease, true);
+        applyCap(L"Swing Speed", base.Ssi, base.MaxSsi, equipped.SwingSpeedIncrease, hovered.SwingSpeedIncrease, true);
+        applyCap(L"Damage Inc", base.Di, base.MaxDi, equipped.DamageIncrease, hovered.DamageIncrease, true);
+        applyCap(L"Lower Reag", base.Lrc, base.MaxLrc, equipped.LowerReagentCost, hovered.LowerReagentCost, true);
+        applyCap(L"Lower Mana", base.Lmc, base.MaxLmc, equipped.LowerManaCost, hovered.LowerManaCost, true);
+        applyCap(L"Faster Cast", base.Fc, base.MaxFc, equipped.FasterCasting, hovered.FasterCasting, false);
+        applyCap(L"Cast Recovery", base.Fcr, base.MaxFcr, equipped.FasterCastRecovery, hovered.FasterCastRecovery, false);
+
+        // Also annotate Total Resists when effective resist change differs from raw sum
+        const int rawResDelta = hovered.TotalResists() - equipped.TotalResists();
+        if (rawResDelta != 0)
         {
-            for (auto &d : deltas)
+            const int effResDelta =
+                EvaluateCappedSwap(base.Phys, base.MaxPhys, equipped.PhysicalResist, hovered.PhysicalResist).EffDelta +
+                EvaluateCappedSwap(base.Fire, base.MaxFire, equipped.FireResist, hovered.FireResist).EffDelta +
+                EvaluateCappedSwap(base.Cold, base.MaxCold, equipped.ColdResist, hovered.ColdResist).EffDelta +
+                EvaluateCappedSwap(base.Poison, base.MaxPoison, equipped.PoisonResist, hovered.PoisonResist).EffDelta +
+                EvaluateCappedSwap(base.Energy, base.MaxEnergy, equipped.EnergyResist, hovered.EnergyResist).EffDelta;
+            if (effResDelta != rawResDelta)
             {
-                if (d.Label == L"Total Resists")
+                for (auto &d : deltas)
                 {
-                    if (effResDelta == 0)
+                    if (d.Label == L"Total Resists")
                     {
-                        d.MutedByCap = true;
-                        d.CapNote = (rawResDelta > 0) ? L"(capped)" : L"(still capped)";
+                        if (effResDelta == 0)
+                        {
+                            d.MutedByCap = true;
+                            d.CapNote = (rawResDelta > 0) ? L"(capped)" : L"(still capped)";
+                        }
+                        else
+                        {
+                            d.CapNote = L"(" + FormatInt(effResDelta, true) + L"% eff)";
+                        }
+                        break;
                     }
-                    else
-                    {
-                        d.CapNote = L"(" + FormatInt(effResDelta, true) + L"% eff)";
-                    }
-                    break;
                 }
             }
         }
     }
+
+    // SA/HS/ToL & non-0x11 cap annotations (Casting Focus 12%, Damage Eater 18%, Elemental Eaters 30% combined,
+    // Soul Charge 30%, Elemental Resonances 20%, Enhance Potions 50%, Splintering 35%, non-stacking boolean procs)
+    applyCap(L"Casting Focus", base.CastingFocus, base.MaxCastingFocus, equipped.CastingFocus, hovered.CastingFocus, true);
+    applyCap(L"Damage Eater", base.DamageEater, base.MaxDamageEater, equipped.DamageEater, hovered.DamageEater, true);
+    applyCap(L"Soul Charge", base.SoulCharge, base.MaxSoulCharge, equipped.SoulCharge, hovered.SoulCharge, true);
+    applyCap(L"Kinetic Resonance", base.KineticResonance, base.MaxResonance, equipped.KineticResonance, hovered.KineticResonance, true);
+    applyCap(L"Fire Resonance", base.FireResonance, base.MaxResonance, equipped.FireResonance, hovered.FireResonance, true);
+    applyCap(L"Cold Resonance", base.ColdResonance, base.MaxResonance, equipped.ColdResonance, hovered.ColdResonance, true);
+    applyCap(L"Poison Resonance", base.PoisonResonance, base.MaxResonance, equipped.PoisonResonance, hovered.PoisonResonance, true);
+    applyCap(L"Energy Resonance", base.EnergyResonance, base.MaxResonance, equipped.EnergyResonance, hovered.EnergyResonance, true);
+    applyCap(L"Enhance Potions", base.EnhancePotions, base.MaxEnhancePotions, equipped.EnhancePotions, hovered.EnhancePotions, true);
+    applyCap(L"Splintering", base.SplinteringWeapon, base.MaxSplinteringWeapon, equipped.SplinteringWeapon, hovered.SplinteringWeapon, true);
+
+    // Evaluate elemental eater headroom against post-swap effective Damage Eater so effDelta
+    // always shares rawDelta's sign (never inverting sign when Damage Eater also changes).
+    const int effDeAfter =
+        std::max(0, std::min(base.MaxDamageEater, base.DamageEater + hovered.DamageEater));
+    auto applyElemEaterCap = [&](const wchar_t *label, int otherElem, int eqElem, int hovElem) {
+        if (base.MaxTotalEater <= 0 || eqElem == hovElem)
+        {
+            return;
+        }
+        const CapImpact imp =
+            EvaluateCappedSwap(effDeAfter + otherElem, base.MaxTotalEater, eqElem, hovElem);
+        if (imp.EffDelta == imp.RawDelta)
+        {
+            return;
+        }
+        for (auto &d : deltas)
+        {
+            if (d.Label != label)
+            {
+                continue;
+            }
+            if (imp.EffDelta == 0)
+            {
+                d.MutedByCap = true;
+                d.CapNote = (imp.RawDelta > 0) ? L"(capped)" : L"(still capped)";
+            }
+            else
+            {
+                d.CapNote = L"(" + FormatInt(imp.EffDelta, true) + L"% eff)";
+            }
+            break;
+        }
+    };
+    applyElemEaterCap(L"Kinetic Eater", base.KineticEater, equipped.KineticEater, hovered.KineticEater);
+    applyElemEaterCap(L"Fire Eater", base.FireEater, equipped.FireEater, hovered.FireEater);
+    applyElemEaterCap(L"Cold Eater", base.ColdEater, equipped.ColdEater, hovered.ColdEater);
+    applyElemEaterCap(L"Poison Eater", base.PoisonEater, equipped.PoisonEater, hovered.PoisonEater);
+    applyElemEaterCap(L"Energy Eater", base.EnergyEater, equipped.EnergyEater, hovered.EnergyEater);
+
+    auto applyBoolCap = [&](const wchar_t *label, bool otherHas, bool eqHas, bool hovHas) {
+        if (!otherHas || eqHas == hovHas)
+        {
+            return;
+        }
+        for (auto &d : deltas)
+        {
+            if (d.Label == label)
+            {
+                d.MutedByCap = true;
+                d.CapNote = hovHas ? L"(capped)" : L"(still capped)";
+                break;
+            }
+        }
+    };
+    applyBoolCap(L"Reactive Paralyze", base.ReactiveParalyze, equipped.ReactiveParalyze, hovered.ReactiveParalyze);
+    applyBoolCap(L"Mana Phase", base.ManaPhase, equipped.ManaPhase, hovered.ManaPhase);
 }
 
 void CollectUsabilityWarnings(
@@ -1158,6 +1491,41 @@ double ScoreEquipmentOnBaseline(
     const double skillSum = EffectiveSkillBonusSum(stats, w, ctx);
     const bool capActive = base.Active;
 
+    const int effDmgEaterWith =
+        std::max(0, std::min(base.MaxDamageEater, base.DamageEater + stats.DamageEater));
+    const int elemEaterRoom = std::max(0, base.MaxTotalEater - effDmgEaterWith);
+    auto scoreSharedSA = [&](double cfW,
+                             double deW,
+                             double eeW,
+                             double scW,
+                             double rpW,
+                             double mpW,
+                             double resW) -> double {
+        double s = 0.0;
+        s += ScoreCappedAttr(base.CastingFocus, stats.CastingFocus, base.MaxCastingFocus, cfW, true);
+        s += ScoreCappedAttr(base.DamageEater, stats.DamageEater, base.MaxDamageEater, deW, true);
+        s += ScoreCappedAttr(base.KineticEater, stats.KineticEater, elemEaterRoom, eeW, true);
+        s += ScoreCappedAttr(base.FireEater, stats.FireEater, elemEaterRoom, eeW, true);
+        s += ScoreCappedAttr(base.ColdEater, stats.ColdEater, elemEaterRoom, eeW, true);
+        s += ScoreCappedAttr(base.PoisonEater, stats.PoisonEater, elemEaterRoom, eeW, true);
+        s += ScoreCappedAttr(base.EnergyEater, stats.EnergyEater, elemEaterRoom, eeW, true);
+        s += ScoreCappedAttr(base.SoulCharge, stats.SoulCharge, base.MaxSoulCharge, scW, true);
+        if (stats.ReactiveParalyze)
+        {
+            s += base.ReactiveParalyze ? (rpW * kOvercapBufferFactor) : rpW;
+        }
+        if (stats.ManaPhase)
+        {
+            s += base.ManaPhase ? (mpW * kOvercapBufferFactor) : mpW;
+        }
+        s += ScoreCappedAttr(base.KineticResonance, stats.KineticResonance, base.MaxResonance, resW, true);
+        s += ScoreCappedAttr(base.FireResonance, stats.FireResonance, base.MaxResonance, resW, true);
+        s += ScoreCappedAttr(base.ColdResonance, stats.ColdResonance, base.MaxResonance, resW, true);
+        s += ScoreCappedAttr(base.PoisonResonance, stats.PoisonResonance, base.MaxResonance, resW, true);
+        s += ScoreCappedAttr(base.EnergyResonance, stats.EnergyResonance, base.MaxResonance, resW, true);
+        return s;
+    };
+
     if (effectiveCat == EquipCategory::Weapon)
     {
         const double usability = WeaponSkillUsabilityFactor(stats, ctx);
@@ -1177,6 +1545,15 @@ double ScoreEquipmentOnBaseline(
         score += static_cast<double>(stats.HitLightning + stats.HitFireball) * w.WeaponSpellProc;
         score += static_cast<double>(stats.HitHarm + stats.HitMagicArrow + stats.HitDispel) * w.WeaponMinorProc;
         score += static_cast<double>(stats.TotalHitArea()) * w.WeaponHitArea;
+        score += stats.BattleLust ? w.WeaponBattleLust : 0.0;
+        score += ScoreCappedAttr(
+            base.SplinteringWeapon, stats.SplinteringWeapon, base.MaxSplinteringWeapon,
+            w.WeaponSplintering, true);
+        score += static_cast<double>(stats.HitCurse) * w.WeaponHitCurse;
+        score += static_cast<double>(stats.HitFatigue) * w.WeaponHitFatigue;
+        score += static_cast<double>(stats.HitManaDrain) * w.WeaponHitManaDrain;
+        score += stats.BloodDrinker ? w.WeaponBloodDrinker : 0.0;
+        score += stats.Bane ? w.WeaponBane : 0.0;
 
         score += stats.SpellChanneling ? w.WeaponSpellChanneling : 0.0;
         score += stats.UseBestSkill ? w.WeaponUseBestSkill : 0.0;
@@ -1207,7 +1584,17 @@ double ScoreEquipmentOnBaseline(
             score += static_cast<double>(std::max(0, 30 - stats.MageWeaponPenalty)) * mageWepMult;
         }
         score += static_cast<double>(stats.ReflectPhysical) * w.WeaponReflect;
-        score += static_cast<double>(stats.EnhancePotions) * w.WeaponEnhancePotions;
+        score += ScoreCappedAttr(
+            base.EnhancePotions, stats.EnhancePotions, base.MaxEnhancePotions,
+            w.WeaponEnhancePotions, true);
+        score += scoreSharedSA(
+            w.WeaponCastingFocus,
+            w.WeaponDamageEater,
+            w.WeaponElementalEater,
+            w.WeaponSoulCharge,
+            w.WeaponReactiveParalyze,
+            w.WeaponManaPhase,
+            w.WeaponResonance);
     }
     else if (effectiveCat == EquipCategory::ArmorOrShield)
     {
@@ -1236,9 +1623,19 @@ double ScoreEquipmentOnBaseline(
         score += stats.MageArmor ? w.ArmorMageArmor : 0.0;
         score += stats.SpellChanneling ? w.ArmorSpellChanneling : 0.0;
         score += static_cast<double>(stats.SelfRepair) * w.ArmorSelfRepair;
-        score += static_cast<double>(stats.EnhancePotions) * w.ArmorEnhancePotions;
+        score += ScoreCappedAttr(
+            base.EnhancePotions, stats.EnhancePotions, base.MaxEnhancePotions,
+            w.ArmorEnhancePotions, true);
         score += stats.NightSight ? w.ArmorNightSight : 0.0;
         score += static_cast<double>(stats.SlayerCount()) * w.ArmorSlayer;
+        score += scoreSharedSA(
+            w.ArmorCastingFocus,
+            w.ArmorDamageEater,
+            w.ArmorElementalEater,
+            w.ArmorSoulCharge,
+            w.ArmorReactiveParalyze,
+            w.ArmorManaPhase,
+            w.ArmorResonance);
     }
     else
     {
@@ -1264,7 +1661,9 @@ double ScoreEquipmentOnBaseline(
                  static_cast<double>(stats.RegenStam) * w.JewelRegenStam;
         score += skillSum * w.JewelSkill;
         score += static_cast<double>(stats.Luck) * w.JewelLuck;
-        score += static_cast<double>(stats.EnhancePotions) * w.JewelEnhancePotions;
+        score += ScoreCappedAttr(
+            base.EnhancePotions, stats.EnhancePotions, base.MaxEnhancePotions,
+            w.JewelEnhancePotions, true);
         score += static_cast<double>(stats.ReflectPhysical) * w.JewelReflect;
         score += stats.SpellChanneling ? w.JewelSpellChanneling : 0.0;
         score += static_cast<double>(stats.SlayerCount()) * w.JewelSlayer;
@@ -1273,6 +1672,14 @@ double ScoreEquipmentOnBaseline(
         score += static_cast<double>(stats.QuiverDamageMod) * w.JewelQuiverDmg;
         score += stats.NightSight ? w.JewelNightSight : 0.0;
         score += static_cast<double>(stats.SelfRepair) * w.JewelSelfRepair;
+        score += scoreSharedSA(
+            w.JewelCastingFocus,
+            w.JewelDamageEater,
+            w.JewelElementalEater,
+            w.JewelSoulCharge,
+            w.JewelReactiveParalyze,
+            w.JewelManaPhase,
+            w.JewelResonance);
     }
 
     score -= static_cast<double>(stats.IncreasedKarmaLoss) * 0.5;
@@ -1521,6 +1928,188 @@ bool IsPassthroughCliloc(uint32_t cliloc)
            cliloc == 1114779u;
 }
 
+bool IsIgnoredMetadataText(const wstr_t &text)
+{
+    return EqualsIgnoreCaseAscii(text, L"Minor Magic Item") ||
+           EqualsIgnoreCaseAscii(text, L"Lesser Magic Item") ||
+           EqualsIgnoreCaseAscii(text, L"Greater Magic Item") ||
+           EqualsIgnoreCaseAscii(text, L"Major Magic Item") ||
+           EqualsIgnoreCaseAscii(text, L"Lesser Artifact") ||
+           EqualsIgnoreCaseAscii(text, L"Greater Artifact") ||
+           EqualsIgnoreCaseAscii(text, L"Major Artifact") ||
+           EqualsIgnoreCaseAscii(text, L"Legendary Artifact") ||
+           EqualsIgnoreCaseAscii(text, L"Imbued") ||
+           EqualsIgnoreCaseAscii(text, L"(Imbued)");
+}
+
+bool TryParsePrefixInt(const wstr_t &text, const wchar_t *prefix, int &out)
+{
+    size_t i = 0;
+    while (prefix[i] != L'\0')
+    {
+        if (i >= text.size() || ToLowerAscii(text[i]) != ToLowerAscii(prefix[i]))
+        {
+            return false;
+        }
+        ++i;
+    }
+    if (i >= text.size() || !IsAsciiSpace(text[i]))
+    {
+        return false;
+    }
+    return ParseIntSafe(text.substr(i), out);
+}
+
+void ParsePassthroughPropertyText(const wstr_t &arg, ParsedEquipmentStats &stats)
+{
+    const wstr_t trimmed = TrimWide(arg);
+    if (trimmed.empty() || IsIgnoredMetadataText(trimmed))
+    {
+        return;
+    }
+
+    const auto parts = SplitTabs(arg);
+    if (parts.size() >= 2)
+    {
+        const wstr_t key = TrimWide(parts[0]);
+        const wstr_t val = TrimWide(parts[1]);
+        if (EqualsIgnoreCaseAscii(key, L"Material") && !val.empty())
+        {
+            stats.MaterialGrade = val;
+            return;
+        }
+        if (EqualsIgnoreCaseAscii(key, L"Weapon level"))
+        {
+            int lvl = 0;
+            if (ParseIntSafe(val, lvl) && lvl >= 0)
+            {
+                stats.WeaponLevel = lvl;
+            }
+            return;
+        }
+        if (EqualsIgnoreCaseAscii(key, L"Min Throw Range"))
+        {
+            int rng = 0;
+            if (ParseIntSafe(val, rng) && rng >= 0)
+            {
+                stats.MinThrowRange = rng;
+            }
+            return;
+        }
+    }
+
+    // Boolean SA/HS/ToL & ranged property text lines (case-insensitive)
+    if (EqualsIgnoreCaseAscii(trimmed, L"Reactive Paralyze"))
+    {
+        stats.ReactiveParalyze = true;
+        return;
+    }
+    if (EqualsIgnoreCaseAscii(trimmed, L"Mana Phase"))
+    {
+        stats.ManaPhase = true;
+        return;
+    }
+    if (EqualsIgnoreCaseAscii(trimmed, L"Battle Lust"))
+    {
+        stats.BattleLust = true;
+        return;
+    }
+    if (EqualsIgnoreCaseAscii(trimmed, L"Blood Drinker"))
+    {
+        stats.BloodDrinker = true;
+        return;
+    }
+    if (EqualsIgnoreCaseAscii(trimmed, L"Bane"))
+    {
+        stats.Bane = true;
+        return;
+    }
+    if (EqualsIgnoreCaseAscii(trimmed, L"Balanced"))
+    {
+        stats.Balanced = true;
+        return;
+    }
+
+    // Numeric SA/HS/ToL & ranged property text lines (e.g. "Casting Focus 6%", "splintering weapon 25%")
+    int intVal = 0;
+    if (TryParsePrefixInt(trimmed, L"Casting Focus", intVal))
+    {
+        stats.CastingFocus = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Damage Eater", intVal))
+    {
+        stats.DamageEater = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Kinetic Eater", intVal))
+    {
+        stats.KineticEater = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Fire Eater", intVal))
+    {
+        stats.FireEater = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Cold Eater", intVal))
+    {
+        stats.ColdEater = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Poison Eater", intVal))
+    {
+        stats.PoisonEater = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Energy Eater", intVal))
+    {
+        stats.EnergyEater = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Soul Charge", intVal))
+    {
+        stats.SoulCharge = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Kinetic Resonance", intVal))
+    {
+        stats.KineticResonance = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Fire Resonance", intVal))
+    {
+        stats.FireResonance = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Cold Resonance", intVal))
+    {
+        stats.ColdResonance = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Poison Resonance", intVal))
+    {
+        stats.PoisonResonance = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Energy Resonance", intVal))
+    {
+        stats.EnergyResonance = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Splintering Weapon", intVal))
+    {
+        stats.SplinteringWeapon = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Hit Curse", intVal))
+    {
+        stats.HitCurse = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Hit Fatigue", intVal))
+    {
+        stats.HitFatigue = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Hit Mana Drain", intVal))
+    {
+        stats.HitManaDrain = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Velocity", intVal))
+    {
+        stats.Velocity = intVal;
+    }
+    else if (TryParsePrefixInt(trimmed, L"Min Throw Range", intVal) && intVal >= 0)
+    {
+        stats.MinThrowRange = intVal;
+    }
+}
+
 bool IsRingFamilyLayer(int layer)
 {
     return layer == OL_RING || layer == OL_RING_2 || layer == OL_RING_3 || layer == OL_RING_4 ||
@@ -1713,14 +2302,27 @@ int DeltaPriority(const EquipmentStatDelta &d)
     }
     if (d.Label == L"Damage Inc" || d.Label == L"Swing Speed" || d.Label == L"Hit Chance" ||
         d.Label == L"Def Chance" || d.Label == L"Spell Damage" || d.Label == L"Lower Mana" ||
-        d.Label == L"Faster Cast" || d.Label == L"Cast Recovery")
+        d.Label == L"Faster Cast" || d.Label == L"Cast Recovery" || d.Label == L"Damage Eater" ||
+        d.Label == L"Casting Focus" || d.Label == L"Splintering" || d.Label == L"Battle Lust" ||
+        d.Label == L"Bane")
     {
         return 70;
     }
     if (d.Label == L"Spell Channeling" || d.Label == L"Mage Armor" || d.Label == L"Slayers" ||
-        d.Label == L"Life Leech" || d.Label == L"Mana Leech" || d.Label == L"Stam Leech")
+        d.Label == L"Life Leech" || d.Label == L"Mana Leech" || d.Label == L"Stam Leech" ||
+        d.Label == L"Soul Charge" || d.Label == L"Reactive Paralyze" || d.Label == L"Mana Phase" ||
+        d.Label == L"Blood Drinker" || d.Label == L"Hit Curse" || d.Label == L"Hit Fatigue" ||
+        d.Label == L"Hit Mana Drain" || d.Label == L"Kinetic Eater" || d.Label == L"Fire Eater" ||
+        d.Label == L"Cold Eater" || d.Label == L"Poison Eater" || d.Label == L"Energy Eater" ||
+        d.Label == L"Balanced" || d.Label == L"Velocity")
     {
         return 60;
+    }
+    if (d.Label == L"Kinetic Resonance" || d.Label == L"Fire Resonance" ||
+        d.Label == L"Cold Resonance" || d.Label == L"Poison Resonance" ||
+        d.Label == L"Energy Resonance")
+    {
+        return 50;
     }
     return 40;
 }
@@ -1874,10 +2476,29 @@ void CollectSharedAttributeDeltas(
         equipped.IncreasedKarmaLoss,
         true,
         true /*LowerIsBetter*/);
+    AddIntDelta(deltas, L"Casting Focus", hovered.CastingFocus, equipped.CastingFocus, true);
+    AddIntDelta(deltas, L"Damage Eater", hovered.DamageEater, equipped.DamageEater, true);
+    AddIntDelta(deltas, L"Kinetic Eater", hovered.KineticEater, equipped.KineticEater, true);
+    AddIntDelta(deltas, L"Fire Eater", hovered.FireEater, equipped.FireEater, true);
+    AddIntDelta(deltas, L"Cold Eater", hovered.ColdEater, equipped.ColdEater, true);
+    AddIntDelta(deltas, L"Poison Eater", hovered.PoisonEater, equipped.PoisonEater, true);
+    AddIntDelta(deltas, L"Energy Eater", hovered.EnergyEater, equipped.EnergyEater, true);
 
     // Weapon & Armor attributes
     AddBoolDelta(deltas, L"Use Best Skill", hovered.UseBestSkill, equipped.UseBestSkill);
     AddBoolDelta(deltas, L"Mage Armor", hovered.MageArmor, equipped.MageArmor);
+    AddBoolDelta(
+        deltas, L"Reactive Paralyze", hovered.ReactiveParalyze, equipped.ReactiveParalyze);
+    AddIntDelta(deltas, L"Soul Charge", hovered.SoulCharge, equipped.SoulCharge, true);
+    AddBoolDelta(deltas, L"Mana Phase", hovered.ManaPhase, equipped.ManaPhase);
+    AddIntDelta(
+        deltas, L"Kinetic Resonance", hovered.KineticResonance, equipped.KineticResonance, true);
+    AddIntDelta(deltas, L"Fire Resonance", hovered.FireResonance, equipped.FireResonance, true);
+    AddIntDelta(deltas, L"Cold Resonance", hovered.ColdResonance, equipped.ColdResonance, true);
+    AddIntDelta(
+        deltas, L"Poison Resonance", hovered.PoisonResonance, equipped.PoisonResonance, true);
+    AddIntDelta(
+        deltas, L"Energy Resonance", hovered.EnergyResonance, equipped.EnergyResonance, true);
     AddBoolDelta(deltas, L"Balanced", hovered.Balanced, equipped.Balanced);
     AddIntDelta(deltas, L"Velocity", hovered.Velocity, equipped.Velocity, true);
 
@@ -1921,6 +2542,14 @@ void CollectSharedAttributeDeltas(
     AddIntDelta(deltas, L"Hit Fire Area", hovered.HitFireArea, equipped.HitFireArea, true);
     AddIntDelta(deltas, L"Hit Phys Area", hovered.HitPhysicalArea, equipped.HitPhysicalArea, true);
     AddIntDelta(deltas, L"Hit Poison Area", hovered.HitPoisonArea, equipped.HitPoisonArea, true);
+    AddBoolDelta(deltas, L"Battle Lust", hovered.BattleLust, equipped.BattleLust);
+    AddIntDelta(
+        deltas, L"Splintering", hovered.SplinteringWeapon, equipped.SplinteringWeapon, true);
+    AddIntDelta(deltas, L"Hit Curse", hovered.HitCurse, equipped.HitCurse, true);
+    AddIntDelta(deltas, L"Hit Fatigue", hovered.HitFatigue, equipped.HitFatigue, true);
+    AddIntDelta(deltas, L"Hit Mana Drain", hovered.HitManaDrain, equipped.HitManaDrain, true);
+    AddBoolDelta(deltas, L"Blood Drinker", hovered.BloodDrinker, equipped.BloodDrinker);
+    AddBoolDelta(deltas, L"Bane", hovered.Bane, equipped.Bane);
     AddIntDelta(deltas, L"Self Repair", hovered.SelfRepair, equipped.SelfRepair, false);
 
     // Resists
@@ -2057,6 +2686,13 @@ ParsedEquipmentStats CombineStatsForComparison(
     sum.EnhancePotions = eqA.EnhancePotions + eqB.EnhancePotions;
     sum.NightSight = eqA.NightSight || eqB.NightSight;
     sum.IncreasedKarmaLoss = eqA.IncreasedKarmaLoss + eqB.IncreasedKarmaLoss;
+    sum.CastingFocus = eqA.CastingFocus + eqB.CastingFocus;
+    sum.DamageEater = eqA.DamageEater + eqB.DamageEater;
+    sum.KineticEater = eqA.KineticEater + eqB.KineticEater;
+    sum.FireEater = eqA.FireEater + eqB.FireEater;
+    sum.ColdEater = eqA.ColdEater + eqB.ColdEater;
+    sum.PoisonEater = eqA.PoisonEater + eqB.PoisonEater;
+    sum.EnergyEater = eqA.EnergyEater + eqB.EnergyEater;
 
     sum.UseBestSkill = eqA.UseBestSkill || eqB.UseBestSkill;
     if (eqA.HasMageWeapon && eqB.HasMageWeapon)
@@ -2090,8 +2726,23 @@ ParsedEquipmentStats CombineStatsForComparison(
     sum.HitFireArea = eqA.HitFireArea + eqB.HitFireArea;
     sum.HitPhysicalArea = eqA.HitPhysicalArea + eqB.HitPhysicalArea;
     sum.HitPoisonArea = eqA.HitPoisonArea + eqB.HitPoisonArea;
+    sum.BattleLust = eqA.BattleLust || eqB.BattleLust;
+    sum.SplinteringWeapon = eqA.SplinteringWeapon + eqB.SplinteringWeapon;
+    sum.HitCurse = eqA.HitCurse + eqB.HitCurse;
+    sum.HitFatigue = eqA.HitFatigue + eqB.HitFatigue;
+    sum.HitManaDrain = eqA.HitManaDrain + eqB.HitManaDrain;
+    sum.BloodDrinker = eqA.BloodDrinker || eqB.BloodDrinker;
+    sum.Bane = eqA.Bane || eqB.Bane;
     sum.SelfRepair = eqA.SelfRepair + eqB.SelfRepair;
     sum.MageArmor = eqA.MageArmor || eqB.MageArmor;
+    sum.ReactiveParalyze = eqA.ReactiveParalyze || eqB.ReactiveParalyze;
+    sum.SoulCharge = eqA.SoulCharge + eqB.SoulCharge;
+    sum.ManaPhase = eqA.ManaPhase || eqB.ManaPhase;
+    sum.KineticResonance = eqA.KineticResonance + eqB.KineticResonance;
+    sum.FireResonance = eqA.FireResonance + eqB.FireResonance;
+    sum.ColdResonance = eqA.ColdResonance + eqB.ColdResonance;
+    sum.PoisonResonance = eqA.PoisonResonance + eqB.PoisonResonance;
+    sum.EnergyResonance = eqA.EnergyResonance + eqB.EnergyResonance;
 
     sum.PhysicalResist = eqA.PhysicalResist + eqB.PhysicalResist;
     sum.FireResist = eqA.FireResist + eqB.FireResist;
@@ -2179,12 +2830,14 @@ EquipCategory InferEquippedCategory(
         const bool looksLikeArmorOrShield = equipped.TotalResists() > 0 || equipped.MageArmor ||
                                             equipped.HasDurability ||
                                             equipped.DefenseChanceIncrease > 0 ||
-                                            equipped.ReflectPhysical > 0;
+                                            equipped.ReflectPhysical > 0 ||
+                                            equipped.SoulCharge > 0 || equipped.ReactiveParalyze ||
+                                            equipped.ManaPhase || equipped.TotalResonances() > 0;
         const bool looksLikeUtility =
             equipped.SpellDamageIncrease > 0 || equipped.FasterCasting > 0 ||
             equipped.FasterCastRecovery > 0 || equipped.LowerReagentCost > 0 ||
-            equipped.TalismanKiller > 0 || equipped.TalismanProtection > 0 ||
-            equipped.QuiverDamageMod > 0;
+            equipped.CastingFocus > 0 || equipped.TalismanKiller > 0 ||
+            equipped.TalismanProtection > 0 || equipped.QuiverDamageMod > 0;
         if (looksLikeUtility && !looksLikeArmorOrShield)
         {
             return EquipCategory::JewelryOrUtility;
@@ -2262,6 +2915,10 @@ wstr_t FormatDeltaLine(const EquipmentStatDelta &d)
         if (!d.DetailText.empty())
         {
             line += L" " + SanitizeAsciiLabel(d.DetailText);
+        }
+        if (!d.CapNote.empty())
+        {
+            line += wstr_t(kColorMuted) + L" " + SanitizeAsciiLabel(d.CapNote);
         }
         line += kColorWhite;
         return line;
@@ -2350,7 +3007,9 @@ void AppendComparisonBlock(
 void AppendEmptySlotSummaryLines(
     wstr_t &html,
     const ParsedEquipmentStats &stats,
-    EquipCategory category)
+    EquipCategory category,
+    const OtherGearBaseline &base,
+    const CharacterCompareContext *ctx)
 {
     auto addStat = [&](const wchar_t *label, const wstr_t &val) {
         html += wstr_t(kColorGreen) + L"+ " + val + L" " + label + kColorWhite + L"\n";
@@ -2358,9 +3017,10 @@ void AppendEmptySlotSummaryLines(
 
     if (stats.HasWeaponDamage)
     {
-        if (stats.EffectiveDps() > 0.0)
+        const double effDps = EffectiveDpsOnBaseline(stats, base, ctx);
+        if (effDps > 0.0)
         {
-            addStat(L"Eff DPS", FormatFloat1(stats.EffectiveDps(), false));
+            addStat(L"Eff DPS", FormatFloat1(effDps, false));
         }
         if (stats.BaseDps() > 0.0)
         {
@@ -2403,6 +3063,11 @@ void AppendEmptySlotSummaryLines(
     {
         addStat(L"Faster Cast", FormatInt(stats.FasterCasting, false));
     }
+    else if (stats.FasterCasting < 0)
+    {
+        html += wstr_t(kColorRed) + FormatInt(stats.FasterCasting, true) + L" Faster Cast" +
+                kColorWhite + L"\n";
+    }
     if (stats.FasterCastRecovery > 0)
     {
         addStat(L"Cast Recovery", FormatInt(stats.FasterCastRecovery, false));
@@ -2410,6 +3075,70 @@ void AppendEmptySlotSummaryLines(
     if (stats.SpellChanneling)
     {
         html += wstr_t(kColorGreen) + L"+ Spell Channeling" + kColorWhite + L"\n";
+    }
+    if (stats.CastingFocus > 0)
+    {
+        addStat(L"Casting Focus", FormatInt(stats.CastingFocus, false) + L"%");
+    }
+    if (stats.DamageEater > 0)
+    {
+        addStat(L"Damage Eater", FormatInt(stats.DamageEater, false) + L"%");
+    }
+    if (stats.TotalElementalEaters() > 0)
+    {
+        addStat(L"Elem Eaters", FormatInt(stats.TotalElementalEaters(), false) + L"%");
+    }
+    if (stats.SoulCharge > 0)
+    {
+        addStat(L"Soul Charge", FormatInt(stats.SoulCharge, false) + L"%");
+    }
+    if (stats.ReactiveParalyze)
+    {
+        html += wstr_t(kColorGreen) + L"+ Reactive Paralyze" + kColorWhite + L"\n";
+    }
+    if (stats.ManaPhase)
+    {
+        html += wstr_t(kColorGreen) + L"+ Mana Phase" + kColorWhite + L"\n";
+    }
+    if (stats.TotalResonances() > 0)
+    {
+        addStat(L"Resonances", FormatInt(stats.TotalResonances(), false) + L"%");
+    }
+    if (stats.Balanced)
+    {
+        html += wstr_t(kColorGreen) + L"+ Balanced" + kColorWhite + L"\n";
+    }
+    if (stats.Velocity > 0)
+    {
+        addStat(L"Velocity", FormatInt(stats.Velocity, false) + L"%");
+    }
+    if (stats.BattleLust)
+    {
+        html += wstr_t(kColorGreen) + L"+ Battle Lust" + kColorWhite + L"\n";
+    }
+    if (stats.SplinteringWeapon > 0)
+    {
+        addStat(L"Splintering", FormatInt(stats.SplinteringWeapon, false) + L"%");
+    }
+    if (stats.HitCurse > 0)
+    {
+        addStat(L"Hit Curse", FormatInt(stats.HitCurse, false) + L"%");
+    }
+    if (stats.HitFatigue > 0)
+    {
+        addStat(L"Hit Fatigue", FormatInt(stats.HitFatigue, false) + L"%");
+    }
+    if (stats.HitManaDrain > 0)
+    {
+        addStat(L"Hit Mana Drain", FormatInt(stats.HitManaDrain, false) + L"%");
+    }
+    if (stats.BloodDrinker)
+    {
+        html += wstr_t(kColorGreen) + L"+ Blood Drinker" + kColorWhite + L"\n";
+    }
+    if (stats.Bane)
+    {
+        html += wstr_t(kColorGreen) + L"+ Bane" + kColorWhite + L"\n";
     }
     if (stats.TotalSkillBonuses() > 0.0)
     {
@@ -2464,6 +3193,8 @@ wstr_t DefaultSlotLabelForItem(const EquipmentCompareItemInput &item)
             return L"Helmet";
         case OL_NECKLACE:
             return L"Necklace";
+        case OL_15:
+            return L"Face";
         case OL_TORSO:
         case OL_TUNIC:
             return L"Chest";
@@ -2623,6 +3354,16 @@ int ParsedEquipmentStats::TotalHitArea() const
     return HitColdArea + HitEnergyArea + HitFireArea + HitPhysicalArea + HitPoisonArea;
 }
 
+int ParsedEquipmentStats::TotalElementalEaters() const
+{
+    return KineticEater + FireEater + ColdEater + PoisonEater + EnergyEater;
+}
+
+int ParsedEquipmentStats::TotalResonances() const
+{
+    return KineticResonance + FireResonance + ColdResonance + PoisonResonance + EnergyResonance;
+}
+
 int ParsedEquipmentStats::SlayerCount() const
 {
     return static_cast<int>(SlayerClilocs.size());
@@ -2683,12 +3424,6 @@ ParsedEquipmentStats ParseEquipmentOpl(const OplPropertyList &props)
                 if (ParseIntSafe(arg, intVal))
                 {
                     stats.MaxRange = intVal;
-                }
-                break;
-            case 1149791u:
-                if (ParseIntSafe(arg, intVal))
-                {
-                    stats.MinThrowRange = intVal;
                 }
                 break;
             case 1061172u:
@@ -2899,6 +3634,48 @@ ParsedEquipmentStats ParseEquipmentOpl(const OplPropertyList &props)
                     stats.IncreasedKarmaLoss = intVal;
                 }
                 break;
+            case 1113696u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.CastingFocus = intVal;
+                }
+                break;
+            case 1113598u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.DamageEater = intVal;
+                }
+                break;
+            case 1113597u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.KineticEater = intVal;
+                }
+                break;
+            case 1113593u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.FireEater = intVal;
+                }
+                break;
+            case 1113594u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.ColdEater = intVal;
+                }
+                break;
+            case 1113595u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.PoisonEater = intVal;
+                }
+                break;
+            case 1113596u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.EnergyEater = intVal;
+                }
+                break;
 
             // Weapon & Armor attributes
             case 1060400u:
@@ -3009,6 +3786,94 @@ ParsedEquipmentStats ParseEquipmentOpl(const OplPropertyList &props)
                 break;
             case 1060437u:
                 stats.MageArmor = true;
+                break;
+            case 1113710u:
+                stats.BattleLust = true;
+                break;
+            case 1112857u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.SplinteringWeapon = intVal;
+                }
+                break;
+            case 1113712u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.HitCurse = intVal;
+                }
+                break;
+            case 1113700u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.HitFatigue = intVal;
+                }
+                break;
+            case 1113699u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.HitManaDrain = intVal;
+                }
+                break;
+            case 1113591u:
+                stats.BloodDrinker = true;
+                break;
+            case 1154671u:
+                stats.Bane = true;
+                break;
+            case 1112364u:
+            case 1154660u:
+                stats.ReactiveParalyze = true;
+                break;
+            case 1113630u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.SoulCharge = intVal;
+                }
+                break;
+            case 1116158u:
+                stats.ManaPhase = true;
+                break;
+            case 1113695u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.KineticResonance = intVal;
+                }
+                break;
+            case 1113691u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.FireResonance = intVal;
+                }
+                break;
+            case 1113692u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.ColdResonance = intVal;
+                }
+                break;
+            case 1113693u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.PoisonResonance = intVal;
+                }
+                break;
+            case 1113694u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.EnergyResonance = intVal;
+                }
+                break;
+
+            // Ignored Publish 81 rarity tier headers & Imbued metadata tag
+            case 1151488u: // Minor Magic Item
+            case 1151489u: // Lesser Magic Item
+            case 1151490u: // Greater Magic Item
+            case 1151491u: // Major Magic Item
+            case 1151492u: // Lesser Artifact
+            case 1151493u: // Greater Artifact
+            case 1151494u: // Major Artifact
+            case 1151495u: // Legendary Artifact
+            case 1080418u: // Imbued
                 break;
 
             // Resists
@@ -3163,24 +4028,7 @@ ParsedEquipmentStats ParseEquipmentOpl(const OplPropertyList &props)
                 }
                 else if (IsPassthroughCliloc(cliloc))
                 {
-                    const auto parts = SplitTabs(arg);
-                    if (parts.size() >= 2)
-                    {
-                        const wstr_t key = TrimWide(parts[0]);
-                        const wstr_t val = TrimWide(parts[1]);
-                        if (EqualsIgnoreCaseAscii(key, L"Material") && !val.empty())
-                        {
-                            stats.MaterialGrade = val;
-                        }
-                        else if (EqualsIgnoreCaseAscii(key, L"Weapon level"))
-                        {
-                            int lvl = 0;
-                            if (ParseIntSafe(val, lvl) && lvl >= 0)
-                            {
-                                stats.WeaponLevel = lvl;
-                            }
-                        }
-                    }
+                    ParsePassthroughPropertyText(arg, stats);
                 }
                 break;
             }
@@ -3213,8 +4061,10 @@ EquipCategory ClassifyEquipmentCategory(
 
     if (tileLayer == OL_NECKLACE)
     {
-        // Gorgets carry armor resists/durability; necklaces behave as jewelry
-        if (stats.TotalResists() > 0 || stats.MageArmor || stats.HasDurability)
+        // Gorgets carry armor resists/durability/armor attrs; necklaces behave as jewelry
+        if (stats.TotalResists() > 0 || stats.MageArmor || stats.HasDurability ||
+            stats.SoulCharge > 0 || stats.ReactiveParalyze || stats.ManaPhase ||
+            stats.TotalResonances() > 0)
         {
             return EquipCategory::ArmorOrShield;
         }
@@ -3232,6 +4082,7 @@ EquipCategory ClassifyEquipmentCategory(
         case OL_GLOVES:
         case OL_WAIST:
         case OL_TORSO:
+        case OL_15:
         case OL_TUNIC:
         case OL_ARMS:
         case OL_CLOAK:
@@ -3256,9 +4107,11 @@ EquipCategory ClassifyEquipmentCategory(
     if (tileLayer == OL_2_HAND)
     {
         // Shields on OL_2_HAND also carry TileFlag.Weapon in tiledata.mul, but lack
-        // weapon OPL clilocs and carry armor resists/durability/DCI instead.
+        // weapon OPL clilocs and carry armor resists/durability/DCI/armor attrs instead.
         if (stats.TotalResists() > 0 || stats.MageArmor || stats.HasDurability ||
-            stats.DefenseChanceIncrease > 0 || stats.ReflectPhysical > 0)
+            stats.DefenseChanceIncrease > 0 || stats.ReflectPhysical > 0 ||
+            stats.SoulCharge > 0 || stats.ReactiveParalyze || stats.ManaPhase ||
+            stats.TotalResonances() > 0)
         {
             return EquipCategory::ArmorOrShield;
         }
@@ -3279,7 +4132,8 @@ EquipCategory ClassifyEquipmentCategory(
         return EquipCategory::JewelryOrUtility;
     }
 
-    if (stats.TotalResists() > 0 || stats.MageArmor)
+    if (stats.TotalResists() > 0 || stats.MageArmor || stats.SoulCharge > 0 ||
+        stats.ReactiveParalyze || stats.ManaPhase || stats.TotalResonances() > 0)
     {
         return EquipCategory::ArmorOrShield;
     }
@@ -3321,6 +4175,16 @@ double ScoreEquipment(
     const ParsedEquipmentStats emptyRemoved;
     const OtherGearBaseline base = MakeBaselineWithout(ctx, emptyRemoved, weights);
     return ScoreEquipmentOnBaseline(stats, category, weights, base, ctx);
+}
+
+double ScoreEquippedItemForReplacement(
+    const ParsedEquipmentStats &equipped,
+    EquipCategory category,
+    const CharacterCompareContext *ctx)
+{
+    const BuildStatWeights weights = ResolveBuildWeights(ctx);
+    const OtherGearBaseline base = MakeBaselineWithout(ctx, equipped, weights);
+    return ScoreEquipmentOnBaseline(equipped, category, weights, base, ctx);
 }
 
 UpgradeVerdict ClassifyVerdict(double scoreDelta, double equippedScore)
@@ -3458,6 +4322,7 @@ EquipmentComparisonEntry CompareAgainstCombinedStats(
     const EquipCategory catA = InferEquippedCategory(eqA, EquipCategory::Weapon);
     const EquipCategory catB = InferEquippedCategory(eqB, EquipCategory::Weapon);
     const OtherGearBaseline baseAfterA = AdvanceBaseline(base, eqA);
+    const OtherGearBaseline baseAfterB = AdvanceBaseline(base, eqB);
     entry.EquippedScore = ScoreEquipmentOnBaseline(eqA, catA, weights, base, ctx) +
                           ScoreEquipmentOnBaseline(eqB, catB, weights, baseAfterA, ctx);
     entry.ScoreDelta = entry.HoveredScore - entry.EquippedScore;
@@ -3466,8 +4331,9 @@ EquipmentComparisonEntry CompareAgainstCombinedStats(
 
     CollectUsabilityWarnings(entry.Warnings, hovered, ctx);
 
-    // Combined independent-hand DPS (dual-wield swings both hands; 1H+shield swings 1H only)
-    const double eqEffDps = (eqA.HasWeaponDamage ? EffectiveDpsOnBaseline(eqA, base, ctx) : 0.0) +
+    // Combined independent-hand DPS (dual-wield swings both hands; 1H+shield swings 1H only).
+    // Each hand benefits from the OTHER hand's SSI/DI while both hands are equipped together.
+    const double eqEffDps = (eqA.HasWeaponDamage ? EffectiveDpsOnBaseline(eqA, baseAfterB, ctx) : 0.0) +
                             (eqB.HasWeaponDamage ? EffectiveDpsOnBaseline(eqB, baseAfterA, ctx) : 0.0);
     const double eqBaseDps = (eqA.HasWeaponDamage ? eqA.BaseDps() : 0.0) +
                              (eqB.HasWeaponDamage ? eqB.BaseDps() : 0.0);
@@ -3499,8 +4365,13 @@ EquipmentCompareResult BuildEquipmentComparison(
     }
 
     const ParsedEquipmentStats hoveredStats = ParseEquipmentOpl(hovered.Properties);
+    // Core 2H weapons (Bow/Crossbow/HeavyCrossbow/BattleAxe/WarHammer) have tiledata Layer == 1
+    // despite emitting cliloc 1061171 ("two-handed weapon"); prefer OPL handedness when present.
+    const int hoveredEffectiveLayer =
+        hoveredStats.IsTwoHanded ? OL_2_HAND
+                                 : (hoveredStats.IsOneHanded ? OL_1_HAND : hovered.Layer);
     const EquipCategory hoveredCat =
-        ClassifyEquipmentCategory(hoveredStats, hovered.Layer, hovered.IsWeapon);
+        ClassifyEquipmentCategory(hoveredStats, hoveredEffectiveLayer, hovered.IsWeapon);
     const bool hoveredIsWeapon = (hoveredCat == EquipCategory::Weapon);
     const BuildStatWeights weights = ResolveBuildWeights(ctx);
     const wstr_t headerTitle = (ctx != nullptr && ctx->Valid)
@@ -3514,13 +4385,16 @@ EquipmentCompareResult BuildEquipmentComparison(
     const wstr_t openSlotBanner =
         hasOpenSlot ? (L"Open slot available (" + FormatInt(occupiedSlotsInFamily, false) + L"/" +
                        FormatInt(totalSlotsInFamily, false) + L" " +
-                       SlotFamilyPluralName(hovered.Layer) + L")")
+                       SlotFamilyPluralName(hoveredEffectiveLayer) + L")")
                     : wstr_t{};
 
     // Case 1: Empty slot (nothing equipped in matching slot family)
     if (equippedTargets.empty())
     {
-        const double hoveredScore = ScoreEquipment(hoveredStats, hoveredCat, ctx);
+        const ParsedEquipmentStats emptyRemoved;
+        const OtherGearBaseline emptyBase = MakeBaselineWithout(ctx, emptyRemoved, weights);
+        const double hoveredScore =
+            ScoreEquipmentOnBaseline(hoveredStats, hoveredCat, weights, emptyBase, ctx);
         const UpgradeVerdict emptyVerdict = ClassifyVerdict(hoveredScore, 0.0);
         EquipmentComparisonEntry emptyEntry;
         emptyEntry.TargetLabel = L"Empty Slot";
@@ -3553,7 +4427,7 @@ EquipmentCompareResult BuildEquipmentComparison(
         }
         html += wstr_t(kColorGray) + L"Score: " + kColorWhite +
                 FormatFloat1(hoveredScore, false) + L"\n";
-        AppendEmptySlotSummaryLines(html, hoveredStats, hoveredCat);
+        AppendEmptySlotSummaryLines(html, hoveredStats, hoveredCat, emptyBase, ctx);
         TrimTrailingNewline(html);
         card.HtmlText = std::move(html);
         result.SideCards.push_back(std::move(card));
@@ -3570,7 +4444,7 @@ EquipmentCompareResult BuildEquipmentComparison(
     }
 
     const bool isCombinedTwoHanded =
-        (equippedTargets.size() == 2) && (hovered.Layer == OL_2_HAND) && hoveredIsWeapon;
+        (equippedTargets.size() == 2) && (hoveredEffectiveLayer == OL_2_HAND) && hoveredIsWeapon;
 
     ComparisonCardOutput compareCard;
     compareCard.AlignLeft = true;
@@ -3618,6 +4492,14 @@ EquipmentCompareResult BuildEquipmentComparison(
         // 1 or 2 independent targets (single slot, 1H vs Dual-Wield, 2 Bracelets, 2 Earrings, Weakest Ring)
         std::vector<wstr_t> notes;
         const size_t targetCount = std::min<size_t>(2, equippedTargets.size());
+        ParsedEquipmentStats parsedTargets[2];
+        for (size_t i = 0; i < targetCount; ++i)
+        {
+            if (equippedTargets[i].PropertiesLoaded)
+            {
+                parsedTargets[i] = ParseEquipmentOpl(equippedTargets[i].Properties);
+            }
+        }
         for (size_t i = 0; i < targetCount; ++i)
         {
             const auto &eq = equippedTargets[i];
@@ -3625,7 +4507,7 @@ EquipmentCompareResult BuildEquipmentComparison(
             {
                 continue;
             }
-            const ParsedEquipmentStats eqStats = ParseEquipmentOpl(eq.Properties);
+            const ParsedEquipmentStats &eqStats = parsedTargets[i];
             wstr_t targetLabel = DefaultSlotLabelForItem(eq);
 
             // Annotate multi-ring weakest swap with count if not already present
@@ -3637,20 +4519,65 @@ EquipmentCompareResult BuildEquipmentComparison(
             }
 
             wstr_t note;
-            if (equippedTargets.size() == 1 && hovered.Layer == OL_1_HAND && hoveredIsWeapon &&
+            if (equippedTargets.size() == 1 && hoveredEffectiveLayer == OL_1_HAND && hoveredIsWeapon &&
                 eq.Layer == OL_2_HAND)
             {
                 note = L"Replaces 2H weapon";
             }
             else if (
-                equippedTargets.size() == 1 && hovered.Layer == OL_2_HAND && !hoveredIsWeapon &&
+                equippedTargets.size() == 1 && hoveredEffectiveLayer == OL_2_HAND && !hoveredIsWeapon &&
                 ClassifyEquipmentCategory(eqStats, eq.Layer, eq.IsWeapon) == EquipCategory::Weapon)
             {
                 note = L"Replaces Off-Hand / 2H";
             }
 
+            // When comparing against 2 independent targets (2 Bracelets, 2 Earrings, or 1H vs
+            // Dual-Wield), replacing target i keeps sibling (1 - i) worn. Include sibling's stats
+            // in OtherEquipped* so capped resists/SA/EP/Splintering baselines remain exact.
+            CharacterCompareContext perTargetCtx;
+            const CharacterCompareContext *effectiveCtx = ctx;
+            if (targetCount == 2u && ctx != nullptr && ctx->Valid)
+            {
+                const size_t siblingIdx = 1u - i;
+                if (equippedTargets[siblingIdx].PropertiesLoaded)
+                {
+                    perTargetCtx = *ctx;
+                    const ParsedEquipmentStats &sib = parsedTargets[siblingIdx];
+                    if (perTargetCtx.HasStatusTotals)
+                    {
+                        perTargetCtx.HasOtherEquippedResists = true;
+                        perTargetCtx.OtherEquippedPhysicalResist += sib.PhysicalResist;
+                        perTargetCtx.OtherEquippedFireResist += sib.FireResist;
+                        perTargetCtx.OtherEquippedColdResist += sib.ColdResist;
+                        perTargetCtx.OtherEquippedPoisonResist += sib.PoisonResist;
+                        perTargetCtx.OtherEquippedEnergyResist += sib.EnergyResist;
+                    }
+                    perTargetCtx.HasOtherEquippedSAStats = true;
+                    perTargetCtx.OtherEquippedCastingFocus += sib.CastingFocus;
+                    perTargetCtx.OtherEquippedDamageEater += sib.DamageEater;
+                    perTargetCtx.OtherEquippedKineticEater += sib.KineticEater;
+                    perTargetCtx.OtherEquippedFireEater += sib.FireEater;
+                    perTargetCtx.OtherEquippedColdEater += sib.ColdEater;
+                    perTargetCtx.OtherEquippedPoisonEater += sib.PoisonEater;
+                    perTargetCtx.OtherEquippedEnergyEater += sib.EnergyEater;
+                    perTargetCtx.OtherEquippedSoulCharge += sib.SoulCharge;
+                    perTargetCtx.OtherEquippedKineticResonance += sib.KineticResonance;
+                    perTargetCtx.OtherEquippedFireResonance += sib.FireResonance;
+                    perTargetCtx.OtherEquippedColdResonance += sib.ColdResonance;
+                    perTargetCtx.OtherEquippedPoisonResonance += sib.PoisonResonance;
+                    perTargetCtx.OtherEquippedEnergyResonance += sib.EnergyResonance;
+                    perTargetCtx.OtherEquippedReactiveParalyze =
+                        perTargetCtx.OtherEquippedReactiveParalyze || sib.ReactiveParalyze;
+                    perTargetCtx.OtherEquippedManaPhase =
+                        perTargetCtx.OtherEquippedManaPhase || sib.ManaPhase;
+                    perTargetCtx.OtherEquippedEnhancePotions += sib.EnhancePotions;
+                    perTargetCtx.OtherEquippedSplinteringWeapon += sib.SplinteringWeapon;
+                    effectiveCtx = &perTargetCtx;
+                }
+            }
+
             result.Comparisons.push_back(
-                CompareSingleStats(hoveredStats, eqStats, hoveredCat, targetLabel, ctx));
+                CompareSingleStats(hoveredStats, eqStats, hoveredCat, targetLabel, effectiveCtx));
             notes.push_back(std::move(note));
         }
 

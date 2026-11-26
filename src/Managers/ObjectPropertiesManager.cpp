@@ -408,6 +408,9 @@ void CObjectPropertiesManager::Display(int serial)
             compareCtx.MaxDefenseChance =
                 g_Player->MaxDefenceChance > 0 ? g_Player->MaxDefenceChance : 45;
             compareCtx.AttackChance = g_Player->AttackChance;
+            // 0x11 does not transmit MaxAttackChance; infer solo 60% HCI cap when solo 0x11 caps are active.
+            compareCtx.MaxAttackChance =
+                (compareCtx.MaxDefenseChance > 45 || compareCtx.MaxPhysicalResist > 70) ? 60 : 45;
             compareCtx.WeaponSpeed = g_Player->WeaponSpeed;
             compareCtx.WeaponDamage = g_Player->WeaponDamage;
             compareCtx.LowerReagentCost = g_Player->LowerRegCost;
@@ -429,170 +432,6 @@ void CObjectPropertiesManager::Display(int serial)
                 {
                     compareCtx.Skills[i] = static_cast<double>(sk->Value);
                 }
-            }
-        }
-
-        const ParsedEquipmentStats hoveredParsed = ParseEquipmentOpl(hoveredProp.Properties);
-        const bool hoveredIsWeapon = hoveredParsed.HasWeaponIdentity();
-
-        std::vector<ResolvedCompareTarget> targets;
-        std::vector<uint32_t> prefetchSerials;
-        int totalSlots = 1;
-        int occupiedSlots = 0;
-
-        if (td->Layer == OL_1_HAND)
-        {
-            CGameItem *mh = g_Player->FindLayer(OL_1_HAND);
-            CGameItem *oh = g_Player->FindLayer(OL_2_HAND);
-            const bool dualWield =
-                (g_Player->GetOffHandWeapon() != nullptr) ||
-                (isEquippedWeapon(mh, false) && isEquippedWeapon(oh, false));
-            if (hoveredIsWeapon && dualWield)
-            {
-                totalSlots = 2;
-                if (mh != nullptr)
-                {
-                    targets.push_back({ mh, L"Main Hand", false });
-                    ++occupiedSlots;
-                }
-                if (oh != nullptr)
-                {
-                    targets.push_back({ oh, L"Off Hand", true });
-                    ++occupiedSlots;
-                }
-            }
-            else if (mh != nullptr)
-            {
-                targets.push_back({ mh, L"Main Hand", false });
-                occupiedSlots = 1;
-            }
-            else if (isEquippedWeapon(oh, true))
-            {
-                targets.push_back({ oh, L"Two-Handed", false });
-                occupiedSlots = 1;
-            }
-        }
-        else if (td->Layer == OL_2_HAND)
-        {
-            CGameItem *mh = g_Player->FindLayer(OL_1_HAND);
-            CGameItem *oh = g_Player->FindLayer(OL_2_HAND);
-            if (hoveredIsWeapon)
-            {
-                if (mh != nullptr)
-                {
-                    targets.push_back({ mh, L"Main Hand", false });
-                    ++occupiedSlots;
-                }
-                if (oh != nullptr)
-                {
-                    const bool ohWeapon = isEquippedWeapon(oh, true);
-                    const wchar_t *ohLabel =
-                        ohWeapon ? (mh != nullptr ? L"Off Hand" : L"Two-Handed")
-                                 : L"Shield / Off Hand";
-                    targets.push_back({ oh, ohLabel, ohWeapon && mh != nullptr });
-                    ++occupiedSlots;
-                }
-                totalSlots = occupiedSlots > 1 ? occupiedSlots : 1;
-            }
-            else
-            {
-                if (oh != nullptr)
-                {
-                    const bool ohWeapon = isEquippedWeapon(oh, true);
-                    const wchar_t *ohLabel =
-                        ohWeapon ? (mh != nullptr ? L"Off Hand Weapon" : L"Two-Handed Weapon")
-                                 : L"Shield";
-                    targets.push_back({ oh, ohLabel, ohWeapon && mh != nullptr });
-                    occupiedSlots = 1;
-                }
-            }
-        }
-        else if (IsBraceletLayer(td->Layer))
-        {
-            totalSlots = static_cast<int>(kPaperdollBraceletLayers.size());
-            for (size_t i = 0; i < kPaperdollBraceletLayers.size(); ++i)
-            {
-                CGameItem *eq = g_Player->FindLayer(kPaperdollBraceletLayers[i]);
-                if (eq != nullptr)
-                {
-                    targets.push_back(
-                        { eq, i == 0 ? L"Left Bracelet" : L"Right Bracelet", false });
-                    ++occupiedSlots;
-                }
-            }
-        }
-        else if (IsEarringsLayer(td->Layer))
-        {
-            totalSlots = static_cast<int>(kPaperdollEarringLayers.size());
-            for (size_t i = 0; i < kPaperdollEarringLayers.size(); ++i)
-            {
-                CGameItem *eq = g_Player->FindLayer(kPaperdollEarringLayers[i]);
-                if (eq != nullptr)
-                {
-                    targets.push_back({ eq, i == 0 ? L"Left Earring" : L"Right Earring", false });
-                    ++occupiedSlots;
-                }
-            }
-        }
-        else if (IsRingLayer(td->Layer))
-        {
-            totalSlots = static_cast<int>(kPaperdollRingLayers.size());
-            std::vector<CGameItem *> rings;
-            for (int layer : kPaperdollRingLayers)
-            {
-                CGameItem *eq = g_Player->FindLayer(layer);
-                if (eq != nullptr)
-                {
-                    rings.push_back(eq);
-                }
-            }
-            occupiedSlots = static_cast<int>(rings.size());
-            if (rings.size() == 1u)
-            {
-                targets.push_back({ rings[0], L"Ring", false });
-            }
-            else if (rings.size() > 1u)
-            {
-                CGameItem *weakestLoaded = nullptr;
-                double weakestScore = 0.0;
-                CGameItem *firstUnloaded = nullptr;
-                for (CGameItem *ring : rings)
-                {
-                    const CObjectProperty *ringProp = Find(ring->Serial);
-                    if (ringProp == nullptr || ringProp->Empty())
-                    {
-                        prefetchSerials.push_back(ring->Serial);
-                        if (firstUnloaded == nullptr)
-                        {
-                            firstUnloaded = ring;
-                        }
-                        continue;
-                    }
-                    const double score = ScoreEquipment(
-                        ParseEquipmentOpl(ringProp->Properties),
-                        EquipCategory::JewelryOrUtility,
-                        &compareCtx);
-                    if (weakestLoaded == nullptr || score < weakestScore)
-                    {
-                        weakestLoaded = ring;
-                        weakestScore = score;
-                    }
-                }
-                CGameItem *chosen = firstUnloaded != nullptr ? firstUnloaded : weakestLoaded;
-                if (chosen != nullptr)
-                {
-                    targets.push_back({ chosen, L"Weakest Ring", false });
-                }
-            }
-        }
-        else
-        {
-            totalSlots = 1;
-            CGameItem *eq = g_Player->FindLayer(td->Layer);
-            if (eq != nullptr)
-            {
-                targets.push_back({ eq, EquipmentSlotLabel(td->Layer), false });
-                occupiedSlots = 1;
             }
         }
 
@@ -641,7 +480,289 @@ void CObjectPropertiesManager::Display(int serial)
             serials.push_back(s);
         };
 
+        // Pre-scan all worn paperdoll pieces once so unloaded worn items are prefetched & tracked
+        // for cache invalidation, and Weakest Ring / comparison baselines are always accurate.
+        struct LoadedWornItem
+        {
+            uint32_t Serial = 0;
+            uint32_t Revision = 0;
+            ParsedEquipmentStats Stats = {};
+        };
         std::vector<uint32_t> comparingSerials;
+        std::vector<LoadedWornItem> loadedWornItems;
+        uint64_t wornRevisionHash = 0xcbf29ce484222325ULL;
+        for (int layer = OL_1_HAND; layer < OL_EXTENDED_COUNT; ++layer)
+        {
+            if (!IsPaperdollEquipmentLayer(layer) || layer == OL_HAIR || layer == OL_BEARD ||
+                layer == OL_BACKPACK)
+            {
+                continue;
+            }
+            CGameItem *worn = g_Player->FindLayer(layer);
+            if (worn == nullptr)
+            {
+                continue;
+            }
+            addComparingSerial(comparingSerials, worn->Serial);
+            const CObjectProperty *wornProp = Find(worn->Serial);
+            if (wornProp == nullptr || wornProp->Empty())
+            {
+                requestOplIfMissing(worn->Serial);
+                continue;
+            }
+            LoadedWornItem loadedItem;
+            loadedItem.Serial = worn->Serial;
+            loadedItem.Revision = wornProp->Revision;
+            loadedItem.Stats = ParseEquipmentOpl(wornProp->Properties);
+            HashMixU64(wornRevisionHash, loadedItem.Serial);
+            HashMixU64(wornRevisionHash, loadedItem.Revision);
+            loadedWornItems.push_back(std::move(loadedItem));
+        }
+
+        auto populateOtherEquipped = [&](CharacterCompareContext &ctxOut,
+                                         const std::vector<uint32_t> &excludedSerials) {
+            ctxOut.HasOtherEquippedResists = false;
+            ctxOut.OtherEquippedPhysicalResist = 0;
+            ctxOut.OtherEquippedFireResist = 0;
+            ctxOut.OtherEquippedColdResist = 0;
+            ctxOut.OtherEquippedPoisonResist = 0;
+            ctxOut.OtherEquippedEnergyResist = 0;
+            ctxOut.HasOtherEquippedSAStats = false;
+            ctxOut.OtherEquippedCastingFocus = 0;
+            ctxOut.OtherEquippedDamageEater = 0;
+            ctxOut.OtherEquippedKineticEater = 0;
+            ctxOut.OtherEquippedFireEater = 0;
+            ctxOut.OtherEquippedColdEater = 0;
+            ctxOut.OtherEquippedPoisonEater = 0;
+            ctxOut.OtherEquippedEnergyEater = 0;
+            ctxOut.OtherEquippedSoulCharge = 0;
+            ctxOut.OtherEquippedKineticResonance = 0;
+            ctxOut.OtherEquippedFireResonance = 0;
+            ctxOut.OtherEquippedColdResonance = 0;
+            ctxOut.OtherEquippedPoisonResonance = 0;
+            ctxOut.OtherEquippedEnergyResonance = 0;
+            ctxOut.OtherEquippedReactiveParalyze = false;
+            ctxOut.OtherEquippedManaPhase = false;
+            ctxOut.OtherEquippedEnhancePotions = 0;
+            ctxOut.OtherEquippedSplinteringWeapon = 0;
+
+            for (const LoadedWornItem &lw : loadedWornItems)
+            {
+                bool excluded = false;
+                for (uint32_t ex : excludedSerials)
+                {
+                    if (lw.Serial == ex)
+                    {
+                        excluded = true;
+                        break;
+                    }
+                }
+                if (excluded)
+                {
+                    continue;
+                }
+                if (ctxOut.HasStatusTotals)
+                {
+                    ctxOut.HasOtherEquippedResists = true;
+                    ctxOut.OtherEquippedPhysicalResist += lw.Stats.PhysicalResist;
+                    ctxOut.OtherEquippedFireResist += lw.Stats.FireResist;
+                    ctxOut.OtherEquippedColdResist += lw.Stats.ColdResist;
+                    ctxOut.OtherEquippedPoisonResist += lw.Stats.PoisonResist;
+                    ctxOut.OtherEquippedEnergyResist += lw.Stats.EnergyResist;
+                }
+                ctxOut.HasOtherEquippedSAStats = true;
+                ctxOut.OtherEquippedCastingFocus += lw.Stats.CastingFocus;
+                ctxOut.OtherEquippedDamageEater += lw.Stats.DamageEater;
+                ctxOut.OtherEquippedKineticEater += lw.Stats.KineticEater;
+                ctxOut.OtherEquippedFireEater += lw.Stats.FireEater;
+                ctxOut.OtherEquippedColdEater += lw.Stats.ColdEater;
+                ctxOut.OtherEquippedPoisonEater += lw.Stats.PoisonEater;
+                ctxOut.OtherEquippedEnergyEater += lw.Stats.EnergyEater;
+                ctxOut.OtherEquippedSoulCharge += lw.Stats.SoulCharge;
+                ctxOut.OtherEquippedKineticResonance += lw.Stats.KineticResonance;
+                ctxOut.OtherEquippedFireResonance += lw.Stats.FireResonance;
+                ctxOut.OtherEquippedColdResonance += lw.Stats.ColdResonance;
+                ctxOut.OtherEquippedPoisonResonance += lw.Stats.PoisonResonance;
+                ctxOut.OtherEquippedEnergyResonance += lw.Stats.EnergyResonance;
+                ctxOut.OtherEquippedReactiveParalyze =
+                    ctxOut.OtherEquippedReactiveParalyze || lw.Stats.ReactiveParalyze;
+                ctxOut.OtherEquippedManaPhase =
+                    ctxOut.OtherEquippedManaPhase || lw.Stats.ManaPhase;
+                ctxOut.OtherEquippedEnhancePotions += lw.Stats.EnhancePotions;
+                ctxOut.OtherEquippedSplinteringWeapon += lw.Stats.SplinteringWeapon;
+            }
+        };
+
+        const ParsedEquipmentStats hoveredParsed = ParseEquipmentOpl(hoveredProp.Properties);
+        const bool hoveredIsWeapon = hoveredParsed.HasWeaponIdentity();
+        // Core 2H weapons (Bow/Crossbow/HeavyCrossbow/BattleAxe/WarHammer) have tiledata Layer == 1
+        // despite Layer.TwoHanded on the server (emitting cliloc 1061171).
+        const int effectiveLayer =
+            hoveredParsed.IsTwoHanded ? OL_2_HAND
+                                      : (hoveredParsed.IsOneHanded ? OL_1_HAND : static_cast<int>(td->Layer));
+
+        std::vector<ResolvedCompareTarget> targets;
+        std::vector<uint32_t> prefetchSerials;
+        int totalSlots = 1;
+        int occupiedSlots = 0;
+
+        if (effectiveLayer == OL_1_HAND)
+        {
+            CGameItem *mh = g_Player->FindLayer(OL_1_HAND);
+            CGameItem *oh = g_Player->FindLayer(OL_2_HAND);
+            const bool dualWield =
+                (g_Player->GetOffHandWeapon() != nullptr) ||
+                (isEquippedWeapon(mh, false) && isEquippedWeapon(oh, false));
+            if (hoveredIsWeapon && dualWield)
+            {
+                totalSlots = 2;
+                if (mh != nullptr)
+                {
+                    targets.push_back({ mh, L"Main Hand", false });
+                    ++occupiedSlots;
+                }
+                if (oh != nullptr)
+                {
+                    targets.push_back({ oh, L"Off Hand", true });
+                    ++occupiedSlots;
+                }
+            }
+            else if (mh != nullptr)
+            {
+                targets.push_back({ mh, L"Main Hand", false });
+                occupiedSlots = 1;
+            }
+            else if (isEquippedWeapon(oh, true))
+            {
+                targets.push_back({ oh, L"Two-Handed", false });
+                occupiedSlots = 1;
+            }
+        }
+        else if (effectiveLayer == OL_2_HAND)
+        {
+            CGameItem *mh = g_Player->FindLayer(OL_1_HAND);
+            CGameItem *oh = g_Player->FindLayer(OL_2_HAND);
+            if (hoveredIsWeapon)
+            {
+                if (mh != nullptr)
+                {
+                    targets.push_back({ mh, L"Main Hand", false });
+                    ++occupiedSlots;
+                }
+                if (oh != nullptr)
+                {
+                    const bool ohWeapon = isEquippedWeapon(oh, true);
+                    const wchar_t *ohLabel =
+                        ohWeapon ? (mh != nullptr ? L"Off Hand" : L"Two-Handed")
+                                 : L"Shield / Off Hand";
+                    targets.push_back({ oh, ohLabel, ohWeapon && mh != nullptr });
+                    ++occupiedSlots;
+                }
+                totalSlots = occupiedSlots > 1 ? occupiedSlots : 1;
+            }
+            else
+            {
+                if (oh != nullptr)
+                {
+                    const bool ohWeapon = isEquippedWeapon(oh, true);
+                    const wchar_t *ohLabel =
+                        ohWeapon ? (mh != nullptr ? L"Off Hand Weapon" : L"Two-Handed Weapon")
+                                 : L"Shield";
+                    targets.push_back({ oh, ohLabel, ohWeapon && mh != nullptr });
+                    occupiedSlots = 1;
+                }
+            }
+        }
+        else if (IsBraceletLayer(effectiveLayer))
+        {
+            totalSlots = static_cast<int>(kPaperdollBraceletLayers.size());
+            for (size_t i = 0; i < kPaperdollBraceletLayers.size(); ++i)
+            {
+                CGameItem *eq = g_Player->FindLayer(kPaperdollBraceletLayers[i]);
+                if (eq != nullptr)
+                {
+                    targets.push_back(
+                        { eq, i == 0 ? L"Left Bracelet" : L"Right Bracelet", false });
+                    ++occupiedSlots;
+                }
+            }
+        }
+        else if (IsEarringsLayer(effectiveLayer))
+        {
+            totalSlots = static_cast<int>(kPaperdollEarringLayers.size());
+            for (size_t i = 0; i < kPaperdollEarringLayers.size(); ++i)
+            {
+                CGameItem *eq = g_Player->FindLayer(kPaperdollEarringLayers[i]);
+                if (eq != nullptr)
+                {
+                    targets.push_back({ eq, i == 0 ? L"Left Earring" : L"Right Earring", false });
+                    ++occupiedSlots;
+                }
+            }
+        }
+        else if (IsRingLayer(effectiveLayer))
+        {
+            totalSlots = static_cast<int>(kPaperdollRingLayers.size());
+            std::vector<CGameItem *> rings;
+            for (int layer : kPaperdollRingLayers)
+            {
+                CGameItem *eq = g_Player->FindLayer(layer);
+                if (eq != nullptr)
+                {
+                    rings.push_back(eq);
+                }
+            }
+            occupiedSlots = static_cast<int>(rings.size());
+            if (rings.size() == 1u)
+            {
+                targets.push_back({ rings[0], L"Ring", false });
+            }
+            else if (rings.size() > 1u)
+            {
+                CGameItem *weakestLoaded = nullptr;
+                double weakestScore = 0.0;
+                CGameItem *firstUnloaded = nullptr;
+                for (CGameItem *ring : rings)
+                {
+                    const CObjectProperty *ringProp = Find(ring->Serial);
+                    if (ringProp == nullptr || ringProp->Empty())
+                    {
+                        prefetchSerials.push_back(ring->Serial);
+                        if (firstUnloaded == nullptr)
+                        {
+                            firstUnloaded = ring;
+                        }
+                        continue;
+                    }
+                    const ParsedEquipmentStats ringStats = ParseEquipmentOpl(ringProp->Properties);
+                    CharacterCompareContext ringCtx = compareCtx;
+                    populateOtherEquipped(ringCtx, { ring->Serial });
+                    const double score = ScoreEquippedItemForReplacement(
+                        ringStats, EquipCategory::JewelryOrUtility, &ringCtx);
+                    if (weakestLoaded == nullptr || score < weakestScore)
+                    {
+                        weakestLoaded = ring;
+                        weakestScore = score;
+                    }
+                }
+                CGameItem *chosen = firstUnloaded != nullptr ? firstUnloaded : weakestLoaded;
+                if (chosen != nullptr)
+                {
+                    targets.push_back({ chosen, L"Weakest Ring", false });
+                }
+            }
+        }
+        else
+        {
+            totalSlots = 1;
+            CGameItem *eq = g_Player->FindLayer(effectiveLayer);
+            if (eq != nullptr)
+            {
+                targets.push_back({ eq, EquipmentSlotLabel(effectiveLayer), false });
+                occupiedSlots = 1;
+            }
+        }
+
         for (uint32_t s : prefetchSerials)
         {
             requestOplIfMissing(s);
@@ -650,69 +771,53 @@ void CObjectPropertiesManager::Display(int serial)
 
         EquipmentCompareItemInput hoveredInput;
         hoveredInput.Serial = itemSerial;
-        hoveredInput.Layer = td->Layer;
+        hoveredInput.Layer = effectiveLayer;
         hoveredInput.IsWeapon = hoveredIsWeapon;
         hoveredInput.IsOffHandWeapon = false;
         hoveredInput.PropertiesLoaded = true;
         hoveredInput.Name = hoveredProp.Name;
         hoveredInput.FormattedTooltip = hoveredProp.CreateTextData(false);
         hoveredInput.Properties = hoveredProp.Properties;
-        hoveredInput.SlotLabel = EquipmentSlotLabel(td->Layer);
+        hoveredInput.SlotLabel = EquipmentSlotLabel(effectiveLayer);
 
         std::vector<EquipmentCompareItemInput> equippedInputs;
         equippedInputs.reserve(targets.size());
 
-        // Scan other loaded worn paperdoll pieces for uncapped resist totals so overcap
-        // buffers are detected accurately even though 0x11 clamps player resists at Max*Resist.
-        if (compareCtx.HasStatusTotals)
+        std::vector<uint32_t> targetSerials;
+        targetSerials.reserve(targets.size());
+        for (const ResolvedCompareTarget &t : targets)
         {
-            auto isTargetSerial = [&](uint32_t s) {
-                for (const ResolvedCompareTarget &t : targets)
-                {
-                    if (t.Item != nullptr && t.Item->Serial == s)
-                    {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            for (int layer = OL_1_HAND; layer < OL_EXTENDED_COUNT; ++layer)
+            if (t.Item != nullptr)
             {
-                if (!IsPaperdollEquipmentLayer(layer) || layer == OL_HAIR || layer == OL_BEARD ||
-                    layer == OL_BACKPACK)
-                {
-                    continue;
-                }
-                CGameItem *worn = g_Player->FindLayer(layer);
-                if (worn == nullptr || isTargetSerial(worn->Serial))
-                {
-                    continue;
-                }
-                const CObjectProperty *wornProp = Find(worn->Serial);
-                if (wornProp == nullptr || wornProp->Empty())
-                {
-                    continue;
-                }
-                const ParsedEquipmentStats wornStats = ParseEquipmentOpl(wornProp->Properties);
-                compareCtx.HasOtherEquippedResists = true;
-                compareCtx.OtherEquippedPhysicalResist += wornStats.PhysicalResist;
-                compareCtx.OtherEquippedFireResist += wornStats.FireResist;
-                compareCtx.OtherEquippedColdResist += wornStats.ColdResist;
-                compareCtx.OtherEquippedPoisonResist += wornStats.PoisonResist;
-                compareCtx.OtherEquippedEnergyResist += wornStats.EnergyResist;
+                targetSerials.push_back(t.Item->Serial);
             }
         }
+        populateOtherEquipped(compareCtx, targetSerials);
 
         uint64_t sig = 0xcbf29ce484222325ULL;
         HashMixU64(sig, itemSerial);
         HashMixU64(sig, hoveredProp.Revision);
         HashMixU64(sig, 1ULL);
+        HashMixU64(sig, static_cast<uint64_t>(effectiveLayer));
         HashMixU64(sig, static_cast<uint64_t>(totalSlots));
         HashMixU64(sig, static_cast<uint64_t>(occupiedSlots));
         HashMixU64(sig, static_cast<uint64_t>(prefetchSerials.size()));
+        HashMixU64(sig, static_cast<uint64_t>(loadedWornItems.size()));
+        HashMixU64(sig, wornRevisionHash);
         HashMixU64(sig, static_cast<uint64_t>(compareCtx.Profile));
         HashMixU64(sig, static_cast<uint64_t>(compareCtx.Str));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.Dex));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.Int));
         HashMixU64(sig, static_cast<uint64_t>(compareCtx.Stam));
+        HashMixU64(sig, static_cast<uint64_t>(compareCtx.HasSkills ? 1 : 0));
+        if (compareCtx.HasSkills)
+        {
+            for (int i = 0; i < kCompareSkillCount; ++i)
+            {
+                HashMixU64(
+                    sig, static_cast<uint64_t>(static_cast<int>(compareCtx.Skills[i] * 10.0 + 0.5)));
+            }
+        }
         HashMixU64(sig, static_cast<uint64_t>(compareCtx.HasStatusTotals ? 1 : 0));
         if (compareCtx.HasStatusTotals)
         {
@@ -722,9 +827,14 @@ void CObjectPropertiesManager::Display(int serial)
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.PoisonResist + 1000));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.EnergyResist + 1000));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxPhysicalResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxFireResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxColdResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxPoisonResist));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxEnergyResist));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.DefenseChance + 1000));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxDefenseChance));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.AttackChance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.MaxAttackChance));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.WeaponSpeed + 1000));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.WeaponDamage + 1000));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.LowerReagentCost + 1000));
@@ -736,6 +846,26 @@ void CObjectPropertiesManager::Display(int serial)
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedColdResist));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedPoisonResist));
             HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedEnergyResist));
+        }
+        if (compareCtx.HasOtherEquippedSAStats)
+        {
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedCastingFocus + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedDamageEater + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedKineticEater + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedFireEater + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedColdEater + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedPoisonEater + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedEnergyEater + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedSoulCharge + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedKineticResonance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedFireResonance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedColdResonance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedPoisonResonance + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedEnergyResonance + 1000));
+            HashMixU64(sig, compareCtx.OtherEquippedReactiveParalyze ? 1ULL : 0ULL);
+            HashMixU64(sig, compareCtx.OtherEquippedManaPhase ? 1ULL : 0ULL);
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedEnhancePotions + 1000));
+            HashMixU64(sig, static_cast<uint64_t>(compareCtx.OtherEquippedSplinteringWeapon + 1000));
         }
 
         for (const ResolvedCompareTarget &target : targets)

@@ -71,6 +71,34 @@ struct CharacterCompareContext
     int OtherEquippedPoisonResist = 0;
     int OtherEquippedEnergyResist = 0;
 
+    // Suit totals for SA/HS/ToL capped stats across OTHER loaded equipped items
+    // (excluding compared target(s)), since 0x11 does not transmit these totals.
+    bool HasOtherEquippedSAStats = false;
+    int OtherEquippedCastingFocus = 0;
+    int MaxCastingFocus = 12;
+    int OtherEquippedDamageEater = 0;
+    int MaxDamageEater = 18;
+    int MaxTotalEater = 30;
+    int OtherEquippedKineticEater = 0;
+    int OtherEquippedFireEater = 0;
+    int OtherEquippedColdEater = 0;
+    int OtherEquippedPoisonEater = 0;
+    int OtherEquippedEnergyEater = 0;
+    int OtherEquippedSoulCharge = 0;
+    int MaxSoulCharge = 30;
+    int OtherEquippedKineticResonance = 0;
+    int OtherEquippedFireResonance = 0;
+    int OtherEquippedColdResonance = 0;
+    int OtherEquippedPoisonResonance = 0;
+    int OtherEquippedEnergyResonance = 0;
+    int MaxResonance = 20;
+    bool OtherEquippedReactiveParalyze = false;
+    bool OtherEquippedManaPhase = false;
+    int OtherEquippedEnhancePotions = 0;
+    int MaxEnhancePotions = 50;
+    int OtherEquippedSplinteringWeapon = 0;
+    int MaxSplinteringWeapon = 35;
+
     int DefenseChance = 0;
     int MaxDefenseChance = 45;
     int AttackChance = 0;
@@ -151,6 +179,13 @@ struct ParsedEquipmentStats
     int EnhancePotions = 0;
     bool NightSight = false;
     int IncreasedKarmaLoss = 0;
+    int CastingFocus = 0;
+    int DamageEater = 0;
+    int KineticEater = 0;
+    int FireEater = 0;
+    int ColdEater = 0;
+    int PoisonEater = 0;
+    int EnergyEater = 0;
 
     // Weapon & armor attributes
     bool UseBestSkill = false;
@@ -171,8 +206,23 @@ struct ParsedEquipmentStats
     int HitFireArea = 0;
     int HitPhysicalArea = 0;
     int HitPoisonArea = 0;
+    bool BattleLust = false;
+    int SplinteringWeapon = 0;
+    int HitCurse = 0;
+    int HitFatigue = 0;
+    int HitManaDrain = 0;
+    bool BloodDrinker = false;
+    bool Bane = false;
     int SelfRepair = 0;
     bool MageArmor = false;
+    bool ReactiveParalyze = false;
+    int SoulCharge = 0;
+    bool ManaPhase = false;
+    int KineticResonance = 0;
+    int FireResonance = 0;
+    int ColdResonance = 0;
+    int PoisonResonance = 0;
+    int EnergyResonance = 0;
 
     // Resists, skills, slayers, durability, misc
     int PhysicalResist = 0;
@@ -208,6 +258,8 @@ struct ParsedEquipmentStats
     int TotalResists() const;
     double TotalSkillBonuses() const;
     int TotalHitArea() const;
+    int TotalElementalEaters() const;
+    int TotalResonances() const;
     int SlayerCount() const;
 };
 
@@ -280,6 +332,11 @@ wstr_t ResolveBuildProfileLabel(const CharacterCompareContext *ctx);
 
 double ScoreEquipment(
     const ParsedEquipmentStats &stats,
+    EquipCategory category,
+    const CharacterCompareContext *ctx = nullptr);
+
+double ScoreEquippedItemForReplacement(
+    const ParsedEquipmentStats &equipped,
     EquipCategory category,
     const CharacterCompareContext *ctx = nullptr);
 
