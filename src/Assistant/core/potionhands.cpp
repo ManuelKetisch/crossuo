@@ -71,6 +71,10 @@ struct Sequence
     uint16_t PotionGraphic = 0;
     uint16_t PotionHue = 0;
     bool DrankPotion = false;
+    bool UsedMacroMove = false;
+    bool ForceClassicMove = false;
+    uint8_t DrinkRetries = 0;
+    bool WaitingDrinkRetry = false;
 
     // Spell state
     int SpellIndex = 0;
@@ -98,8 +102,11 @@ bool s_SpellHandsEnabled = false;
 bool s_InternalSend = false;
 bool s_HasAction = false;
 uint32_t s_LastAction = 0;
+bool s_MacroMovesSupported = true;
+bool s_MacroMoveConfirmed = false;
 const char *s_Status = "Ready.";
 std::unordered_map<uint32_t, bool> s_SpellChanneling;
+std::unordered_map<uint32_t, bool> s_Balanced;
 
 struct InternalSend
 {
@@ -258,9 +265,35 @@ bool item_allows_equipped_cast(const CGameItem &item)
     return HasSpellChannelingText(oplData.c_str(), localized.c_str());
 }
 
-bool build_hand_item(CGameItem *item, uint8_t layer, HandItem &out)
+bool item_is_balanced(const CGameItem &item)
+{
+    const auto cached = s_Balanced.find(item.Serial);
+    if (cached != s_Balanced.end())
+    {
+        return cached->second;
+    }
+
+    const astr_t oplData = g_ObjectPropertiesManager.GetData(item.Serial);
+    if (oplData.empty())
+    {
+        return false;
+    }
+    astr_t localized;
+    CCliloc *cliloc = g_ClilocManager.Cliloc(g_Language);
+    if (cliloc != nullptr)
+    {
+        localized = cliloc->GetA(static_cast<int>(BalancedCliloc), true);
+    }
+    return HasBalancedText(oplData.c_str(), localized.c_str());
+}
+
+bool build_hand_item(CGameItem *item, uint8_t layer, HandItem &out, bool *oplKnownOut = nullptr)
 {
     out = {};
+    if (oplKnownOut != nullptr)
+    {
+        *oplKnownOut = false;
+    }
     if (item == nullptr)
     {
         return true;
@@ -274,8 +307,35 @@ bool build_hand_item(CGameItem *item, uint8_t layer, HandItem &out)
     out.BaseLayer = item->GetStaticData()->Layer;
     out.Graphic = item->Graphic;
     out.Hue = hue(*item);
-    out.IsWeapon = item->IsWeapon();
     out.SpellChanneling = item_allows_equipped_cast(*item);
+    out.Balanced = item_is_balanced(*item);
+
+    const CObjectProperty *prop = g_ObjectPropertiesManager.Find(item->Serial);
+    if (prop != nullptr && !prop->Empty())
+    {
+        if (oplKnownOut != nullptr)
+        {
+            *oplKnownOut = true;
+        }
+        bool hasWeaponOpl = false;
+        for (const auto &row : prop->Properties)
+        {
+            if (IsWeaponOplCliloc(row.first))
+            {
+                hasWeaponOpl = true;
+            }
+            if (row.first == BalancedCliloc)
+            {
+                out.Balanced = true;
+            }
+        }
+        out.IsWeapon = hasWeaponOpl;
+    }
+    else
+    {
+        // OPL not loaded yet; fall back to tiledata flag until properties arrive.
+        out.IsWeapon = item->IsWeapon();
+    }
     return true;
 }
 
@@ -339,6 +399,110 @@ bool can_send_action()
     const int configured = std::max(g_AssistantConfig.MoveItemsDelay(), g_AssistantConfig.UseItemsDelay());
     const auto delay = static_cast<uint32_t>(std::max<int>(MinActionDelay, std::min(configured, 60000)));
     return !s_HasAction || DeadlineReached(g_Ticks, s_LastAction, delay);
+}
+
+bool macro_moves_available()
+{
+    return !s_Sequence.ForceClassicMove &&
+        ChooseMoveTransport(g_Config.ProtocolClientVersion >= CV_60142, s_MacroMovesSupported) ==
+            MoveTransport::MacroPacket;
+}
+
+bool can_send_move_now()
+{
+    return CanSendImmediately(
+        macro_moves_available() ? MoveTransport::MacroPacket : MoveTransport::ClassicLift,
+        can_send_action());
+}
+
+bool can_send_drink_now()
+{
+    if (s_Sequence.WaitingDrinkRetry)
+    {
+        return DeadlineReached(g_Ticks, s_Sequence.PhaseSince, DrinkRetryDelay);
+    }
+    return can_send_action();
+}
+
+void send_stow();
+void send_drink();
+void send_spell_cast();
+void send_restore();
+
+bool begin_potion_sequence(uint32_t serial)
+{
+    if (s_InternalSend || serial == 0 || !active_player() || !load_profile())
+    {
+        return false;
+    }
+    if (!s_Enabled || !potion_permitted())
+    {
+        return false;
+    }
+    if (s_Sequence.Kind == Mode::Potion && s_Sequence.Potion == serial && PotionHands_Busy())
+    {
+        // Swallow duplicate rapid double-clicks on the same in-flight potion so
+        // they do not abort the sequence and strand the stowed weapon in pack.
+        return true;
+    }
+    if (PotionHands_Busy())
+    {
+        return false;
+    }
+    if (s_Sequence.Stage == Phase::AwaitFreeHandReply)
+    {
+        finish("Ready.");
+    }
+    if (potion_action_busy())
+    {
+        return false;
+    }
+
+    const auto *potion = g_World->FindWorldItem(serial);
+    const auto *pack = g_Player->FindLayer(OL_BACKPACK);
+    if (potion == nullptr || potion->Dragged || potion->Count == 0 || !StandardDrink(potion->Graphic, hue(*potion)) ||
+        pack == nullptr || !visible_pack_container(potion->Container, pack->Serial))
+    {
+        return false;
+    }
+
+    HandItem oneHand;
+    HandItem twoHand;
+    bool twoHandOplKnown = false;
+    if (!build_hand_item(g_Player->FindLayer(OL_1_HAND), HandLayerOne, oneHand) ||
+        !build_hand_item(g_Player->FindLayer(OL_2_HAND), HandLayerTwo, twoHand, &twoHandOplKnown))
+    {
+        return false;
+    }
+
+    if (!CanProactivelyFreeHand(oneHand, twoHand, twoHandOplKnown))
+    {
+        return false;
+    }
+
+    const HandPlan plan = PlanPotionHands(oneHand, twoHand);
+    if (plan.Empty())
+    {
+        return false;
+    }
+
+    s_Sequence = {};
+    s_Sequence.Kind = Mode::Potion;
+    s_Sequence.Character = g_PlayerSerial;
+    s_Sequence.Facet = g_CurrentMap;
+    s_Sequence.Pack = pack->Serial;
+    s_Sequence.Plan = plan;
+    s_Sequence.Potion = potion->Serial;
+    s_Sequence.PotionParent = potion->Container;
+    s_Sequence.PotionCount = potion->Count;
+    s_Sequence.PotionGraphic = potion->Graphic;
+    s_Sequence.PotionHue = hue(*potion);
+    enter(Phase::PrepareToStow, "Freeing a hand.");
+    if (can_send_move_now())
+    {
+        send_stow();
+    }
+    return true;
 }
 
 void observe_original_use(uint32_t serial)
@@ -439,27 +603,41 @@ bool begin_spell_sequence(int spellIndex, uint32_t bookSerial, uint32_t targetSe
     s_Sequence.SpellTarget = targetSerial;
     s_Sequence.IsTargetedSpell = targeted;
     enter(Phase::PrepareToStow, "Freeing hands for spell cast.");
+    if (can_send_move_now())
+    {
+        send_stow();
+    }
     return true;
 }
 
 void send_stow()
 {
     const HandItem &item = s_Sequence.Plan.StowItem(s_Sequence.StowIndex);
+    const bool useMacro = macro_moves_available();
+    s_Sequence.UsedMacroMove = useMacro;
     enter(Phase::ConfirmStowed, "Waiting for the backpack move.");
     InternalSend guard;
-    CPacketPickupRequest(item.Serial, 1).Send();
-    if (g_Config.ProtocolClientVersion >= CV_6017)
+    if (useMacro)
     {
-        CPacketDropRequestNew(item.Serial, 0xFFFF, 0xFFFF, 0, 0, s_Sequence.Pack).Send();
+        CPacketUnequipMacro({ static_cast<uint16_t>(item.Layer) }).Send();
     }
     else
     {
-        CPacketDropRequestOld(item.Serial, 0xFFFF, 0xFFFF, 0, s_Sequence.Pack).Send();
+        CPacketPickupRequest(item.Serial, 1).Send();
+        if (g_Config.ProtocolClientVersion >= CV_6017)
+        {
+            CPacketDropRequestNew(item.Serial, 0xFFFF, 0xFFFF, 0, 0, s_Sequence.Pack).Send();
+        }
+        else
+        {
+            CPacketDropRequestOld(item.Serial, 0xFFFF, 0xFFFF, 0, s_Sequence.Pack).Send();
+        }
     }
 }
 
 void send_drink()
 {
+    s_Sequence.WaitingDrinkRetry = false;
     enter(Phase::ConfirmDrink, "Waiting for the potion result.");
     InternalSend guard;
     g_Game.DoubleClick(s_Sequence.Potion);
@@ -502,10 +680,19 @@ void send_spell_cast()
 void send_restore()
 {
     const HandItem &item = s_Sequence.Plan.RestoreItem(s_Sequence.RestoreIndex);
+    const bool useMacro = macro_moves_available();
+    s_Sequence.UsedMacroMove = useMacro;
     enter(Phase::ConfirmRestored, "Waiting for equipment to return.");
     InternalSend guard;
-    CPacketPickupRequest(item.Serial, 1).Send();
-    CPacketEquipRequest(item.Serial, item.Layer, s_Sequence.Character).Send();
+    if (useMacro)
+    {
+        CPacketEquipMacro({ item.Serial }).Send();
+    }
+    else
+    {
+        CPacketPickupRequest(item.Serial, 1).Send();
+        CPacketEquipRequest(item.Serial, item.Layer, s_Sequence.Character).Send();
+    }
 }
 
 } // namespace
@@ -528,12 +715,16 @@ void PotionHands_OnPropertyList(
         return;
     }
     bool spellChanneling = false;
+    bool balanced = false;
     for (const auto &row : properties)
     {
         if (row.first == SpellChannelingCliloc)
         {
             spellChanneling = true;
-            break;
+        }
+        else if (row.first == BalancedCliloc)
+        {
+            balanced = true;
         }
     }
     if (s_SpellChanneling.size() >= MaxSpellChannelingCache &&
@@ -541,7 +732,18 @@ void PotionHands_OnPropertyList(
     {
         s_SpellChanneling.clear();
     }
+    if (s_Balanced.size() >= MaxSpellChannelingCache &&
+        s_Balanced.find(serial) == s_Balanced.end())
+    {
+        s_Balanced.clear();
+    }
     s_SpellChanneling[serial] = spellChanneling;
+    s_Balanced[serial] = balanced;
+}
+
+bool PotionHands_BeginPotionUse(uint32_t serial)
+{
+    return begin_potion_sequence(serial);
 }
 
 bool PotionHands_BeginSpellCast(int spellIndex, uint32_t bookSerial)
@@ -579,12 +781,15 @@ void PotionHands_OnTargetCursorEnd(uint32_t cursorId)
 
 void PotionHands_OnGameSend(const uint8_t *data, size_t size)
 {
+    if (TriggersServerActionDelay(data, size))
+    {
+        s_LastAction = g_Ticks;
+        s_HasAction = true;
+    }
     if (!ActionPacket(data, size))
     {
         return;
     }
-    s_LastAction = g_Ticks;
-    s_HasAction = true;
     if (s_InternalSend || !active_player() || !load_profile())
     {
         return;
@@ -633,6 +838,13 @@ void PotionHands_OnCliloc(uint32_t cliloc)
             {
                 finish("Ready.");
             }
+        }
+        else if (s_Sequence.Stage == Phase::ConfirmDrink && cliloc == ActionDelayMessage &&
+                 s_Sequence.DrinkRetries < MaxDrinkRetries)
+        {
+            ++s_Sequence.DrinkRetries;
+            s_Sequence.WaitingDrinkRetry = true;
+            enter(Phase::PrepareToDrink, "Waiting for action cooldown.");
         }
         else if (s_Sequence.Stage == Phase::ConfirmDrink && DrinkRefused(cliloc))
         {
@@ -720,7 +932,7 @@ void PotionHands_Tick()
             {
                 interrupt();
             }
-            else if (can_send_action())
+            else if (can_send_move_now())
             {
                 send_stow();
             }
@@ -728,19 +940,46 @@ void PotionHands_Tick()
         case Phase::ConfirmStowed:
             if (VerifyStowState(s_Sequence.Plan, s_Sequence.StowIndex + 1, obs))
             {
+                if (s_Sequence.UsedMacroMove)
+                {
+                    s_MacroMoveConfirmed = true;
+                    s_Sequence.UsedMacroMove = false;
+                }
+                s_Sequence.ForceClassicMove = false;
                 ++s_Sequence.StowIndex;
                 if (s_Sequence.StowIndex < s_Sequence.Plan.Count)
                 {
                     enter(Phase::PrepareToStow, "Freeing your second hand.");
+                    if (can_send_move_now())
+                    {
+                        send_stow();
+                    }
                 }
                 else if (s_Sequence.Kind == Mode::Spell)
                 {
                     enter(Phase::PrepareToCast, "Hands are free. Casting spell.");
+                    send_spell_cast();
                 }
                 else
                 {
                     enter(Phase::PrepareToDrink, "Your hand is free.");
+                    if (potionUnchanged && can_send_drink_now())
+                    {
+                        send_drink();
+                    }
                 }
+            }
+            else if (s_Sequence.UsedMacroMove &&
+                     VerifyStowState(s_Sequence.Plan, s_Sequence.StowIndex, obs) &&
+                     DeadlineReached(g_Ticks, s_Sequence.PhaseSince, MacroFallbackTimeout))
+            {
+                if (!s_MacroMoveConfirmed)
+                {
+                    s_MacroMovesSupported = false;
+                }
+                s_Sequence.ForceClassicMove = true;
+                s_Sequence.UsedMacroMove = false;
+                enter(Phase::PrepareToStow, "Freeing a hand.");
             }
             else if (!VerifyStowInFlight(s_Sequence.Plan, s_Sequence.StowIndex, obs) ||
                      DeadlineReached(g_Ticks, s_Sequence.PhaseSince, MoveReplyTimeout))
@@ -757,8 +996,12 @@ void PotionHands_Tick()
             {
                 s_Sequence.RestoreIndex = 0;
                 enter(Phase::PrepareToRestore, "The potion changed. Restoring your equipment.");
+                if (VerifyRestoreState(s_Sequence.Plan, 0, obs) && can_send_move_now())
+                {
+                    send_restore();
+                }
             }
-            else if (can_send_action())
+            else if (can_send_drink_now())
             {
                 send_drink();
             }
@@ -778,6 +1021,10 @@ void PotionHands_Tick()
                 s_Sequence.DrankPotion = true;
                 s_Sequence.RestoreIndex = 0;
                 enter(Phase::PrepareToRestore, "Potion used. Restoring your equipment.");
+                if (VerifyRestoreState(s_Sequence.Plan, 0, obs) && can_send_move_now())
+                {
+                    send_restore();
+                }
             }
             else if (result == DrinkResult::Changed)
             {
@@ -789,6 +1036,10 @@ void PotionHands_Tick()
                 // confirmed item(s) in the original backpack and untouched slots.
                 s_Sequence.RestoreIndex = 0;
                 enter(Phase::PrepareToRestore, "Potion not confirmed. Restoring your equipment.");
+                if (VerifyRestoreState(s_Sequence.Plan, 0, obs) && can_send_move_now())
+                {
+                    send_restore();
+                }
             }
             break;
         }
@@ -860,7 +1111,7 @@ void PotionHands_Tick()
             {
                 interrupt();
             }
-            else if (can_send_action())
+            else if (can_send_move_now())
             {
                 send_restore();
             }
@@ -868,10 +1119,20 @@ void PotionHands_Tick()
         case Phase::ConfirmRestored:
             if (VerifyRestoreState(s_Sequence.Plan, s_Sequence.RestoreIndex + 1, obs))
             {
+                if (s_Sequence.UsedMacroMove)
+                {
+                    s_MacroMoveConfirmed = true;
+                    s_Sequence.UsedMacroMove = false;
+                }
+                s_Sequence.ForceClassicMove = false;
                 ++s_Sequence.RestoreIndex;
                 if (s_Sequence.RestoreIndex < s_Sequence.Plan.Count)
                 {
                     enter(Phase::PrepareToRestore, "Restoring your off hand.");
+                    if (can_send_move_now())
+                    {
+                        send_restore();
+                    }
                 }
                 else if (s_Sequence.Kind == Mode::Spell)
                 {
@@ -883,6 +1144,18 @@ void PotionHands_Tick()
                     finish(s_Sequence.DrankPotion ? "Potion used and equipment restored."
                                                   : "Equipment restored.");
                 }
+            }
+            else if (s_Sequence.UsedMacroMove &&
+                     VerifyRestoreState(s_Sequence.Plan, s_Sequence.RestoreIndex, obs) &&
+                     DeadlineReached(g_Ticks, s_Sequence.PhaseSince, MacroFallbackTimeout))
+            {
+                if (!s_MacroMoveConfirmed)
+                {
+                    s_MacroMovesSupported = false;
+                }
+                s_Sequence.ForceClassicMove = true;
+                s_Sequence.UsedMacroMove = false;
+                enter(Phase::PrepareToRestore, "Restoring your equipment.");
             }
             else if (!VerifyRestoreInFlight(s_Sequence.Plan, s_Sequence.RestoreIndex, obs) ||
                      DeadlineReached(g_Ticks, s_Sequence.PhaseSince, MoveReplyTimeout))
@@ -901,7 +1174,10 @@ void PotionHands_ResetSession()
     s_Profile.clear();
     s_HasAction = false;
     s_LastAction = 0;
+    s_MacroMovesSupported = true;
+    s_MacroMoveConfirmed = false;
     s_SpellChanneling.clear();
+    s_Balanced.clear();
 }
 
 void PotionHands_Draw()

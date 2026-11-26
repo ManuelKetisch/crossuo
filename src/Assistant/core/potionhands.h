@@ -19,6 +19,7 @@ void PotionHands_OnCliloc(uint32_t cliloc);
 void PotionHands_OnMoveRejected();
 void PotionHands_OnPropertyList(
     uint32_t serial, uint32_t revision, const PotionHandsPropertyRows &properties);
+bool PotionHands_BeginPotionUse(uint32_t serial);
 bool PotionHands_BeginSpellCast(int spellIndex, uint32_t bookSerial = 0);
 bool PotionHands_BeginTargetedSpellCast(int spellIndex, uint32_t targetSerial);
 void PotionHands_OnTargetCursor(uint32_t cursorId, uint8_t type);

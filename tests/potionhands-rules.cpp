@@ -361,6 +361,73 @@ void test_trade_filter_rules()
            FirstOfferDecision::Allow);
 }
 
+void test_fast_macro_transport_and_proactive_free_hand()
+{
+    // Server action cooldown packet filtering: only 0x06, 0x07, and 0xBF 0x2C advance NextActionTime.
+    const uint8_t usePkt[] = { 0x06, 0x40, 0, 0, 1 };
+    const uint8_t liftPkt[] = { 0x07, 0x40, 0, 0, 1, 0, 1 };
+    const uint8_t dropPkt[] = { 0x08, 0x40, 0, 0, 1 };
+    const uint8_t equipPkt[] = { 0x13, 0x40, 0, 0, 1 };
+    const uint8_t equipMacro[] = { 0xEC, 0, 8, 1, 0x40, 0, 0, 1 };
+    const uint8_t unequipMacro[] = { 0xED, 0, 6, 1, 0, 2 };
+    const uint8_t targetReply[19] = { 0x6C };
+    const uint8_t extCast[] = { 0xBF, 0, 9, 0, 0x1C, 0, 2, 0, 29 };
+    const uint8_t useOnTarget[] = { 0xBF, 0, 13, 0, 0x2C };
+    assert(TriggersServerActionDelay(usePkt, sizeof(usePkt)));
+    assert(TriggersServerActionDelay(liftPkt, sizeof(liftPkt)));
+    assert(TriggersServerActionDelay(useOnTarget, sizeof(useOnTarget)));
+    assert(!TriggersServerActionDelay(dropPkt, sizeof(dropPkt)));
+    assert(!TriggersServerActionDelay(equipPkt, sizeof(equipPkt)));
+    assert(!TriggersServerActionDelay(equipMacro, sizeof(equipMacro)));
+    assert(!TriggersServerActionDelay(unequipMacro, sizeof(unequipMacro)));
+    assert(!TriggersServerActionDelay(targetReply, sizeof(targetReply)));
+    assert(!TriggersServerActionDelay(extCast, sizeof(extCast)));
+    assert(!TriggersServerActionDelay(nullptr, 0));
+
+    // Macro transport selection & immediate send gating
+    assert(ChooseMoveTransport(true, true) == MoveTransport::MacroPacket);
+    assert(ChooseMoveTransport(false, true) == MoveTransport::ClassicLift);
+    assert(ChooseMoveTransport(true, false) == MoveTransport::ClassicLift);
+    assert(CanSendImmediately(MoveTransport::MacroPacket, false));
+    assert(CanSendImmediately(MoveTransport::MacroPacket, true));
+    assert(!CanSendImmediately(MoveTransport::ClassicLift, false));
+    assert(CanSendImmediately(MoveTransport::ClassicLift, true));
+
+    // Weapon OPL & Balanced detection
+    assert(IsWeaponOplCliloc(1061168));
+    assert(IsWeaponOplCliloc(1061167));
+    assert(IsWeaponOplCliloc(1061171));
+    assert(!IsWeaponOplCliloc(1060448)); // Physical Resist (shield/armor)
+    const uint32_t withBal[] = { 1061168, BalancedCliloc, 1060401 };
+    const uint32_t withoutBal[] = { 1061168, 1060401 };
+    assert(HasBalancedCliloc(withBal, 3));
+    assert(!HasBalancedCliloc(withoutBal, 2));
+    assert(HasBalancedText("Weight: 6 stones\nBalanced\nTwo-handed Weapon"));
+    assert(!HasBalancedText("Balanced Bow\nWeight: 6 stones"));
+
+    // Proactive free-hand rules
+    const HandItem empty{};
+    const HandItem sword1{ 0x40000001, HandLayerOne, HandLayerOne, 0x13B9, 0, true, false, false };
+    const HandItem shield{ 0x40000002, HandLayerTwo, HandLayerTwo, 0x1B76, 0, false, false, false };
+    const HandItem offSword{ 0x40000004, HandLayerTwo, HandLayerOne, 0x0F5E, 0, true, false, false };
+    const HandItem halberd{ 0x40000003, HandLayerTwo, HandLayerTwo, 0x143E, 0, true, false, false };
+    const HandItem balancedBow{ 0x40000005, HandLayerTwo, HandLayerTwo, 0x13B2, 0, true, false, true };
+
+    // Both hands occupied -> always proactive (even before OPL loads)
+    assert(CanProactivelyFreeHand(sword1, shield, false));
+    assert(CanProactivelyFreeHand(sword1, offSword, false));
+    // Lone 2H non-balanced weapon -> proactive only when OPL confirms it
+    assert(CanProactivelyFreeHand(empty, halberd, true));
+    assert(!CanProactivelyFreeHand(empty, halberd, false));
+    // Lone balanced bow -> free hand already exists, neither proactive nor planned
+    assert(!CanProactivelyFreeHand(empty, balancedBow, true));
+    assert(PlanPotionHands(empty, balancedBow).Empty());
+    // Lone shield -> free hand already exists
+    assert(!CanProactivelyFreeHand(empty, shield, true));
+    assert(!CanProactivelyFreeHand(empty, shield, false));
+    assert(!CanProactivelyFreeHand(sword1, empty, true));
+}
+
 } // namespace
 
 int main()
@@ -371,5 +438,6 @@ int main()
     test_dual_wield_lifecycle_and_manual_interrupts();
     test_spell_wait_and_packet_interrupts();
     test_trade_filter_rules();
+    test_fast_macro_transport_and_proactive_free_hand();
     return 0;
 }

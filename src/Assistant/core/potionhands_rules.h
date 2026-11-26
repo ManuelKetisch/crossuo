@@ -11,8 +11,13 @@ namespace xuoassist {
 namespace potionhands {
 
 constexpr uint32_t FreeHandMessage = 502172;
+constexpr uint32_t ActionDelayMessage = 500119;
 constexpr uint32_t SpellChannelingCliloc = 1060482;
-constexpr uint32_t MinActionDelay = 1200;
+constexpr uint32_t BalancedCliloc = 1072792;
+constexpr uint32_t MinActionDelay = 1050;
+constexpr uint32_t MacroFallbackTimeout = 400;
+constexpr uint32_t DrinkRetryDelay = 250;
+constexpr uint8_t MaxDrinkRetries = 1;
 constexpr uint32_t InitialReplyTimeout = 2200;
 constexpr uint32_t MoveReplyTimeout = 4500;
 constexpr uint32_t DrinkReplyTimeout = 3500;
@@ -87,6 +92,63 @@ inline bool ActionPacket(const uint8_t *data, size_t size)
                 (data[4] == 0x1C || // Extended cast spell
                  data[4] == 0x2C || // Use object on target
                  data[4] == 0x2D);  // Target cast spell
+        default:
+            return false;
+    }
+}
+
+inline bool TriggersServerActionDelay(const uint8_t *data, size_t size)
+{
+    // On ModernUO/RunUO, only UseReq (0x06), LiftReq (0x07), and UseObjectOnTarget
+    // (0xBF 0x2C) check and advance Mobile.NextActionTime. Drop (0x08), Equip (0x13),
+    // EquipMacro (0xEC), UnequipMacro (0xED), spell casts, and target replies do not.
+    if (data == nullptr || size == 0)
+    {
+        return false;
+    }
+    switch (data[0])
+    {
+        case 0x06: // Use
+        case 0x07: // Lift
+            return true;
+        case 0xBF:
+            return size >= 5 && data[3] == 0 && data[4] == 0x2C;
+        default:
+            return false;
+    }
+}
+
+enum class MoveTransport : uint8_t
+{
+    ClassicLift = 0,
+    MacroPacket = 1
+};
+
+inline MoveTransport ChooseMoveTransport(bool protocolSupportsMacros, bool sessionMacrosSupported)
+{
+    return (protocolSupportsMacros && sessionMacrosSupported) ? MoveTransport::MacroPacket
+                                                              : MoveTransport::ClassicLift;
+}
+
+inline bool CanSendImmediately(MoveTransport transport, bool actionCooldownReady)
+{
+    return transport == MoveTransport::MacroPacket || actionCooldownReady;
+}
+
+inline bool IsWeaponOplCliloc(uint32_t cliloc)
+{
+    switch (cliloc)
+    {
+        case 1061168: // weapon damage
+        case 1061167: // weapon speed
+        case 1061171: // two-handed weapon
+        case 1061824: // one-handed weapon
+        case 1061172: // swordsmanship
+        case 1061173: // mace fighting
+        case 1061174: // fencing
+        case 1061175: // archery
+        case 1112075: // throwing
+            return true;
         default:
             return false;
     }
@@ -199,6 +261,22 @@ inline bool HasSpellChannelingCliloc(const uint32_t *clilocs, size_t count)
     return false;
 }
 
+inline bool HasBalancedCliloc(const uint32_t *clilocs, size_t count)
+{
+    if (clilocs == nullptr)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (clilocs[i] == BalancedCliloc)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline bool EqualsIgnoreAsciiCase(const char *a, size_t aLen, const char *b)
 {
     if (b == nullptr)
@@ -222,9 +300,9 @@ inline bool EqualsIgnoreAsciiCase(const char *a, size_t aLen, const char *b)
     return true;
 }
 
-inline bool HasSpellChannelingText(const char *oplData, const char *localizedLine = nullptr)
+inline bool HasExactOplLine(const char *oplData, const char *englishLine, const char *localizedLine = nullptr)
 {
-    if (oplData == nullptr || oplData[0] == '\0')
+    if (oplData == nullptr || oplData[0] == '\0' || englishLine == nullptr)
     {
         return false;
     }
@@ -249,7 +327,7 @@ inline bool HasSpellChannelingText(const char *oplData, const char *localizedLin
         const size_t len = static_cast<size_t>(lineEnd - lineStart);
         if (len > 0)
         {
-            if (EqualsIgnoreAsciiCase(lineStart, len, "spell channeling") ||
+            if (EqualsIgnoreAsciiCase(lineStart, len, englishLine) ||
                 (hasLocalized && EqualsIgnoreAsciiCase(lineStart, len, localizedLine)))
             {
                 return true;
@@ -263,6 +341,16 @@ inline bool HasSpellChannelingText(const char *oplData, const char *localizedLin
     return false;
 }
 
+inline bool HasSpellChannelingText(const char *oplData, const char *localizedLine = nullptr)
+{
+    return HasExactOplLine(oplData, "spell channeling", localizedLine);
+}
+
+inline bool HasBalancedText(const char *oplData, const char *localizedLine = nullptr)
+{
+    return HasExactOplLine(oplData, "balanced", localizedLine);
+}
+
 struct HandItem
 {
     uint32_t Serial = 0;
@@ -272,6 +360,7 @@ struct HandItem
     uint16_t Hue = 0;
     bool IsWeapon = false;
     bool SpellChanneling = false;
+    bool Balanced = false;
 };
 
 struct HandPlan
@@ -304,15 +393,15 @@ inline HandPlan PlanPotionHands(const HandItem &oneHand, const HandItem &twoHand
         plan.KeptOneHand = oneHand.Serial;
         return plan;
     }
-    if (oneHand.Serial == 0 && twoHand.Serial != 0 && twoHand.IsWeapon)
+    if (oneHand.Serial == 0 && twoHand.Serial != 0 && twoHand.IsWeapon && !twoHand.Balanced)
     {
-        // Single two-handed weapon.
+        // Single two-handed weapon (non-Balanced).
         plan.Stow[0] = twoHand;
         plan.Stow[0].Layer = HandLayerTwo;
         plan.Count = 1;
         return plan;
     }
-    if (oneHand.Serial != 0 && twoHand.Serial == 0 && oneHand.BaseLayer == HandLayerTwo)
+    if (oneHand.Serial != 0 && twoHand.Serial == 0 && oneHand.BaseLayer == HandLayerTwo && !oneHand.Balanced)
     {
         // Custom two-handed item equipped on the main-hand layer.
         plan.Stow[0] = oneHand;
@@ -321,6 +410,25 @@ inline HandPlan PlanPotionHands(const HandItem &oneHand, const HandItem &twoHand
         return plan;
     }
     return plan;
+}
+
+inline bool CanProactivelyFreeHand(const HandItem &oneHand, const HandItem &twoHand, bool twoHandOplKnown)
+{
+    if (oneHand.Serial != 0 && twoHand.Serial != 0)
+    {
+        return true;
+    }
+    if (oneHand.Serial == 0 && twoHand.Serial != 0)
+    {
+        // A lone item on HandLayerTwo could be a shield or a Balanced bow; only
+        // proactively stow when OPL positively confirms a non-Balanced weapon.
+        return twoHandOplKnown && twoHand.IsWeapon && !twoHand.Balanced;
+    }
+    if (oneHand.Serial != 0 && twoHand.Serial == 0 && oneHand.BaseLayer == HandLayerTwo)
+    {
+        return !oneHand.Balanced;
+    }
+    return false;
 }
 
 inline HandPlan PlanSpellHands(const HandItem &oneHand, const HandItem &twoHand)

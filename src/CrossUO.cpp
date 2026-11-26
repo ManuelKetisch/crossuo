@@ -5705,6 +5705,15 @@ void CGame::DoubleClick(uint32_t serial)
     {
         return;
     }
+    if (xuoassist::PotionHands_BeginPotionUse(serial))
+    {
+        if (serial >= 0x40000000)
+        {
+            g_LastUseObject = serial;
+        }
+        xuoassist::g_MacroExecutor.RecordUse(serial);
+        return;
+    }
 #endif
     if (serial >= 0x40000000)
     {

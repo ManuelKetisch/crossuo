@@ -1327,7 +1327,7 @@ CPacketQueryPartyPosition::CPacketQueryPartyPosition()
 CPacketEquipMacro::CPacketEquipMacro(const std::vector<uint32_t> &serials)
     : CPacket(1)
 {
-    size_t size = 5 + (serials.size() * 4);
+    size_t size = 4 + (serials.size() * 4);
     Resize(size, true);
 
     WriteUInt8(0xEC);
@@ -1342,7 +1342,7 @@ CPacketEquipMacro::CPacketEquipMacro(const std::vector<uint32_t> &serials)
 CPacketUnequipMacro::CPacketUnequipMacro(const std::vector<uint16_t> &layers)
     : CPacket(1)
 {
-    size_t size = 5 + (layers.size() * 2);
+    size_t size = 4 + (layers.size() * 2);
     Resize(size, true);
 
     WriteUInt8(0xED);
