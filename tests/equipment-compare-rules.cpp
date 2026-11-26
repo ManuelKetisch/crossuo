@@ -2242,6 +2242,79 @@ void TestAuditRegressionFixes()
         assert(faceRes.Comparisons[0].Verdict == UpgradeVerdict::Upgrade);
         assert(Contains(faceRes.SideCards[1].HtmlText, L"[EQUIPPED: Face]"));
     }
+
+    // Polish #5: Dual-wield SplinteringWeapon does NOT stack across sibling weapons (only non-weapon helm like ElvenGlasses)
+    {
+        CharacterCompareContext ctx;
+        ctx.Valid = true;
+        ctx.Profile = CompareBuildProfile::Melee;
+        ctx.HasOtherEquippedSAStats = true;
+        ctx.OtherEquippedSplinteringWeapon = 0; // no ElvenGlasses
+
+        EquipmentCompareItemInput hov;
+        hov.Serial = 0x40000501u;
+        hov.Layer = OL_1_HAND;
+        hov.IsWeapon = true;
+        hov.PropertiesLoaded = true;
+        hov.Properties = {
+            { 1061168u, L"14\t16" },
+            { 1061167u, L"2.5s" },
+            { 1061824u, L"" },
+            { 1112857u, L"30" }, // splintering weapon 30%
+        };
+
+        EquipmentCompareItemInput mh;
+        mh.Serial = 0x40000502u;
+        mh.Layer = OL_1_HAND;
+        mh.IsWeapon = true;
+        mh.PropertiesLoaded = true;
+        mh.FormattedTooltip = L"Main Hand Sword";
+        mh.Properties = {
+            { 1061168u, L"14\t16" },
+            { 1061167u, L"2.5s" },
+            { 1061824u, L"" },
+            { 1112857u, L"10" },
+        };
+
+        EquipmentCompareItemInput oh;
+        oh.Serial = 0x40000503u;
+        oh.Layer = OL_2_HAND;
+        oh.IsWeapon = true;
+        oh.IsOffHandWeapon = true;
+        oh.PropertiesLoaded = true;
+        oh.FormattedTooltip = L"Off Hand Sword";
+        oh.Properties = {
+            { 1061168u, L"14\t16" },
+            { 1061167u, L"2.5s" },
+            { 1061824u, L"" },
+            { 1112857u, L"30" }, // 30% on OH must NOT cap MH comparison!
+        };
+
+        const EquipmentCompareResult dwRes = BuildEquipmentComparison(hov, { mh, oh }, 2, 2, &ctx);
+        assert(dwRes.Valid && dwRes.Comparisons.size() == 2u);
+        const EquipmentStatDelta *mhSplint = FindDelta(dwRes.Comparisons[0].Deltas, L"Splintering");
+        assert(mhSplint != nullptr && ApproxEq(mhSplint->Delta, 20.0));
+        // Must NOT be marked capped because OH's 30% does not stack onto MH swings.
+        assert(!mhSplint->MutedByCap && mhSplint->CapNote.empty());
+    }
+
+    // Polish #6: Quiver with Lower Ammo Cost (1075208) and 0 QuiverDamageMod classifies as JewelryOrUtility & shows delta
+    {
+        const ParsedEquipmentStats elvenQuiver = ParseEquipmentOpl({
+            { 1075208u, L"30" }, // Lower Ammo Cost 30%
+        });
+        assert(elvenQuiver.QuiverLowerAmmoCost == 30);
+        assert(ClassifyEquipmentCategory(elvenQuiver, OL_CLOAK, false) == EquipCategory::JewelryOrUtility);
+
+        const ParsedEquipmentStats plainQuiver = ParseEquipmentOpl({
+            { 1075208u, L"10" },
+        });
+        const EquipmentComparisonEntry cmp = CompareSingleStats(
+            elvenQuiver, plainQuiver, EquipCategory::JewelryOrUtility, L"Cloak");
+        assert(cmp.Verdict == UpgradeVerdict::Upgrade);
+        const EquipmentStatDelta *ammoD = FindDelta(cmp.Deltas, L"Lower Ammo");
+        assert(ammoD != nullptr && ApproxEq(ammoD->Delta, 20.0));
+    }
 }
 } // namespace
 

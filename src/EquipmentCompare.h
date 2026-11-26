@@ -240,6 +240,7 @@ struct ParsedEquipmentStats
     int StrengthReq = 0;
     int ArtifactRarity = 0;
     int QuiverDamageMod = 0;
+    int QuiverLowerAmmoCost = 0;
     int TalismanKiller = 0;
     int TalismanProtection = 0;
     int TalismanExceptional = 0;

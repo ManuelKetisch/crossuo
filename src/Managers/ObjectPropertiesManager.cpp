@@ -486,6 +486,7 @@ void CObjectPropertiesManager::Display(int serial)
         {
             uint32_t Serial = 0;
             uint32_t Revision = 0;
+            int Layer = OL_NONE;
             ParsedEquipmentStats Stats = {};
         };
         std::vector<uint32_t> comparingSerials;
@@ -513,6 +514,7 @@ void CObjectPropertiesManager::Display(int serial)
             LoadedWornItem loadedItem;
             loadedItem.Serial = worn->Serial;
             loadedItem.Revision = wornProp->Revision;
+            loadedItem.Layer = layer;
             loadedItem.Stats = ParseEquipmentOpl(wornProp->Properties);
             HashMixU64(wornRevisionHash, loadedItem.Serial);
             HashMixU64(wornRevisionHash, loadedItem.Revision);
@@ -589,7 +591,12 @@ void CObjectPropertiesManager::Display(int serial)
                 ctxOut.OtherEquippedManaPhase =
                     ctxOut.OtherEquippedManaPhase || lw.Stats.ManaPhase;
                 ctxOut.OtherEquippedEnhancePotions += lw.Stats.EnhancePotions;
-                ctxOut.OtherEquippedSplinteringWeapon += lw.Stats.SplinteringWeapon;
+                // ModernUO evaluates SplinteringWeapon per active swinging weapon + ElvenGlasses (helm),
+                // so never add sibling 1H/2H weapons to OtherEquippedSplinteringWeapon.
+                if (lw.Layer != OL_1_HAND && lw.Layer != OL_2_HAND)
+                {
+                    ctxOut.OtherEquippedSplinteringWeapon += lw.Stats.SplinteringWeapon;
+                }
             }
         };
 

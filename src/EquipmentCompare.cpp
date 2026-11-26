@@ -1670,6 +1670,7 @@ double ScoreEquipmentOnBaseline(
         score += static_cast<double>(stats.TalismanKiller + stats.TalismanProtection) * w.JewelTalismanCombat;
         score += static_cast<double>(stats.TalismanExceptional + stats.TalismanSuccess) * w.JewelTalismanCraft;
         score += static_cast<double>(stats.QuiverDamageMod) * w.JewelQuiverDmg;
+        score += static_cast<double>(stats.QuiverLowerAmmoCost) * 0.25;
         score += stats.NightSight ? w.JewelNightSight : 0.0;
         score += static_cast<double>(stats.SelfRepair) * w.JewelSelfRepair;
         score += scoreSharedSA(
@@ -2574,6 +2575,7 @@ void CollectSharedAttributeDeltas(
 
     AddIntDelta(deltas, L"Slayers", hovered.SlayerCount(), equipped.SlayerCount(), false);
     AddIntDelta(deltas, L"Quiver Dmg", hovered.QuiverDamageMod, equipped.QuiverDamageMod, true);
+    AddIntDelta(deltas, L"Lower Ammo", hovered.QuiverLowerAmmoCost, equipped.QuiverLowerAmmoCost, true);
     AddIntDelta(
         deltas, L"Talisman Killer", hovered.TalismanKiller, equipped.TalismanKiller, true);
     AddIntDelta(
@@ -2765,6 +2767,7 @@ ParsedEquipmentStats CombineStatsForComparison(
     }
 
     sum.QuiverDamageMod = eqA.QuiverDamageMod + eqB.QuiverDamageMod;
+    sum.QuiverLowerAmmoCost = eqA.QuiverLowerAmmoCost + eqB.QuiverLowerAmmoCost;
     sum.TalismanKiller = eqA.TalismanKiller + eqB.TalismanKiller;
     sum.TalismanProtection = eqA.TalismanProtection + eqB.TalismanProtection;
     sum.TalismanExceptional = eqA.TalismanExceptional + eqB.TalismanExceptional;
@@ -3974,6 +3977,12 @@ ParsedEquipmentStats ParseEquipmentOpl(const OplPropertyList &props)
                     stats.QuiverDamageMod = intVal;
                 }
                 break;
+            case 1075208u:
+                if (ParseIntSafe(arg, intVal))
+                {
+                    stats.QuiverLowerAmmoCost = intVal;
+                }
+                break;
             case 1072388u:
             {
                 const auto parts = SplitTabs(arg);
@@ -4054,7 +4063,7 @@ EquipCategory ClassifyEquipmentCategory(
         return EquipCategory::JewelryOrUtility;
     }
 
-    if (tileLayer == OL_CLOAK && stats.QuiverDamageMod > 0)
+    if (tileLayer == OL_CLOAK && (stats.QuiverDamageMod > 0 || stats.QuiverLowerAmmoCost > 0))
     {
         return EquipCategory::JewelryOrUtility;
     }
@@ -4571,7 +4580,10 @@ EquipmentCompareResult BuildEquipmentComparison(
                     perTargetCtx.OtherEquippedManaPhase =
                         perTargetCtx.OtherEquippedManaPhase || sib.ManaPhase;
                     perTargetCtx.OtherEquippedEnhancePotions += sib.EnhancePotions;
-                    perTargetCtx.OtherEquippedSplinteringWeapon += sib.SplinteringWeapon;
+                    if (hoveredCat != EquipCategory::Weapon)
+                    {
+                        perTargetCtx.OtherEquippedSplinteringWeapon += sib.SplinteringWeapon;
+                    }
                     effectiveCtx = &perTargetCtx;
                 }
             }
