@@ -4,7 +4,37 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <xuocore/enumlist.h>
+
+struct PaperdollPointOffset
+{
+    int X = 0;
+    int Y = 0;
+};
+
+// Per-body visual alignment offset for horizontally mirrored off-hand weapons.
+// Paperdoll body art holds the character's left hand (viewer-right) lower than
+// the right hand (viewer-left), and asymmetric silhouettes (such as Gargoyle
+// wings) shift the full-body horizontal center slightly off the hands. Applied
+// on top of the mirrored baseline (2 * bodyCenterX - 8 - sprite->Width, 19).
+inline PaperdollPointOffset PaperdollOffHandWeaponOffset(uint16_t bodyGraphic)
+{
+    switch (bodyGraphic)
+    {
+        case 0x000D: // Human Female
+        case 0x000F: // Elf Female
+            return { 1, 10 };
+        case 0x029A: // Gargoyle Male
+            return { 2, 13 };
+        case 0x0299: // Gargoyle Female
+            return { 4, 12 };
+        case 0x000C: // Human Male
+        case 0x000E: // Elf Male
+        default:
+            return { 1, 11 };
+    }
+}
 
 struct PaperdollSlotSpec
 {

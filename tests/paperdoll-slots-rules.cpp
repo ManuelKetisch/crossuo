@@ -227,5 +227,24 @@ int main()
         assert(ResolvePaperdollDropLayer(OL_1_HAND, true, true, -1, false, isOccupied) == OL_NONE);
     }
 
+    // 9. Per-body mirrored off-hand weapon alignment lowers the off-hand hilt into the left hand.
+    {
+        const auto humanMale = PaperdollOffHandWeaponOffset(0x000C);
+        const auto humanFemale = PaperdollOffHandWeaponOffset(0x000D);
+        const auto elfMale = PaperdollOffHandWeaponOffset(0x000E);
+        const auto elfFemale = PaperdollOffHandWeaponOffset(0x000F);
+        const auto gargMale = PaperdollOffHandWeaponOffset(0x029A);
+        const auto gargFemale = PaperdollOffHandWeaponOffset(0x0299);
+        const auto gmFallback = PaperdollOffHandWeaponOffset(0xC72B);
+
+        assert(humanMale.X == 1 && humanMale.Y == 11);
+        assert(elfMale.X == humanMale.X && elfMale.Y == humanMale.Y);
+        assert(humanFemale.X == 1 && humanFemale.Y == 10);
+        assert(elfFemale.X == humanFemale.X && elfFemale.Y == humanFemale.Y);
+        assert(gargMale.X == 2 && gargMale.Y == 13);
+        assert(gargFemale.X == 4 && gargFemale.Y == 12);
+        assert(gmFallback.X == humanMale.X && gmFallback.Y == humanMale.Y);
+    }
+
     return 0;
 }

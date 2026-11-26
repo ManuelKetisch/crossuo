@@ -736,8 +736,14 @@ void CGumpPaperdoll::UpdateContent()
 
                     const bool mirror = equipment == offHand;
                     const auto *sprite = mirror ? g_Game.ExecuteGump(id + cOfs) : nullptr;
-                    const int drawX = sprite != nullptr ? 2 * bodyCenterX - 8 - sprite->Width : 8;
-                    bodyGumppic = (CGUIGumppic *)m_DataBox->Add(new CGUIGumppic(id + cOfs, drawX, 19));
+                    const auto offHandOffset = sprite != nullptr ?
+                        PaperdollOffHandWeaponOffset(bodyGraphic) :
+                        PaperdollPointOffset{};
+                    const int drawX = sprite != nullptr ?
+                        2 * bodyCenterX - 8 - sprite->Width + offHandOffset.X :
+                        8;
+                    const int drawY = 19 + offHandOffset.Y;
+                    bodyGumppic = (CGUIGumppic *)m_DataBox->Add(new CGUIGumppic(id + cOfs, drawX, drawY));
                     bodyGumppic->Mirrored = mirror;
                     bodyGumppic->Color = equipment->Color & 0x3FFF;
                     bodyGumppic->PartialHue = equipment->IsPartialHue();
